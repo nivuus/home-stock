@@ -118,3 +118,20 @@ export_journal:
   description: >-
     Renvoie tous les mouvements. Le journal étant en ajout seul, il suffit à
     reconstruire l'état du stock.
+
+import_grocy_catalog:
+  name: Importer le catalogue Grocy
+  description: >-
+    Copie les produits, emplacements, groupes, codes-barres et calories depuis une
+    copie de grocy.db placée dans le dossier de configuration. Simulation par défaut.
+  fields:
+    path:
+      name: Fichier
+      description: Chemin relatif au dossier de configuration.
+      default: grocy_import.db
+      selector: { text: }
+    apply:
+      name: Appliquer
+      description: Sans cela, rien n'est écrit — seul le rapport est produit.
+      default: false
+      selector: { boolean: }

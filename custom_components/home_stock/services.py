@@ -12,6 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, REASON_CONSUMPTION, REASON_EXPIRED, REASON_WASTE
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
+from .import_grocy import import_catalog
 from .storage import repositories as repo
 
 # Reasons a "consume" call may legitimately carry — the same three the
@@ -145,6 +146,19 @@ def async_register_services(hass: HomeAssistant) -> None:
         movements = await _run(hass, entry.runtime_data.manager.export_journal)
         return {"movements": movements}
 
+    async def import_grocy_catalog(call: ServiceCall) -> ServiceResponse:
+        entry = _entry(hass)
+        path = hass.config.path(call.data["path"])
+        apply = call.data["apply"]
+        report = await _run(hass, partial(
+            import_catalog, entry.runtime_data.manager.db, path, apply=apply,
+        ))
+        # A dry run (apply=False) never writes: refreshing the coordinator would
+        # only waste a read, like query_stock/export_journal never do either.
+        if apply:
+            await entry.runtime_data.coordinator.async_request_refresh()
+        return report.as_dict()
+
     hass.services.async_register(DOMAIN, "add_stock", add_stock, schema=ADD_STOCK_SCHEMA)
     hass.services.async_register(DOMAIN, "consume", consume, schema=CONSUME_SCHEMA)
     hass.services.async_register(DOMAIN, "open_batch", open_batch, schema=BATCH_SCHEMA)
@@ -157,3 +171,11 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "export_journal", export_journal,
                                  schema=vol.Schema({}),
                                  supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(
+        DOMAIN, "import_grocy_catalog", import_grocy_catalog,
+        schema=vol.Schema({
+            vol.Optional("path", default="grocy_import.db"): cv.string,
+            vol.Optional("apply", default=False): cv.boolean,
+        }),
+        supports_response=SupportsResponse.ONLY,
+    )
