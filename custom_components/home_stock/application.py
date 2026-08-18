@@ -24,6 +24,17 @@ def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0, tzinfo=None).isoformat()
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards so a key is matched literally, not as a pattern.
+
+    A HA service call or a voice-generated idempotency key can legally contain
+    '%' or '_', both of which are LIKE wildcards. Without escaping, a key like
+    "dinner_1" would also match rows keyed "dinnerX1#1" and a replay would
+    return movement ids belonging to a different consumption.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _as_batch_view(row: dict[str, Any]) -> BatchView:
     return BatchView(
         id=row["id"],
@@ -68,8 +79,14 @@ class StockManager:
                 entered_at=moment, best_before=best_before,
                 price_per_base_unit=price_per_base_unit,
             )
-            values = movement_values(amount, article["kcal_per_base_unit"],
-                                     price_per_base_unit)
+            # kcal rate: the article's own, falling back to the product's
+            # reference_kcal (spec 7.4) — generic/produce articles usually
+            # carry no rate of their own.
+            kcal_rate = article["kcal_per_base_unit"]
+            if kcal_rate is None:
+                product = repo.get_product(conn, article["product_id"])
+                kcal_rate = product["reference_kcal"] if product else None
+            values = movement_values(amount, kcal_rate, price_per_base_unit)
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
@@ -91,10 +108,12 @@ class StockManager:
         with self.db.write() as conn:
             if idempotency_key and repo.movement_exists(conn, idempotency_key):
                 # Replayed call: return the movements the first call wrote.
+                # The key itself is escaped so '%'/'_' inside it are matched
+                # literally; only the trailing '%' we append is a real wildcard.
                 rows = conn.execute(
                     "SELECT id FROM movement WHERE idempotency_key = ?"
-                    " OR idempotency_key LIKE ? ORDER BY id",
-                    (idempotency_key, f"{idempotency_key}#%"),
+                    " OR idempotency_key LIKE ? ESCAPE '\\' ORDER BY id",
+                    (idempotency_key, f"{_escape_like(idempotency_key)}#%"),
                 ).fetchall()
                 return [int(row["id"]) for row in rows]
             batches = [_as_batch_view(row)
@@ -235,12 +254,12 @@ class StockManager:
         """The numbers the entities publish."""
         reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
         limit = reference + timedelta(days=expiration_alert_days)
-        rows = repo.stock_rows(self.db.read())
+        conn = self.db.read()
+        rows = repo.stock_rows(conn)
 
         value = 0.0
         unpriced = 0
         expiring: list[dict[str, Any]] = []
-        per_product: dict[int, dict[str, Any]] = {}
         for row in rows:
             if row["price_per_base_unit"] is None:
                 unpriced += 1
@@ -252,17 +271,15 @@ class StockManager:
                     "best_before": row["best_before"],
                     "display": format_quantity(row["remaining"], row["base_unit"]),
                 })
-            entry = per_product.setdefault(row["product_id"], {
-                "product_name": row["product_name"], "quantity": 0.0,
-                "min_quantity": row["min_quantity"], "base_unit": row["base_unit"],
-            })
-            entry["quantity"] += row["remaining"]
 
+        # Shortages come from the product table, not from stock_rows: a product
+        # whose stock reached zero has no open batch left, hence no row in
+        # stock_rows, and must still be reported as a shortage (spec: "at
+        # least one product under its threshold").
         shortages = [
-            {"product_name": entry["product_name"],
-             "display": format_quantity(entry["quantity"], entry["base_unit"])}
-            for entry in per_product.values()
-            if entry["min_quantity"] and entry["quantity"] < entry["min_quantity"]
+            {"product_name": row["product_name"],
+             "display": format_quantity(row["quantity"], row["base_unit"])}
+            for row in repo.shortage_rows(conn)
         ]
         return {
             "stock_value": round(value, 2),
@@ -270,7 +287,7 @@ class StockManager:
             "batch_count": len(rows),
             "open_batch_count": sum(1 for row in rows if row["opened_at"]),
             "expiring": sorted(expiring, key=lambda e: e["best_before"]),
-            "shortages": sorted(shortages, key=lambda e: e["product_name"]),
+            "shortages": shortages,
         }
 
     def export_journal(self) -> list[dict[str, Any]]:

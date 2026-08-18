@@ -146,10 +146,15 @@ def insert_batch(conn, *, article_id: int, location_id: int, quantity: float,
 
 
 def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
-    """Open batches only, newest information joined from the article."""
+    """Open batches only, with the kcal rate resolved: the article's own rate,
+    falling back to the product's reference_kcal when the article has none
+    (spec 7.4 — generic/produce articles usually carry no rate of their own).
+    """
     return _rows(conn.execute(
-        "SELECT b.*, a.kcal_per_base_unit, a.product_id FROM batch b"
+        "SELECT b.*, COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_unit,"
+        "       a.product_id FROM batch b"
         " JOIN article a ON a.id = b.article_id"
+        " JOIN product p ON p.id = a.product_id"
         " WHERE a.product_id = ? AND b.closed_at IS NULL",
         (product_id,),
     ))
@@ -220,4 +225,24 @@ def stock_rows(conn) -> list[dict[str, Any]]:
         " JOIN location l ON l.id = b.location_id"
         " WHERE b.closed_at IS NULL"
         " ORDER BY p.name, b.best_before"
+    ))
+
+
+def shortage_rows(conn) -> list[dict[str, Any]]:
+    """Products below their minimum quantity, product table first.
+
+    A left join from `product` (not `stock_rows`, which only sees open
+    batches) so a product whose stock reached exactly zero — no batch row
+    left at all — still appears when it has a threshold to compare against.
+    """
+    return _rows(conn.execute(
+        "SELECT p.id AS product_id, p.name AS product_name, p.base_unit,"
+        "       p.min_quantity, COALESCE(SUM(b.remaining), 0) AS quantity"
+        " FROM product p"
+        " LEFT JOIN article a ON a.product_id = p.id"
+        " LEFT JOIN batch b ON b.article_id = a.id AND b.closed_at IS NULL"
+        " WHERE p.min_quantity IS NOT NULL AND p.active = 1"
+        " GROUP BY p.id"
+        " HAVING quantity < p.min_quantity"
+        " ORDER BY p.name"
     ))

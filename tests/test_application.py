@@ -240,3 +240,146 @@ def test_summary_reports_value_expirations_and_shortages(manager, pasta):
     assert len(summary["expiring"]) == 1
     # 100 g in stock against a 200 g threshold.
     assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
+
+
+# --- fix-review follow-up tests -------------------------------------------
+
+
+def test_kcal_falls_back_to_the_product_reference_when_the_article_has_none(manager):
+    """Generic/produce articles often carry no rate of their own (spec 7.4):
+    kcal must fall back to product.reference_kcal, on both entry and exit."""
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Frigo", kind="fridge")
+        product_id = repo.insert_product(conn, name="Pomme", base_unit="g",
+                                         reference_kcal=0.52)
+        article_id = repo.insert_article(conn, product_id=product_id, label="Générique")
+    manager.add_stock(article_id=article_id, quantity=200, location_id=location_id,
+                      occurred_at="2026-08-18T10:00:00")
+    manager.consume(product_id=product_id, quantity=100,
+                    occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        purchase = conn.execute(
+            "SELECT kcal FROM movement WHERE reason = 'purchase'").fetchone()
+        consumption = conn.execute(
+            "SELECT kcal FROM movement WHERE reason = 'consumption'").fetchone()
+    assert purchase["kcal"] == pytest.approx(200 * 0.52)
+    assert consumption["kcal"] == pytest.approx(100 * 0.52)
+
+
+def test_summary_reports_a_shortage_when_stock_reaches_zero(manager, pasta):
+    """A product with no open batch left (stock_rows sees nothing) must still
+    show up as a shortage: this is the moment the alert matters most."""
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
+    manager.consume(product_id=pasta["product_id"], quantity=100,
+                    occurred_at="2026-08-18T19:00:00")
+    summary = manager.summary(expiration_alert_days=3, today="2026-08-19")
+    assert summary["batch_count"] == 0
+    assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
+
+
+def test_idempotency_replay_does_not_match_on_like_wildcards(manager, pasta):
+    """'_' and '%' are SQL LIKE wildcards. An idempotency key containing one
+    must be matched literally on replay, not as a pattern."""
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], best_before="2026-08-20",
+                      occurred_at="2026-08-01T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], best_before="2026-09-20",
+                      occurred_at="2026-08-10T10:00:00")
+    # Spans both batches, so it writes movements keyed "dinnerX1" and
+    # "dinnerX1#1". Without LIKE escaping, the pattern built below for
+    # "dinner_1" ("dinner_1#%") would also match "dinnerX1#1", since '_' is a
+    # wildcard for "any single character".
+    unrelated = manager.consume(product_id=pasta["product_id"], quantity=150,
+                                occurred_at="2026-08-18T18:00:00",
+                                idempotency_key="dinnerX1")
+    assert len(unrelated) == 2
+    # Drain the leftover so the next consumption lands on a single fresh batch.
+    manager.consume(product_id=pasta["product_id"], quantity=50,
+                    occurred_at="2026-08-18T18:30:00")
+
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T09:00:00")
+    first = manager.consume(product_id=pasta["product_id"], quantity=200,
+                            occurred_at="2026-08-18T19:00:00", idempotency_key="dinner_1")
+    replay = manager.consume(product_id=pasta["product_id"], quantity=200,
+                             occurred_at="2026-08-18T19:00:00", idempotency_key="dinner_1")
+    assert replay == first
+    assert unrelated[1] not in replay
+
+
+def test_idempotency_key_survives_a_replay_across_two_batches(manager, pasta):
+    """The trickiest rule: a consumption spanning two batches writes
+    "key" and "key#1". A replay must return both, and write nothing new."""
+    manager.add_stock(article_id=pasta["article_id"], quantity=300,
+                      location_id=pasta["location_id"], best_before="2026-08-20",
+                      price_per_base_unit=0.004, occurred_at="2026-08-01T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], best_before="2026-09-20",
+                      price_per_base_unit=0.005, occurred_at="2026-08-10T10:00:00")
+    first = manager.consume(product_id=pasta["product_id"], quantity=700,
+                            occurred_at="2026-08-18T19:00:00", idempotency_key="dinner-2")
+    assert len(first) == 2
+    with manager.db.write() as conn:
+        before = conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"]
+    replay = manager.consume(product_id=pasta["product_id"], quantity=700,
+                             occurred_at="2026-08-18T19:00:00", idempotency_key="dinner-2")
+    assert replay == first
+    with manager.db.write() as conn:
+        after = conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"]
+    assert after == before
+
+
+def test_add_stock_replay_returns_the_same_batch_without_duplicating(manager, pasta):
+    first = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                              location_id=pasta["location_id"],
+                              occurred_at="2026-08-18T10:00:00",
+                              idempotency_key="delivery-1")
+    replay = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                               location_id=pasta["location_id"],
+                               occurred_at="2026-08-18T10:00:00",
+                               idempotency_key="delivery-1")
+    assert replay == first
+    with manager.db.write() as conn:
+        batches = conn.execute("SELECT COUNT(*) AS n FROM batch").fetchone()["n"]
+        movements = conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"]
+    assert batches == 1
+    assert movements == 1
+
+
+def test_summary_excludes_unpriced_batches_from_stock_value(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=50,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T11:00:00")
+    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    assert summary["stock_value"] == pytest.approx(0.4)   # only the priced batch
+    assert summary["batch_count"] == 2
+    assert summary["unpriced_batches"] == 1
+
+
+def test_export_journal_returns_the_full_movement_history(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    manager.consume(product_id=pasta["product_id"], quantity=200,
+                    occurred_at="2026-08-18T19:00:00")
+    journal = manager.export_journal()
+    assert [entry["reason"] for entry in journal] == ["purchase", "consumption"]
+    assert journal[0]["quantity"] == 500
+    assert journal[1]["quantity"] == -200
+
+
+def test_consume_accepts_a_waste_reason(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    movement_ids = manager.consume(product_id=pasta["product_id"], quantity=50,
+                                   reason="waste", occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        movement = conn.execute("SELECT * FROM movement WHERE id = ?",
+                                (movement_ids[0],)).fetchone()
+    assert movement["reason"] == "waste"
+    assert movement["quantity"] == -50
