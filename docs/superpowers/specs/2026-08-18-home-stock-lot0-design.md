@@ -370,10 +370,15 @@ fournir : tout est local). Options modifiables ensuite :
 | Option | Défaut | Effet |
 |---|---|---|
 | `expiration_alert_days` | 3 | Seuil de `binary_sensor.home_stock_expirations` et du `todo` associé |
-| `default_currency` | EUR | Affichage seulement ; aucun taux de change |
 
 Le chemin du fichier de base n'est **pas** configurable : `config/home_stock.db`,
 pour que les sauvegardes HA l'emportent sans réglage.
+
+> **Retiré le 2026-08-18, pendant l'implémentation** : l'option `default_currency` (EUR,
+> « affichage seulement ») figurait ici. Aucun code ne la lit — les capteurs portent l'unité
+> `EUR` en dur — et une option qui ne change rien promet dans l'interface un comportement qui
+> n'existe pas. Le foyer est en France ; le jour où une seconde devise sera nécessaire, il
+> faudra de toute façon un taux de change, donc bien plus que cette option.
 
 ### 8.1 Entités du lot 0
 
