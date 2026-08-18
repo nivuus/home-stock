@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pantry",
+        "description": "Nothing to configure: the database is created in the configuration folder."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "The pantry is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pantry options",
+        "data": {
+          "expiration_alert_days": "How many days before the best-before date to alert"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stock_value": { "name": "Stock value" },
+      "batches": { "name": "Batches in stock" },
+      "kcal_total": { "name": "Kilocalories out of stock" },
+      "cost_total": { "name": "Cost of stock consumed" }
+    },
+    "binary_sensor": {
+      "expirations": { "name": "Expiring soon" },
+      "shortages": { "name": "Shortages" }
+    },
+    "todo": {
+      "expirations": { "name": "To eat" }
+    }
+  }
+}
