@@ -1,0 +1,242 @@
+import pytest
+
+from custom_components.home_stock.application import StockManager
+from custom_components.home_stock.domain.stock import InsufficientStock
+from custom_components.home_stock.storage import repositories as repo
+from custom_components.home_stock.storage.database import Database
+from custom_components.home_stock.storage.migrations import apply_migrations
+
+
+@pytest.fixture
+def manager(tmp_path):
+    db = Database(str(tmp_path / "t.db"))
+    db.connect()
+    with db.write() as conn:
+        apply_migrations(conn)
+    yield StockManager(db)
+    db.close()
+
+
+@pytest.fixture
+def pasta(manager):
+    """A 'Pâtes' product in grams, one article at 3.5 kcal/g, and a pantry."""
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Placard", kind="pantry")
+        product_id = repo.insert_product(conn, name="Pâtes", base_unit="g",
+                                         min_quantity=200)
+        article_id = repo.insert_article(conn, product_id=product_id,
+                                         label="Panzani 500 g", net_quantity=500,
+                                         kcal_per_base_unit=3.5)
+    return {"location_id": location_id, "product_id": product_id, "article_id": article_id}
+
+
+def test_add_stock_creates_a_batch_and_a_purchase_movement(manager, pasta):
+    batch_id = manager.add_stock(
+        article_id=pasta["article_id"], quantity=500, location_id=pasta["location_id"],
+        best_before="2027-01-01", price_per_base_unit=0.004,
+        occurred_at="2026-08-18T10:00:00",
+    )
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movements = repo.list_movements(conn)
+    assert batch["remaining"] == 500
+    assert batch["initial"] == 500
+    assert batch["price_per_base_unit"] == 0.004
+    assert len(movements) == 1
+    assert movements[0]["reason"] == "purchase"
+    assert movements[0]["quantity"] == 500
+    assert movements[0]["cost"] == pytest.approx(2.0)
+
+
+def test_add_stock_converts_a_packaging(manager, pasta):
+    batch_id = manager.add_stock(
+        article_id=pasta["article_id"], quantity=2, packaging_base_quantity=500,
+        location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00",
+    )
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert batch["remaining"] == 1000
+
+
+def test_add_stock_records_the_price_in_the_history(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    with manager.db.write() as conn:
+        assert repo.latest_price(conn, pasta["article_id"]) == 0.004
+
+
+def test_consume_takes_200_g_from_a_500_g_pack(manager, pasta):
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"],
+                                 price_per_base_unit=0.004,
+                                 occurred_at="2026-08-18T10:00:00")
+    movement_ids = manager.consume(product_id=pasta["product_id"], quantity=200,
+                                   occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movement = conn.execute("SELECT * FROM movement WHERE id = ?",
+                                (movement_ids[0],)).fetchone()
+    assert batch["remaining"] == 300
+    assert batch["closed_at"] is None
+    assert movement["quantity"] == -200
+    assert movement["kcal"] == pytest.approx(700.0)
+    assert movement["cost"] == pytest.approx(0.8)
+
+
+def test_consume_spanning_two_batches_writes_one_movement_each(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=300,
+                      location_id=pasta["location_id"], best_before="2026-08-20",
+                      price_per_base_unit=0.004, occurred_at="2026-08-01T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], best_before="2026-09-20",
+                      price_per_base_unit=0.005, occurred_at="2026-08-10T10:00:00")
+    movement_ids = manager.consume(product_id=pasta["product_id"], quantity=700,
+                                   occurred_at="2026-08-18T19:00:00")
+    assert len(movement_ids) == 2
+    with manager.db.write() as conn:
+        rows = conn.execute(
+            "SELECT quantity, cost FROM movement WHERE reason = 'consumption'"
+            " ORDER BY id").fetchall()
+        closed = conn.execute(
+            "SELECT COUNT(*) AS n FROM batch WHERE closed_at IS NOT NULL").fetchone()
+    assert [r["quantity"] for r in rows] == [-300, -400]
+    assert rows[0]["cost"] == pytest.approx(1.2)   # 300 g at 0.004
+    assert rows[1]["cost"] == pytest.approx(2.0)   # 400 g at 0.005
+    assert closed["n"] == 1
+
+
+def test_consume_refuses_to_go_negative(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
+    with pytest.raises(InsufficientStock):
+        manager.consume(product_id=pasta["product_id"], quantity=500,
+                        occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        assert conn.execute("SELECT remaining FROM batch").fetchone()["remaining"] == 100
+
+
+def test_an_idempotency_key_prevents_a_replayed_consumption(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
+    first = manager.consume(product_id=pasta["product_id"], quantity=200,
+                            occurred_at="2026-08-18T19:00:00", idempotency_key="dinner-1")
+    second = manager.consume(product_id=pasta["product_id"], quantity=200,
+                             occurred_at="2026-08-18T19:00:00", idempotency_key="dinner-1")
+    assert second == first
+    with manager.db.write() as conn:
+        assert conn.execute("SELECT remaining FROM batch").fetchone()["remaining"] == 300
+
+
+def test_opening_a_batch_shortens_its_date(manager, pasta):
+    with manager.db.write() as conn:
+        conn.execute("UPDATE product SET days_after_opening = 3 WHERE id = ?",
+                     (pasta["product_id"],))
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"],
+                                 best_before="2027-01-01",
+                                 occurred_at="2026-08-18T10:00:00")
+    manager.open_batch(batch_id, occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movements = repo.list_movements(conn)
+    assert batch["opened_at"] == "2026-08-18T19:00:00"
+    assert batch["best_before"] == "2026-08-21"
+    # Opening consumes nothing, so it writes no movement beyond the purchase.
+    assert [m["reason"] for m in movements] == ["purchase"]
+
+
+def test_opening_never_pushes_a_date_further_away(manager, pasta):
+    with manager.db.write() as conn:
+        conn.execute("UPDATE product SET days_after_opening = 30 WHERE id = ?",
+                     (pasta["product_id"],))
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"],
+                                 best_before="2026-08-20",
+                                 occurred_at="2026-08-18T10:00:00")
+    manager.open_batch(batch_id, occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT best_before FROM batch WHERE id = ?",
+                             (batch_id,)).fetchone()
+    assert batch["best_before"] == "2026-08-20"
+
+
+def test_transfer_moves_the_batch_and_records_a_zero_movement(manager, pasta):
+    with manager.db.write() as conn:
+        freezer_id = repo.insert_location(conn, name="Congélateur", kind="freezer")
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"],
+                                 occurred_at="2026-08-18T10:00:00")
+    manager.transfer_batch(batch_id, freezer_id, occurred_at="2026-08-18T20:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT location_id FROM batch WHERE id = ?",
+                             (batch_id,)).fetchone()
+        movement = conn.execute(
+            "SELECT * FROM movement WHERE reason = 'transfer'").fetchone()
+    assert batch["location_id"] == freezer_id
+    assert movement["quantity"] == 0
+    assert movement["ref_type"] == "location"
+    assert movement["ref_id"] == freezer_id
+    assert movement["kcal"] is None and movement["cost"] is None
+
+
+def test_inventory_adjustment_downwards(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    manager.adjust_inventory(article_id=pasta["article_id"],
+                             location_id=pasta["location_id"], counted_quantity=420,
+                             occurred_at="2026-08-19T09:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT remaining FROM batch").fetchone()
+        movement = conn.execute(
+            "SELECT * FROM movement WHERE reason = 'inventory'").fetchone()
+    assert batch["remaining"] == 420
+    assert movement["quantity"] == -80
+    # An inventory correction is not a consumption: it costs nothing and feeds no total.
+    assert movement["kcal"] is None
+    assert movement["cost"] is None
+
+
+def test_inventory_adjustment_upwards_creates_a_batch(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
+    manager.adjust_inventory(article_id=pasta["article_id"],
+                             location_id=pasta["location_id"], counted_quantity=300,
+                             occurred_at="2026-08-19T09:00:00")
+    with manager.db.write() as conn:
+        total = conn.execute(
+            "SELECT SUM(remaining) AS s FROM batch WHERE closed_at IS NULL").fetchone()
+    assert total["s"] == 300
+
+
+def test_inventory_adjustment_with_nothing_to_do(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
+    assert manager.adjust_inventory(article_id=pasta["article_id"],
+                                    location_id=pasta["location_id"],
+                                    counted_quantity=100,
+                                    occurred_at="2026-08-19T09:00:00") is None
+
+
+def test_query_stock_aggregates_per_product(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=300,
+                      location_id=pasta["location_id"], occurred_at="2026-08-01T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=200,
+                      location_id=pasta["location_id"], occurred_at="2026-08-05T10:00:00")
+    rows = manager.query_stock(name="pât")
+    assert len(rows) == 1
+    assert rows[0]["quantity"] == 500
+    assert rows[0]["display"] == "500 g"
+
+
+def test_summary_reports_value_expirations_and_shortages(manager, pasta):
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], best_before="2026-08-19",
+                      price_per_base_unit=0.004, occurred_at="2026-08-18T10:00:00")
+    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    assert summary["stock_value"] == pytest.approx(0.4)
+    assert summary["batch_count"] == 1
+    assert len(summary["expiring"]) == 1
+    # 100 g in stock against a 200 g threshold.
+    assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
