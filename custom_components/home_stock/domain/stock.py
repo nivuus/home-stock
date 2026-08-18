@@ -75,7 +75,7 @@ def allocate(batches: Sequence[BatchView], quantity: float) -> list[Allocation]:
     allocations: list[Allocation] = []
     left = quantity
     for candidate in sort_batches(batches):
-        if left <= 0:
+        if is_empty(left):
             break
         taken = min(candidate.remaining, left)
         remaining_after = candidate.remaining - taken

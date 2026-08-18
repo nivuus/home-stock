@@ -95,3 +95,28 @@ def test_allocate_refuses_a_non_positive_quantity():
 def test_is_empty_uses_the_epsilon():
     assert is_empty(0.0005) is True
     assert is_empty(0.01) is False
+
+
+def test_allocate_does_not_walk_into_an_untouched_batch_on_float_dust():
+    # 0.1 + 0.2 != 0.3 in binary float: after taking 0.1 from batch 1 and 0.2 from
+    # batch 2, `left` is a tiny positive residue (~2.78e-17), not exactly zero. The
+    # loop guard must treat that residue as empty (epsilon), or it walks into batch 3
+    # and emits a phantom allocation against a pack that was never actually opened.
+    allocations = allocate(
+        [batch(1, 0.1), batch(2, 0.2), batch(3, 500.0)],
+        0.1 + 0.2,
+    )
+    assert [a.batch_id for a in allocations] == [1, 2]
+
+
+def test_a_shortfall_within_the_epsilon_is_served_not_refused():
+    # Requesting 0.0005 more than the total available (400) is below the system's own
+    # definition of "empty" (QUANTITY_EPSILON = 0.001). Refusing here would be pedantic
+    # about dust the rest of the system already ignores, and serving the extra 0.0005
+    # would push the stock negative. So: serve everything there is, close every batch
+    # touched, and do not raise — the tiny shortfall is silently absorbed.
+    allocations = allocate([batch(1, 300), batch(2, 100)], 400.0005)
+    assert [(a.batch_id, a.quantity, a.closes_batch) for a in allocations] == [
+        (1, 300, True),
+        (2, 100, True),
+    ]
