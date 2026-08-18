@@ -16,6 +16,7 @@ from homeassistant.components.todo import (
     TodoListEntityFeature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import HomeStockConfigEntry
@@ -43,14 +44,34 @@ class ExpirationsTodoList(HomeStockEntity, TodoListEntity):
         ]
 
     async def async_update_todo_item(self, item: TodoItem) -> None:
-        """A checked item is a consumed batch."""
-        if item.status is not TodoItemStatus.COMPLETED or item.uid is None:
+        """A checked item is a consumed batch.
+
+        The coordinator refreshes every 15 minutes: a batch consumed elsewhere
+        (voice, a service call) in between can still be sitting, checkable, on
+        a tablet. A stale uid there is not a failure — the user's intent
+        ("this is finished") is already true, so it is a no-op, not an error.
+        A non-numeric uid, on the other hand, cannot come from our own
+        todo_items and is a genuine programming error: it must surface to the
+        frontend as a HomeAssistantError, not a raw traceback.
+        """
+        # The todo.update_item service hands us a plain string, not the enum
+        # instance: `is not TodoItemStatus.COMPLETED` would be true even for a
+        # matching value, and checking off an item would silently do nothing.
+        if item.status != TodoItemStatus.COMPLETED or item.uid is None:
             return
+        try:
+            batch_id = int(item.uid)
+        except ValueError as err:
+            raise HomeAssistantError(f"invalid batch id: {item.uid}") from err
         manager = self.coordinator.manager
-        await self.hass.async_add_executor_job(
-            partial(manager.consume_batch, int(item.uid))
-        )
-        await self.coordinator.async_request_refresh()
+        try:
+            await self.hass.async_add_executor_job(
+                partial(manager.consume_batch, batch_id)
+            )
+        except ValueError:
+            # Already closed or gone: someone else finished it first.
+            pass
+        await self.coordinator.async_refresh()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,

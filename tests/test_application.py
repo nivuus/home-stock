@@ -430,3 +430,33 @@ def test_consume_batch_also_falls_back_to_the_product_kcal_reference(manager):
         consumption = conn.execute(
             "SELECT kcal FROM movement WHERE reason = 'consumption'").fetchone()
     assert consumption["kcal"] == pytest.approx(200 * 0.52)
+
+
+def test_consume_batch_refuses_to_over_consume(manager, pasta):
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=200,
+                                 location_id=pasta["location_id"],
+                                 occurred_at="2026-08-01T10:00:00")
+    with pytest.raises(InsufficientStock):
+        manager.consume_batch(batch_id, quantity=250, occurred_at="2026-08-18T19:00:00")
+
+
+def test_consume_batch_refuses_an_unknown_batch(manager):
+    with pytest.raises(ValueError, match="unknown or closed batch"):
+        manager.consume_batch(999999, occurred_at="2026-08-18T19:00:00")
+
+
+def test_summary_totals_also_count_waste_and_expired(manager, pasta):
+    """Only consumption was exercised so far — waste and expired feed the same
+    cumulative totals (spec 7.5), which is the whole basis of the lot 2
+    per-day breakdown."""
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"], price_per_base_unit=0.004,
+                                 occurred_at="2026-08-01T10:00:00")
+    manager.consume(product_id=pasta["product_id"], quantity=100, reason="waste",
+                    occurred_at="2026-08-02T10:00:00")
+    manager.consume_batch(batch_id, quantity=50, reason="expired",
+                          occurred_at="2026-08-03T10:00:00")
+    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each.
+    assert summary["kcal_total"] == pytest.approx(150 * 3.5, rel=1e-3)
+    assert summary["cost_total"] == pytest.approx(150 * 0.004, rel=1e-3)

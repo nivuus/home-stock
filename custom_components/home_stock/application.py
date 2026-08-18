@@ -319,7 +319,7 @@ class StockManager:
              "display": format_quantity(row["quantity"], row["base_unit"])}
             for row in repo.shortage_rows(conn)
         ]
-        totals = repo.counted_totals(self.db.read())
+        totals = repo.counted_totals(conn)
         return {
             "stock_value": round(value, 2),
             "unpriced_batches": unpriced,
