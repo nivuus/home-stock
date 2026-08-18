@@ -14,6 +14,7 @@ from .coordinator import HomeStockCoordinator
 from .services import async_register_services
 from .storage.database import Database
 from .storage.migrations import apply_migrations
+from .websocket_api import async_register_websocket
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.TODO]
 
@@ -57,6 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     async_register_services(hass)
+    async_register_websocket(hass)
     return True
 
 

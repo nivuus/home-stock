@@ -50,6 +50,11 @@ def list_locations(conn) -> list[dict[str, Any]]:
     return _rows(conn.execute("SELECT * FROM location ORDER BY position, name"))
 
 
+def list_aisles(conn) -> list[dict[str, Any]]:
+    """Aisles in walking order. Empty until Open Food Facts seeds them (lot 1)."""
+    return _rows(conn.execute("SELECT * FROM aisle ORDER BY position, name"))
+
+
 def insert_category(conn, name: str) -> int:
     return _insert(conn, "category", {"name": name})
 
