@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .application import StockManager
 from .const import DATABASE_FILENAME
@@ -37,7 +38,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
         with database.write() as conn:
             apply_migrations(conn)
 
-    await hass.async_add_executor_job(_open)
+    try:
+        await hass.async_add_executor_job(_open)
+    except Exception as err:
+        # Close whatever got opened so the retry does not inherit a dangling
+        # connection and a stale lock on the file.
+        await hass.async_add_executor_job(database.close)
+        raise ConfigEntryNotReady(
+            f"Could not open the database at {database.path}: {err}"
+        ) from err
 
     manager = StockManager(database)
     coordinator = HomeStockCoordinator(hass, entry, manager)
