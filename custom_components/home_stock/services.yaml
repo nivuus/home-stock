@@ -1,0 +1,120 @@
+add_stock:
+  name: Ajouter au stock
+  description: Crée un lot et son mouvement d'achat.
+  fields:
+    article_id:
+      name: Article
+      description: Identifiant de l'article. Alternative au code-barres.
+      selector: { number: { min: 1, mode: box } }
+    barcode:
+      name: Code-barres
+      description: EAN d'un article déjà connu. Alternative à l'identifiant.
+      selector: { text: }
+    quantity:
+      name: Quantité
+      description: Dans l'unité de base du produit, ou en conditionnements.
+      required: true
+      selector: { number: { min: 0, step: 0.001, mode: box } }
+    location_id:
+      name: Emplacement
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    best_before:
+      name: Date limite
+      selector: { date: }
+    price_per_base_unit:
+      name: Prix par unité de base
+      description: En euros. 0,004 €/g pour un paquet de 500 g à 2 €.
+      selector: { number: { min: 0, step: 0.0001, mode: box } }
+    packaging_base_quantity:
+      name: Taille du conditionnement
+      description: Si la quantité est en paquets, le nombre d'unités de base par paquet.
+      selector: { number: { min: 0, step: 0.001, mode: box } }
+    idempotency_key:
+      name: Clé d'idempotence
+      description: Rejouer l'appel avec la même clé n'écrit rien de nouveau.
+      selector: { text: }
+
+consume:
+  name: Consommer
+  description: Sort une quantité du stock, en traversant les lots du plus urgent au moins urgent.
+  fields:
+    product_id:
+      name: Produit
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    quantity:
+      name: Quantité
+      required: true
+      selector: { number: { min: 0, step: 0.001, mode: box } }
+    reason:
+      name: Motif
+      default: consumption
+      selector:
+        select:
+          options:
+            - { value: consumption, label: Consommé }
+            - { value: waste, label: Jeté }
+            - { value: expired, label: Périmé }
+    idempotency_key:
+      name: Clé d'idempotence
+      selector: { text: }
+
+open_batch:
+  name: Ouvrir un lot
+  description: >-
+    Marque un lot comme entamé. Si le produit a une durée après ouverture, la date
+    limite est avancée. Rien n'est consommé.
+  fields:
+    batch_id:
+      name: Lot
+      required: true
+      selector: { number: { min: 1, mode: box } }
+
+transfer_batch:
+  name: Déplacer un lot
+  description: Change l'emplacement d'un lot, par exemple du congélateur au frigo.
+  fields:
+    batch_id:
+      name: Lot
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    location_id:
+      name: Emplacement d'arrivée
+      required: true
+      selector: { number: { min: 1, mode: box } }
+
+adjust_inventory:
+  name: Corriger l'inventaire
+  description: >-
+    Enregistre la quantité réellement comptée pour un article à un emplacement.
+    L'écart est journalisé comme correction : il ne compte ni en kilocalories ni en euros.
+  fields:
+    article_id:
+      name: Article
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    location_id:
+      name: Emplacement
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    counted_quantity:
+      name: Quantité comptée
+      description: Dans l'unité de base du produit.
+      required: true
+      selector: { number: { min: 0, step: 0.001, mode: box } }
+
+query_stock:
+  name: Interroger le stock
+  description: Renvoie ce qui est en stock, agrégé par produit. Ne modifie rien.
+  fields:
+    name:
+      name: Filtre sur le nom
+      description: Fragment de nom, sans tenir compte de la casse ni des accents.
+      selector: { text: }
+
+export_journal:
+  name: Exporter le journal
+  description: >-
+    Renvoie tous les mouvements. Le journal étant en ajout seul, il suffit à
+    reconstruire l'état du stock.
