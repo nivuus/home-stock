@@ -4,11 +4,17 @@ Reads a read-only copy of grocy.db. Stock, history and recipes stay in Grocy: th
 come over in lot 7. Every product and article keeps its Grocy id in external_ref,
 so a second run changes nothing and lot 7 becomes a join instead of a name match —
 name matching is what created 35 duplicates in April 2026.
+
+A dry run (apply=False) must be able to prove the same anomalies a real run would
+raise — that is the point of running it before writing anything — so the barcode
+and price pass below is not gated behind apply the way the actual repo.* writes
+are: it always walks the rows and always reports, and only the writes are skipped.
 """
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from .storage import repositories as repo
@@ -22,6 +28,7 @@ CONTAINER_UNITS = {
 }
 DOSAGE_UNITS = {"cs", "cc"}
 MAX_KCAL_PER_GRAM = 9.5   # pure fat is 9; above that the value is wrong
+MAX_KCAL_PER_ML = 8.1     # olive oil, the densest common liquid, tops out there
 
 
 @dataclass
@@ -66,6 +73,10 @@ def _open_grocy(path: str) -> sqlite3.Connection:
     return conn
 
 
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
 def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> ImportReport:
     """Copy the Grocy catalogue over. Without apply=True, nothing is written."""
     report = ImportReport()
@@ -83,11 +94,24 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                 values.setdefault(row["object_id"], {})[name] = row["value"]
 
         with db.write() as conn:
-            known = {
-                row["external_ref"]
-                for row in conn.execute(
-                    "SELECT external_ref FROM product WHERE external_ref IS NOT NULL")
-            }
+            # Resolve every already-imported product's generic article and base unit
+            # by external_ref, not just its existence: a replay needs both to pick
+            # up a barcode or price added in Grocy after the first import, without
+            # re-creating the product itself.
+            article_ids: dict[int, int] = {}
+            base_units: dict[int, str] = {}
+            for row in conn.execute(
+                "SELECT p.external_ref AS ref, p.base_unit AS base_unit, a.id AS article_id"
+                " FROM product p JOIN article a ON a.product_id = p.id AND a.is_generic = 1"
+                " WHERE p.external_ref IS NOT NULL"
+            ):
+                gid = int(row["ref"])
+                article_ids[gid] = row["article_id"]
+                base_units[gid] = row["base_unit"]
+            known = set(article_ids)
+            # Grocy ids that end up with an article — already known, or successfully
+            # examined this run — and are therefore eligible for barcodes/prices.
+            importable: set[int] = set(known)
 
             location_ids: dict[int, int] = {}
             for row in grocy.execute("SELECT * FROM locations"):
@@ -114,12 +138,11 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                 if apply:
                     category_ids[row["id"]] = repo.insert_category(conn, row["name"])
 
-            article_ids: dict[int, int] = {}
             for row in grocy.execute("SELECT * FROM products ORDER BY name"):
                 if not row["active"]:
                     report.skipped += 1
                     continue
-                if str(row["id"]) in known:
+                if row["id"] in known:
                     continue
                 unit_name = units.get(row["qu_id_stock"], "?")
                 if unit_name in DOSAGE_UNITS:
@@ -140,12 +163,28 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                     report.anomalies.append(
                         f"{row['name']} : {kcal:.1f} kcal/g est impossible")
                     continue
+                if kcal is not None and base_unit == "ml" and kcal > MAX_KCAL_PER_ML:
+                    report.anomalies.append(
+                        f"{row['name']} : {kcal:.1f} kcal/ml est impossible")
+                    continue
                 if not row["name"]:
                     report.anomalies.append(f"produit Grocy {row['id']} sans nom")
+                    continue
+                # A product created by hand in home_stock before the import, or a
+                # second Grocy product sharing a name, collides with the UNIQUE
+                # constraint — exactly the April 2026 duplicate scenario the whole
+                # external_ref scheme exists to prevent. Report it, keep going.
+                if conn.execute(
+                    "SELECT 1 FROM product WHERE name = ?", (row["name"],)
+                ).fetchone():
+                    report.anomalies.append(
+                        f"{row['name']} : nom déjà utilisé par un produit existant")
                     continue
 
                 report.products += 1
                 report.articles += 1
+                importable.add(row["id"])
+                base_units[row["id"]] = base_unit
                 if not apply:
                     continue
 
@@ -162,6 +201,7 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                     external_ref=str(row["id"]),
                 )
                 custom = values.get(row["id"], {})
+                nova_value = custom.get("nova")
                 article_ids[row["id"]] = repo.insert_article(
                     conn,
                     product_id=product_id,
@@ -169,41 +209,73 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                     kcal_per_base_unit=kcal,
                     brand=custom.get("marque"),
                     nutriscore=custom.get("nutriscore"),
-                    nova=int(custom["nova"]) if custom.get("nova", "").isdigit() else None,
+                    nova=int(nova_value) if nova_value and nova_value.isdigit() else None,
                     ecoscore=custom.get("ecoscore"),
                     allergens=custom.get("allergenes"),
                     external_ref=str(row["id"]),
                 )
 
+            # Barcodes and prices, always inspected — even on a dry run — so the
+            # report can be trusted *before* apply=True writes anything. Only the
+            # actual repo.* calls below are gated behind apply.
+            existing_barcodes = {
+                row["code"]: row["article_id"] for row in conn.execute(
+                    "SELECT code, article_id FROM barcode")
+            }
+            claimed_this_run: dict[str, int] = {}   # code -> grocy product id
             for row in grocy.execute("SELECT * FROM product_barcodes"):
-                article_id = article_ids.get(row["product_id"])
-                if article_id is None:
+                product_gid = row["product_id"]
+                if product_gid not in importable:
                     continue
-                report.barcodes += 1
-                if not apply:
-                    continue
-                existing = conn.execute(
-                    "SELECT 1 FROM barcode WHERE code = ?", (row["barcode"],)).fetchone()
-                if existing:
-                    report.anomalies.append(
-                        f"code-barres {row['barcode']} déjà attribué")
-                    continue
-                repo.link_barcode(conn, row["barcode"], article_id)
+                code = row["barcode"]
+                article_id = article_ids.get(product_gid)
 
-                # last_price is per purchase unit: convert only when it is unambiguous.
+                linked_to = existing_barcodes.get(code)
+                if linked_to is not None:
+                    if article_id is not None and linked_to == article_id:
+                        continue   # already imported by an earlier run: a no-op
+                    report.anomalies.append(f"code-barres {code} déjà attribué")
+                    continue
+                claimant = claimed_this_run.get(code)
+                if claimant is not None and claimant != product_gid:
+                    report.anomalies.append(f"code-barres {code} déjà attribué")
+                    continue
+                claimed_this_run[code] = product_gid
+
+                report.barcodes += 1
+                if apply and article_id is not None:
+                    repo.link_barcode(conn, code, article_id)
+                    existing_barcodes[code] = article_id
+
+                if not row["last_price"]:
+                    continue
+
+                # last_price is per purchase unit, but is written as a price per
+                # STOCK unit: convert only when the two resolve to the same base
+                # unit. "Houmous bio Pascalou 160g" is bought by Pièce and stocked
+                # in g — converting blindly would record a price per gram that is
+                # actually a price per whole 160 g pack, wrong by that factor.
+                stock_base = base_units.get(product_gid)
                 price_unit = _base_unit(units.get(row["qu_id"], "?"))
-                if row["last_price"] and row["amount"] and price_unit:
-                    per_base = row["last_price"] / (row["amount"] * price_unit[1])
-                    repo.insert_price(
-                        conn, article_id=article_id, observed_on="2026-08-18",
-                        price_per_base_unit=per_base, source="import",
-                    )
-                    report.prices += 1
-                elif row["last_price"]:
+                if not row["amount"]:
                     report.anomalies.append(
-                        f"prix de {row['barcode']} non convertible (unité ou quantité"
-                        " d'achat manquante)"
-                    )
+                        f"prix de {code} non convertible (quantité d'achat manquante)")
+                elif price_unit is None:
+                    report.anomalies.append(
+                        f"prix de {code} non convertible (unité d'achat"
+                        f" « {units.get(row['qu_id'], '?')} » inconnue)")
+                elif stock_base is None or price_unit[0] != stock_base:
+                    report.anomalies.append(
+                        f"prix de {code} non convertible (unité d'achat incompatible"
+                        " avec l'unité de stock)")
+                else:
+                    per_base = row["last_price"] / (row["amount"] * price_unit[1])
+                    report.prices += 1
+                    if apply and article_id is not None:
+                        repo.insert_price(
+                            conn, article_id=article_id, observed_on=_today(),
+                            price_per_base_unit=per_base, source="import",
+                        )
 
             if not apply:
                 conn.rollback()

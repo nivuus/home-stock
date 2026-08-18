@@ -1,10 +1,40 @@
+import sqlite3
+from unittest.mock import AsyncMock
+
 import pytest
 import voluptuous as vol
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.storage import repositories as repo
+
+
+def _write_empty_grocy(path: str) -> None:
+    """A structurally valid but empty grocy.db — enough for the import to run
+    end to end without needing real catalogue data, to exercise the service
+    itself (schema, response shape, refresh gating) rather than import_catalog's
+    own logic, which tests/test_import_grocy.py already covers.
+    """
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE quantity_units (id INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE locations (id INTEGER PRIMARY KEY, name TEXT, is_freezer INTEGER);
+        CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE products (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER, product_group_id INTEGER,
+            location_id INTEGER, qu_id_stock INTEGER, min_stock_amount REAL,
+            calories REAL, default_best_before_days_after_open INTEGER,
+            picture_file_name TEXT);
+        CREATE TABLE product_barcodes (
+            id INTEGER PRIMARY KEY, product_id INTEGER, barcode TEXT, qu_id INTEGER,
+            amount REAL, last_price REAL);
+        CREATE TABLE userfields (id INTEGER PRIMARY KEY, entity TEXT, name TEXT);
+        CREATE TABLE userfield_values (
+            id INTEGER PRIMARY KEY, field_id INTEGER, object_id INTEGER, value TEXT);
+    """)
+    conn.commit()
+    conn.close()
 
 
 @pytest.fixture
@@ -105,3 +135,47 @@ async def test_the_state_refreshes_right_after_a_write(hass, seeded):
     await hass.async_block_till_done()
     # No waiting for the 15-minute poll: a write refreshes immediately.
     assert hass.states.get("sensor.home_stock_batches").state == "1"
+
+
+async def test_import_grocy_catalog_is_response_only(hass, seeded):
+    entry, ids = seeded
+    _write_empty_grocy(hass.config.path("grocy_import.db"))
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN, "import_grocy_catalog", {"path": "grocy_import.db"}, blocking=True,
+        )
+
+
+async def test_import_grocy_catalog_schema_defaults(hass, seeded):
+    entry, ids = seeded
+    # The default path ("grocy_import.db") is relative to the config directory.
+    _write_empty_grocy(hass.config.path("grocy_import.db"))
+    response = await hass.services.async_call(
+        DOMAIN, "import_grocy_catalog", {}, blocking=True, return_response=True,
+    )
+    assert response == {
+        "products": 0, "articles": 0, "barcodes": 0, "prices": 0,
+        "categories": 0, "locations": 0, "skipped": 0, "anomalies": [], "ok": True,
+    }
+
+
+async def test_import_grocy_catalog_dry_run_does_not_refresh_the_coordinator(hass, seeded):
+    entry, ids = seeded
+    _write_empty_grocy(hass.config.path("grocy_import.db"))
+    entry.runtime_data.coordinator.async_request_refresh = AsyncMock()
+    await hass.services.async_call(
+        DOMAIN, "import_grocy_catalog", {"path": "grocy_import.db"},
+        blocking=True, return_response=True,
+    )
+    entry.runtime_data.coordinator.async_request_refresh.assert_not_called()
+
+
+async def test_import_grocy_catalog_apply_refreshes_the_coordinator(hass, seeded):
+    entry, ids = seeded
+    _write_empty_grocy(hass.config.path("grocy_import.db"))
+    entry.runtime_data.coordinator.async_request_refresh = AsyncMock()
+    await hass.services.async_call(
+        DOMAIN, "import_grocy_catalog", {"path": "grocy_import.db", "apply": True},
+        blocking=True, return_response=True,
+    )
+    entry.runtime_data.coordinator.async_request_refresh.assert_called_once()

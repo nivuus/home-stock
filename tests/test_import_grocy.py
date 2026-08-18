@@ -174,3 +174,104 @@ def test_an_impossible_calorie_value_is_an_anomaly(db, grocy):
     report = import_catalog(db, grocy, apply=False)
     assert report.ok is False
     assert any("Pâtes" in anomaly for anomaly in report.anomalies)
+
+
+def test_a_clean_import_has_no_anomalies(db, grocy):
+    report = import_catalog(db, grocy, apply=True)
+    assert report.ok is True
+
+
+def test_an_unknown_unit_is_an_anomaly(db, grocy):
+    conn = sqlite3.connect(grocy)
+    conn.execute("INSERT INTO quantity_units VALUES (99, 'Rouleau')")
+    conn.execute("UPDATE products SET qu_id_stock = 99 WHERE id = 1")
+    conn.commit()
+    conn.close()
+    report = import_catalog(db, grocy, apply=False)
+    assert report.ok is False
+    assert any(
+        "Rouleau" in anomaly and "inconnue" in anomaly for anomaly in report.anomalies
+    )
+
+
+def test_a_duplicate_product_name_is_an_anomaly_not_a_crash(db, grocy):
+    # The April 2026 scenario: a product already exists under that name — here
+    # because it was hand-created in home_stock, not because it was imported
+    # before (it carries no external_ref).
+    with db.write() as conn:
+        repo.insert_product(conn, name="Farine", base_unit="g")
+
+    report = import_catalog(db, grocy, apply=True)   # must not raise
+
+    assert report.ok is False
+    assert any("Farine" in anomaly for anomaly in report.anomalies)
+    # the rest of the import still went through
+    assert report.products == 3   # Lait, Pâtes, Œufs — Farine collided
+    names = [p["name"] for p in repo.list_products(db.read())]
+    assert names.count("Farine") == 1
+
+
+def test_a_duplicate_barcode_within_the_same_run_is_an_anomaly(db, grocy):
+    conn = sqlite3.connect(grocy)
+    # Lait grabs Pâtes' barcode by mistake.
+    conn.execute(
+        "INSERT INTO product_barcodes VALUES (3, 3, '3038350201553', 6, 100, 1.2)")
+    conn.commit()
+    conn.close()
+
+    report = import_catalog(db, grocy, apply=True)
+
+    assert report.ok is False
+    assert any("3038350201553" in anomaly for anomaly in report.anomalies)
+    assert report.barcodes == 2   # Pâtes' own + Lait's own, not the collision
+    # the first claimant keeps it
+    article = repo.find_article_by_barcode(db.read(), "3038350201553")
+    assert article is not None
+    product = repo.get_product(db.read(), article["product_id"])
+    assert product["name"] == "Pâtes"
+
+
+def test_a_non_convertible_price_is_an_anomaly(db, grocy):
+    conn = sqlite3.connect(grocy)
+    # Œufs is stocked by the piece, but this barcode is priced by the gram:
+    # converting literally would record a price per egg as a price per gram —
+    # the same class of bug as the real "Houmous bio Pascalou 160g" case,
+    # where the pack (Pièce) and the stock unit (g) don't resolve to the same
+    # base unit.
+    conn.execute(
+        "INSERT INTO product_barcodes VALUES (3, 4, '2222222222222', 4, 1, 3.0)")
+    conn.commit()
+    conn.close()
+
+    report = import_catalog(db, grocy, apply=True)
+
+    assert report.ok is False
+    assert any("2222222222222" in anomaly for anomaly in report.anomalies)
+    # the barcode itself still links — only the price is refused
+    article = repo.find_article_by_barcode(db.read(), "2222222222222")
+    assert article is not None
+    assert repo.latest_price(db.read(), article["id"]) is None
+
+
+def test_a_barcode_added_after_the_first_import_is_picked_up_by_a_replay(db, grocy):
+    import_catalog(db, grocy, apply=True)
+
+    conn = sqlite3.connect(grocy)
+    # Farine (kg, base unit g) gets a barcode in Grocy after the fact.
+    conn.execute(
+        "INSERT INTO product_barcodes VALUES (3, 2, '4444444444444', 4, 1000, 2.5)")
+    conn.commit()
+    conn.close()
+
+    second = import_catalog(db, grocy, apply=True)
+
+    assert second.ok is True
+    assert second.products == 0        # no product re-created
+    assert second.barcodes == 1        # only the new one
+    assert second.prices == 1
+    assert len(repo.list_products(db.read())) == 4
+    article = repo.find_article_by_barcode(db.read(), "4444444444444")
+    assert article is not None
+    product = repo.get_product(db.read(), article["product_id"])
+    assert product["name"] == "Farine"
+    assert repo.latest_price(db.read(), article["id"]) == pytest.approx(0.0025)
