@@ -383,3 +383,50 @@ def test_consume_accepts_a_waste_reason(manager, pasta):
                                 (movement_ids[0],)).fetchone()
     assert movement["reason"] == "waste"
     assert movement["quantity"] == -50
+
+
+def test_consume_batch_empties_one_precise_batch(manager, pasta):
+    old = manager.add_stock(article_id=pasta["article_id"], quantity=300,
+                            location_id=pasta["location_id"], best_before="2026-08-20",
+                            price_per_base_unit=0.004, occurred_at="2026-08-01T10:00:00")
+    recent = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                               location_id=pasta["location_id"], best_before="2026-09-20",
+                               occurred_at="2026-08-10T10:00:00")
+    # The todo list checks off a batch by its id, not by FIFO order.
+    manager.consume_batch(recent, occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        rows = {r["id"]: r for r in conn.execute("SELECT * FROM batch").fetchall()}
+    assert rows[recent]["remaining"] == 0
+    assert rows[recent]["closed_at"] == "2026-08-18T19:00:00"
+    assert rows[old]["remaining"] == 300
+
+
+def test_consume_batch_can_take_a_part_and_a_reason(manager, pasta):
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                                 location_id=pasta["location_id"],
+                                 occurred_at="2026-08-01T10:00:00")
+    manager.consume_batch(batch_id, quantity=120, reason="waste",
+                          occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movement = conn.execute("SELECT * FROM movement WHERE reason = 'waste'").fetchone()
+    assert batch["remaining"] == 380
+    assert movement["quantity"] == -120
+
+
+def test_consume_batch_also_falls_back_to_the_product_kcal_reference(manager):
+    """Same rule as consume() (spec 7.4): a generic article with no rate of its
+    own must still record kcal, taken from product.reference_kcal."""
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Frigo", kind="fridge")
+        product_id = repo.insert_product(conn, name="Pomme", base_unit="g",
+                                         reference_kcal=0.52)
+        article_id = repo.insert_article(conn, product_id=product_id, label="Générique")
+    batch_id = manager.add_stock(article_id=article_id, quantity=200,
+                                 location_id=location_id,
+                                 occurred_at="2026-08-18T10:00:00")
+    manager.consume_batch(batch_id, occurred_at="2026-08-18T19:00:00")
+    with manager.db.write() as conn:
+        consumption = conn.execute(
+            "SELECT kcal FROM movement WHERE reason = 'consumption'").fetchone()
+    assert consumption["kcal"] == pytest.approx(200 * 0.52)

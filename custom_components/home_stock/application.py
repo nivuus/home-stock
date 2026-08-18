@@ -14,7 +14,7 @@ from .const import (
     REASON_TRANSFER,
 )
 from .domain.nutrition import movement_values
-from .domain.stock import BatchView, allocate
+from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
@@ -143,6 +143,44 @@ class StockManager:
                     closed_at=moment if allocation.closes_batch else None,
                 )
             return movement_ids
+
+    def consume_batch(self, batch_id: int, *, quantity: float | None = None,
+                      reason: str = REASON_CONSUMPTION,
+                      occurred_at: str | None = None) -> int:
+        """Take from one precise batch. Without a quantity, empties it.
+
+        The expiry list checks off a batch, not a product: FIFO must not apply.
+        """
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            row = conn.execute(
+                # kcal rate: the article's own, falling back to the product's
+                # reference_kcal (spec 7.4), same as add_stock() and consume().
+                "SELECT b.*, a.product_id,"
+                "       COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_unit"
+                " FROM batch b"
+                " JOIN article a ON a.id = b.article_id"
+                " JOIN product p ON p.id = a.product_id"
+                " WHERE b.id = ? AND b.closed_at IS NULL",
+                (batch_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown or closed batch {batch_id}")
+            taken = row["remaining"] if quantity is None else float(quantity)
+            if taken > row["remaining"] + 0.001:
+                raise InsufficientStock(requested=taken, available=row["remaining"])
+            remaining_after = row["remaining"] - taken
+            closes = is_empty(remaining_after)
+            values = movement_values(taken, row["kcal_per_base_unit"],
+                                     row["price_per_base_unit"])
+            movement_id = repo.insert_movement(
+                conn, occurred_at=moment, product_id=row["product_id"],
+                article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
+                reason=reason, kcal=values.kcal, cost=values.cost,
+            )
+            repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
+                                     closed_at=moment if closes else None)
+            return movement_id
 
     def open_batch(self, batch_id: int, *, occurred_at: str | None = None) -> None:
         """Mark a batch open and, if the product says so, bring its date closer."""
@@ -281,6 +319,7 @@ class StockManager:
              "display": format_quantity(row["quantity"], row["base_unit"])}
             for row in repo.shortage_rows(conn)
         ]
+        totals = repo.counted_totals(self.db.read())
         return {
             "stock_value": round(value, 2),
             "unpriced_batches": unpriced,
@@ -288,6 +327,8 @@ class StockManager:
             "open_batch_count": sum(1 for row in rows if row["opened_at"]),
             "expiring": sorted(expiring, key=lambda e: e["best_before"]),
             "shortages": shortages,
+            "kcal_total": round(totals["kcal"], 1),
+            "cost_total": round(totals["cost"], 2),
         }
 
     def export_journal(self) -> list[dict[str, Any]]:
