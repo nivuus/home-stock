@@ -233,6 +233,34 @@ def test_a_real_nutriscore_grade_passes_through_case_folded():
     assert mapped.nutriscore == "a"
 
 
+def test_a_dropped_nutriscore_is_recorded_in_rejections():
+    """The round-4 finding: 14 real catalogue records carry OFF's own
+    "unknown" placeholder here. article_create's off_dropped_fields needs a
+    way to know a value was dropped even though this module already
+    neutralises it before the handler ever sees a bad value — recorded by
+    column name, not a sentence, so a caller can merge it straight in."""
+    mapped = map_article({"nutriscore_grade": "unknown"}, "food")
+    assert mapped.nutriscore is None
+    assert "nutriscore" in mapped.rejections
+
+
+def test_a_dropped_nova_group_is_recorded_in_rejections():
+    mapped = map_article({"nova_group": 99}, "food")
+    assert mapped.nova is None
+    assert "nova" in mapped.rejections
+
+
+def test_an_absent_nutriscore_is_not_recorded_as_a_rejection():
+    """A field OFF never sent is an absence, not a rejection — the
+    difference matters to off_dropped_fields, which must not claim
+    something was "dropped" when nothing was ever offered."""
+    mapped = map_article({}, "food")
+    assert mapped.nutriscore is None
+    assert mapped.nova is None
+    assert "nutriscore" not in mapped.rejections
+    assert "nova" not in mapped.rejections
+
+
 # --- per base unit ----------------------------------------------------------
 
 def test_a_gram_product_divides_by_a_hundred():

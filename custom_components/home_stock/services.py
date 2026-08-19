@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
@@ -14,6 +14,7 @@ from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
 from .storage import repositories as repo
+from .validators import bounded_int, finite_float
 
 # Reasons a "consume" call may legitimately carry — the same three the
 # services.yaml selector offers. The other three reasons (purchase, inventory,
@@ -23,15 +24,24 @@ from .storage import repositories as repo
 # kcal/cost totals for stock that really did leave the pantry.
 CONSUME_REASONS = (REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED)
 
+# Home Assistant's own cv.positive_int is vol.All(vol.Coerce(int),
+# vol.Range(min=0)): it truncates a float silently, accepts a bare JSON
+# `true` as 1, and never bounds the top end, so a JSON number like 2**70
+# sails through and only fails later, uncaught, when sqlite3 raises
+# OverflowError at bind time — the exact hole closed on the websocket
+# commands' ids. `_id` keeps cv.positive_int's own range (>= 0) but swaps
+# its coercion leg for `bounded_int`, which refuses all three instead.
+_id: Final = vol.All(bounded_int, vol.Range(min=0))
+
 ADD_STOCK_SCHEMA = vol.All(
     vol.Schema({
-        vol.Exclusive("article_id", "article"): cv.positive_int,
+        vol.Exclusive("article_id", "article"): _id,
         vol.Exclusive("barcode", "article"): cv.string,
-        vol.Required("quantity"): vol.Coerce(float),
-        vol.Required("location_id"): cv.positive_int,
+        vol.Required("quantity"): finite_float,
+        vol.Required("location_id"): _id,
         vol.Optional("best_before"): cv.string,
-        vol.Optional("price_per_base_unit"): vol.Coerce(float),
-        vol.Optional("packaging_base_quantity"): vol.Coerce(float),
+        vol.Optional("price_per_base_unit"): finite_float,
+        vol.Optional("packaging_base_quantity"): finite_float,
         vol.Optional("idempotency_key"): cv.string,
     }),
     # vol.Exclusive above only forbids giving both; without at least one, the
@@ -40,17 +50,17 @@ ADD_STOCK_SCHEMA = vol.All(
     cv.has_at_least_one_key("article_id", "barcode"),
 )
 CONSUME_SCHEMA = vol.Schema({
-    vol.Required("product_id"): cv.positive_int,
-    vol.Required("quantity"): vol.Coerce(float),
+    vol.Required("product_id"): _id,
+    vol.Required("quantity"): finite_float,
     vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
     vol.Optional("idempotency_key"): cv.string,
 })
-BATCH_SCHEMA = vol.Schema({vol.Required("batch_id"): cv.positive_int})
-TRANSFER_SCHEMA = BATCH_SCHEMA.extend({vol.Required("location_id"): cv.positive_int})
+BATCH_SCHEMA = vol.Schema({vol.Required("batch_id"): _id})
+TRANSFER_SCHEMA = BATCH_SCHEMA.extend({vol.Required("location_id"): _id})
 INVENTORY_SCHEMA = vol.Schema({
-    vol.Required("article_id"): cv.positive_int,
-    vol.Required("location_id"): cv.positive_int,
-    vol.Required("counted_quantity"): vol.Coerce(float),
+    vol.Required("article_id"): _id,
+    vol.Required("location_id"): _id,
+    vol.Required("counted_quantity"): finite_float,
 })
 QUERY_SCHEMA = vol.Schema({vol.Optional("name"): cv.string})
 
@@ -73,6 +83,13 @@ async def _run(hass: HomeAssistant, work) -> Any:
         ) from error
     except (UnitError, ValueError) as error:
         raise HomeAssistantError(str(error)) from error
+    except OverflowError as error:
+        # Backstop, not the primary defence: ADD_STOCK_SCHEMA/CONSUME_SCHEMA/
+        # etc. already validate every numeric field through bounded_int/
+        # finite_float before a call ever reaches here. Caught anyway so a
+        # gap in that validation answers a French refusal instead of
+        # "Unknown error".
+        raise HomeAssistantError("Valeur numérique hors limites.") from error
 
 
 def async_register_services(hass: HomeAssistant) -> None:

@@ -106,6 +106,17 @@ async def test_a_throttled_lookup_says_so_instead_of_pretending(hass: HomeAssist
     assert result["off"] is None
 
 
+async def test_a_lookup_refuses_an_overlong_code(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/lookup", "code": "x" * 500_000})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
 async def test_creating_an_article_attaches_it_and_remembers_the_barcode(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     entry = await setup_entry()
@@ -242,12 +253,13 @@ async def test_an_implausible_off_label_is_dropped_not_refused(
     assert await hass.async_add_executor_job(label) is None
 
 
-async def test_an_implausible_off_nova_is_neutralized_before_it_reaches_the_write(
+async def test_an_implausible_off_nova_is_neutralized_and_still_reported(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     """off/mapping.py already refuses an out-of-range nova at the source: the
-    article is created normally and nova lands NULL — not reported as
-    "dropped" by the websocket layer, since it was never handed a bad value
-    in the first place."""
+    article is created normally and nova lands NULL. That neutralisation
+    used to be invisible to the panel (round 3) — off/mapping.py's own
+    `rejections` now records it, and article_create merges that into
+    off_dropped_fields (round 4), so the panel finds out either way."""
     entry = await setup_entry()
     client = await hass_ws_client(hass)
 
@@ -260,7 +272,7 @@ async def test_an_implausible_off_nova_is_neutralized_before_it_reaches_the_writ
     created = (await client.receive_json())["result"]
 
     assert created["created"] is True
-    assert created["off_dropped_fields"] == []
+    assert created["off_dropped_fields"] == ["nova"]
 
     def nova():
         return entry.runtime_data.database.read().execute(
@@ -268,6 +280,121 @@ async def test_an_implausible_off_nova_is_neutralized_before_it_reaches_the_writ
             (created["article_id"],)).fetchone()[0]
 
     assert await hass.async_add_executor_job(nova) is None
+
+
+async def test_a_dropped_nutriscore_is_reported_in_off_dropped_fields(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """Half of the round-3 fix: off/mapping.py neutralises "unknown" before
+    the handler ever sees a bad nutriscore value, so _drop_invalid_off_
+    values has nothing to catch — map_article's own `rejections` is what
+    now surfaces it in off_dropped_fields, so the panel can say something
+    was ignored instead of a value going silently missing."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    off_payload = {**MUESLI.product, "nutriscore_grade": "unknown"}
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli douteux", "base_unit": "g"},
+        "off": off_payload, "off_source": "food",
+    })
+    created = (await client.receive_json())["result"]
+
+    assert created["created"] is True
+    assert created["off_dropped_fields"] == ["nutriscore"]
+
+    def nutriscore():
+        return entry.runtime_data.database.read().execute(
+            "SELECT nutriscore FROM article WHERE id = ?",
+            (created["article_id"],)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(nutriscore) is None
+
+
+async def test_creating_an_article_refuses_an_oversized_off_payload(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A real OFF record is a few kilobytes; nothing should let one scan
+    grow the database without bound."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    off_payload = {**MUESLI.product, "ingredients_text_fr": "x" * (300 * 1024)}
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli énorme", "base_unit": "g"},
+        "off": off_payload, "off_source": "food",
+    })
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def article_count():
+        return entry.runtime_data.database.read().execute(
+            "SELECT COUNT(*) FROM article").fetchone()[0]
+
+    assert await hass.async_add_executor_job(article_count) == 0
+
+
+async def test_creating_an_article_refuses_an_overlong_off_source(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+        "off_source": "x" * 500_000,
+    })
+    answer = await client.receive_json()
+
+    # This field is validated at the top-level command schema, not through
+    # _validate_fields — Home Assistant's own generic schema-error message
+    # (English, out of scope per round 3's ruling) is what the client sees
+    # here, not the _preview()-truncated French one _validate_fields builds.
+    assert answer["success"] is False
+
+
+async def test_creating_an_article_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/create", "code": "1",
+                            "product_id": 2**64})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
+async def test_getting_a_product_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """2**63 passes a bare `int` type check and only fails later, uncaught,
+    when sqlite3 binds it as a query parameter — refused at the schema
+    instead, like every other id."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/get",
+                            "product_id": 2**63})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
+async def test_getting_a_product_refuses_a_boolean_as_an_id(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A bare `int` schema entry accepts JSON `true`, which Python's int()
+    resolves to 1 — the bounded validator must refuse it outright instead
+    of silently resolving to a real product."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/get",
+                            "product_id": True})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
 
 
 async def test_an_unknown_column_is_refused_rather_than_written(
@@ -643,6 +770,30 @@ async def test_product_update_refuses_an_overlong_name(
     assert len(answer["error"]["message"]) < 500
 
 
+async def test_updating_an_article_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/update",
+                            "article_id": 2**64, "fields": {}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
+async def test_updating_a_product_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 2**64, "fields": {}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
 async def test_a_dry_run_conversion_reports_without_touching_anything(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     entry = await setup_entry(with_piece_product=True)
@@ -737,6 +888,41 @@ async def test_converting_refuses_an_infinite_reference_quantity(
     assert answer["success"] is False
 
 
+async def test_converting_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
+                            "product_id": 2**64, "to_unit": "g",
+                            "reference_quantity": 500})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
+async def test_converting_refuses_an_overlong_packaging_name(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A 500 000-character packaging name used to be written verbatim on a
+    successful conversion."""
+    entry = await setup_entry(with_piece_product=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
+                            "product_id": 1, "to_unit": "g",
+                            "reference_quantity": 500,
+                            "packaging_name": "x" * 500_000})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+    def packaging_count():
+        return entry.runtime_data.database.read().execute(
+            "SELECT COUNT(*) FROM packaging").fetchone()[0]
+
+    assert await hass.async_add_executor_job(packaging_count) == 0
+
+
 async def test_reordering_aisles_writes_the_new_walking_order(hass: HomeAssistant,
                                                               setup_entry, hass_ws_client):
     entry = await setup_entry()
@@ -767,6 +953,18 @@ async def test_reordering_with_an_unknown_aisle_id_is_refused(
 
     assert answer["success"] is False
     assert answer["error"]["code"] == "not_found"
+
+
+async def test_reordering_refuses_an_aisle_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/aisles/reorder",
+                            "aisle_ids": [2**64]})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
 
 
 async def test_storing_directly_creates_a_batch_outside_any_session(
@@ -880,6 +1078,66 @@ async def test_storing_stock_at_an_unknown_location_is_refused(
 
     assert answer["success"] is False
     assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_storing_stock_refuses_an_id_larger_than_64_bits(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add",
+                            "article_id": 2**64, "quantity": 1, "location_id": 1})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+
+async def test_storing_stock_refuses_an_unparseable_best_before(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """"pas une date" used to be accepted and stored verbatim, quietly
+    breaking every later comparison against it (the expiry alert window, the
+    "to eat soon" todo list, ...)."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "best_before": "pas une date"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+    def batch_count():
+        return entry.runtime_data.database.read().execute(
+            "SELECT COUNT(*) FROM batch").fetchone()[0]
+
+    assert await hass.async_add_executor_job(batch_count) == 0
+
+
+async def test_storing_stock_accepts_a_real_iso_date(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "best_before": "2027-01-01"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is True
+
+
+async def test_storing_stock_refuses_an_overlong_idempotency_key(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "idempotency_key": "x" * 500_000})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
 
 
 async def test_updating_an_unknown_product_is_refused_instead_of_answering_success(

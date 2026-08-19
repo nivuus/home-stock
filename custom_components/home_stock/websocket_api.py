@@ -4,10 +4,10 @@ changes."""
 from __future__ import annotations
 
 import json
-import math
 import re
 import sqlite3
 from dataclasses import asdict
+from datetime import date
 from functools import partial
 from typing import Any, Callable, Final
 
@@ -30,6 +30,7 @@ from .off.mapping import (
 )
 from .off.open_prices import latest_price
 from .storage import repositories as repo
+from .validators import bounded_int, finite_float
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
 NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
@@ -42,60 +43,13 @@ NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
 # names alone is not enough — see test_product_update_refuses_a_non_numeric_
 # min_quantity, which used to reach the shortage sensor as a silently
 # uncomparable string.
-
-_SQLITE_INT_MIN: Final = -(2**63)
-_SQLITE_INT_MAX: Final = 2**63 - 1
-
-
-def _finite_float(value: Any) -> float:
-    """A real, finite number. `vol.Coerce(float)` alone accepts "inf",
-    "-inf" and "nan": an infinite min_quantity would flip the shortage
-    sensor on permanently, an infinite kcal_per_base_unit would reach the
-    append-only movement journal as Inf — which Home Assistant's JSON
-    encoder then renders as `null`, so the panel shows nothing amiss — and
-    NaN would land as SQL NULL just as silently. All three are refused here
-    instead of ever reaching a column.
-    """
-    if isinstance(value, bool):
-        raise vol.Invalid(f"expected a number, got bool {value!r}")
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as err:
-        raise vol.Invalid(f"expected a number, got {value!r}") from err
-    if not math.isfinite(number):
-        raise vol.Invalid(f"expected a finite number, got {value!r}")
-    return number
-
-
-def _bounded_int(value: Any) -> int:
-    """A whole number SQLite can actually store as an INTEGER (signed
-    64-bit). `vol.Coerce(int)` alone truncates a float silently — `aisle_id:
-    3.7` would quietly file the product in aisle 3, a different aisle than
-    the one asked for — and never bounds the result, so a JSON number like
-    `1e308` sails through as a 309-digit int and only fails later, uncaught,
-    when sqlite3 raises OverflowError at bind time. Both are refused here.
-    """
-    if isinstance(value, bool):
-        raise vol.Invalid(f"expected a whole number, got bool {value!r}")
-    if isinstance(value, float):
-        if not math.isfinite(value) or value != int(value):
-            raise vol.Invalid(f"expected a whole number, got {value!r}")
-        number = int(value)
-    elif isinstance(value, int):
-        number = value
-    elif isinstance(value, str):
-        try:
-            number = int(value.strip())
-        except ValueError as err:
-            # A numeric-looking string like "3.7" is refused the same way,
-            # rather than accepted via a float round-trip nobody asked for.
-            raise vol.Invalid(f"expected a whole number, got {value!r}") from err
-    else:
-        raise vol.Invalid(f"expected a whole number, got {value!r}")
-    if not _SQLITE_INT_MIN <= number <= _SQLITE_INT_MAX:
-        raise vol.Invalid(f"out of range for a 64-bit integer: {value!r}")
-    return number
-
+#
+# finite_float/bounded_int live in .validators, not here: services.py needs
+# the exact same guarantee (a service call is just as capable of writing Inf
+# into the append-only journal as a websocket command is), and the older
+# surface must not be the weaker one.
+_finite_float = finite_float
+_bounded_int = bounded_int
 
 MAX_TEXT_LENGTH: Final = 200  # generous for a product name; not for a novel
 
@@ -178,6 +132,28 @@ _NOVA: Final = vol.Any(vol.All(_bounded_int, vol.In((1, 2, 3, 4))), None)
 # net_quantity is the same kind of value and deserves the same guard.
 _NET_QUANTITY: Final = vol.Any(
     vol.All(_finite_float, vol.Range(min=MIN_NET_QUANTITY, max=MAX_NET_QUANTITY)), None)
+
+
+def _iso_date(value: Any) -> str | None:
+    """A calendar date, ISO 8601 (AAAA-MM-JJ), or nothing. "pas une date"
+    used to be accepted and stored verbatim — it would not fail loudly, it
+    would just quietly stop matching every later comparison against it (the
+    expiry alert window, the todo list of what to eat soon, ...)."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise vol.Invalid(f"date attendue au format AAAA-MM-JJ, reçu : {_preview(value)}")
+    try:
+        date.fromisoformat(value)
+    except ValueError as err:
+        raise vol.Invalid(
+            f"date attendue au format AAAA-MM-JJ, reçu : {_preview(value)}") from err
+    return value
+
+
+# A real Open Food Facts record is a few kilobytes; 256 kB is generous
+# headroom without letting one scan grow the database without bound.
+MAX_OFF_RAW_BYTES: Final = 256 * 1024
 
 # Columns a human may edit from the panel, mapped to the shape a value must
 # have to be written. Every value is validated against its schema before any
@@ -429,7 +405,7 @@ async def batches_list(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/product/get",
-    vol.Required("product_id"): int,
+    vol.Required("product_id"): _bounded_int,
 })
 @websocket_api.async_response
 async def product_get(hass, connection, msg) -> None:
@@ -502,7 +478,7 @@ def subscribe(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/lookup",
-    vol.Required("code"): str,
+    vol.Required("code"): _non_empty_text,
 })
 @websocket_api.async_response
 async def lookup(hass, connection, msg) -> None:
@@ -560,11 +536,11 @@ async def lookup(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/article/create",
-    vol.Required("code"): str,
-    vol.Exclusive("product_id", "target"): int,
+    vol.Required("code"): _non_empty_text,
+    vol.Exclusive("product_id", "target"): _bounded_int,
     vol.Exclusive("new_product", "target"): dict,
     vol.Optional("off"): dict,
-    vol.Optional("off_source"): vol.Any(str, None),
+    vol.Optional("off_source"): _bounded_text,
     vol.Optional("fields", default={}): dict,
 })
 @websocket_api.async_response
@@ -591,6 +567,19 @@ async def article_create(hass, connection, msg) -> None:
         if new_product is None:
             return
 
+    raw = msg.get("off") or {}
+    # Serialised once, up front: work() reuses this string verbatim rather
+    # than re-encoding raw a second time inside the executor job.
+    off_raw_json = json.dumps(raw, ensure_ascii=False) if raw else None
+    if off_raw_json is not None and len(off_raw_json.encode("utf-8")) > MAX_OFF_RAW_BYTES:
+        # A real OFF record is a few kilobytes; refusing outright here (not
+        # dropping, as _drop_invalid_off_values does for a single bad field)
+        # is the only sane response to a blob this size — there is no
+        # meaningful way to store "most of" a JSON document.
+        connection.send_error(
+            msg["id"], "invalid_field", "Réponse Open Food Facts trop volumineuse.")
+        return
+
     def work() -> dict[str, Any]:
         with runtime.manager.db.write() as conn:
             existing = repo.find_article_by_barcode(conn, msg["code"])
@@ -600,7 +589,6 @@ async def article_create(hass, connection, msg) -> None:
                         "product_id": existing["product_id"], "created": False,
                         "off_dropped_fields": []}
 
-            raw = msg.get("off") or {}
             source = msg.get("off_source")
             mapped = map_article(raw, source) if raw and source else None
 
@@ -630,7 +618,7 @@ async def article_create(hass, connection, msg) -> None:
                     "off_labels": mapped.off_labels, "off_source": mapped.off_source,
                     "off_synced_at": dt_util.utcnow().replace(
                         microsecond=0, tzinfo=None).isoformat(),
-                    "off_raw": json.dumps(raw, ensure_ascii=False),
+                    "off_raw": off_raw_json,
                 })
                 per_base = nutrition_per_base_unit(
                     mapped.nutrition_per_100, product["base_unit"], mapped.net_quantity)
@@ -648,6 +636,15 @@ async def article_create(hass, connection, msg) -> None:
                 # never subject to this policy; it already went through
                 # _validate_fields, which refuses instead.
                 dropped_off_fields = _drop_invalid_off_values(ARTICLE_EDITABLE, values)
+                # off/mapping.py neutralises an implausible nova/nutriscore
+                # before this function ever sees it, so the drop above never
+                # has a bad value left to catch for those two columns —
+                # merge in what map_article already recorded in its own
+                # `rejections`, so the panel finds out about those too, not
+                # just the ones caught here.
+                for name in mapped.rejections:
+                    if name in ARTICLE_EDITABLE and name not in dropped_off_fields:
+                        dropped_off_fields.append(name)
             values.update(fields)
             if fields:
                 # A correction typed on the creation screen must survive the
@@ -686,7 +683,7 @@ async def article_create(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/article/update",
-    vol.Required("article_id"): int,
+    vol.Required("article_id"): _bounded_int,
     vol.Required("fields"): dict,
 })
 @websocket_api.async_response
@@ -715,7 +712,11 @@ async def article_update(hass, connection, msg) -> None:
 
     try:
         await hass.async_add_executor_job(work)
-    except LookupError as err:
+    except (LookupError, OverflowError) as err:
+        # OverflowError is a backstop: _bounded_int already bounds
+        # article_id at the schema level, so this should be unreachable —
+        # caught anyway so a gap there answers a French refusal instead of
+        # "Unknown error".
         _send_domain_error(connection, msg["id"], err)
         return
     await runtime.coordinator.async_request_refresh()
@@ -724,7 +725,7 @@ async def article_update(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/product/update",
-    vol.Required("product_id"): int,
+    vol.Required("product_id"): _bounded_int,
     vol.Required("fields"): dict,
 })
 @websocket_api.async_response
@@ -747,7 +748,11 @@ async def product_update(hass, connection, msg) -> None:
 
     try:
         await hass.async_add_executor_job(work)
-    except LookupError as err:
+    except (LookupError, OverflowError) as err:
+        # OverflowError is a backstop: _bounded_int already bounds
+        # product_id/category_id/aisle_id/etc. at the schema level, so this
+        # should be unreachable — caught anyway so a gap there answers a
+        # French refusal instead of "Unknown error".
         _send_domain_error(connection, msg["id"], err)
         return
     except sqlite3.IntegrityError as err:
@@ -759,10 +764,10 @@ async def product_update(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/product/convert_unit",
-    vol.Required("product_id"): int,
+    vol.Required("product_id"): _bounded_int,
     vol.Required("to_unit"): vol.In(("g", "ml")),
     vol.Required("reference_quantity"): _finite_float,
-    vol.Optional("packaging_name", default="unité"): str,
+    vol.Optional("packaging_name", default="unité"): _non_empty_text,
     vol.Optional("dry_run", default=False): bool,
 })
 @websocket_api.async_response
@@ -811,6 +816,11 @@ async def product_convert_unit(hass, connection, msg) -> None:
         connection.send_error(msg["id"], "not_found",
                               f"produit {msg['product_id']} inconnu")
         return
+    except OverflowError as err:
+        # Backstop: _bounded_int already bounds product_id/reference_
+        # quantity at the schema level, so this should be unreachable.
+        _send_domain_error(connection, msg["id"], err)
+        return
 
     report["already_converted"] = False
     if report["applied"]:
@@ -820,12 +830,12 @@ async def product_convert_unit(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/stock/add",
-    vol.Required("article_id"): int,
+    vol.Required("article_id"): _bounded_int,
     vol.Required("quantity"): _finite_float,
-    vol.Required("location_id"): int,
-    vol.Optional("best_before"): vol.Any(str, None),
+    vol.Required("location_id"): _bounded_int,
+    vol.Optional("best_before"): _iso_date,
     vol.Optional("price_per_base_unit"): vol.Any(_finite_float, None),
-    vol.Optional("idempotency_key"): vol.Any(str, None),
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def stock_add(hass, connection, msg) -> None:
@@ -843,7 +853,10 @@ async def stock_add(hass, connection, msg) -> None:
             price_per_base_unit=msg.get("price_per_base_unit"),
             idempotency_key=msg.get("idempotency_key"),
         ))
-    except (LookupError, UnitError, ValueError) as err:
+    except (LookupError, UnitError, ValueError, OverflowError) as err:
+        # OverflowError is a backstop: _bounded_int/_finite_float already
+        # bound article_id/location_id/quantity/price_per_base_unit at the
+        # schema level, so this should be unreachable.
         _send_domain_error(connection, msg["id"], err)
         return
     except sqlite3.IntegrityError as err:
@@ -856,7 +869,7 @@ async def stock_add(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/aisles/reorder",
-    vol.Required("aisle_ids"): [int],
+    vol.Required("aisle_ids"): [_bounded_int],
 })
 @websocket_api.async_response
 async def aisles_reorder(hass, connection, msg) -> None:
@@ -883,6 +896,11 @@ async def aisles_reorder(hass, connection, msg) -> None:
         await hass.async_add_executor_job(work)
     except LookupError as err:
         connection.send_error(msg["id"], "not_found", str(err))
+        return
+    except OverflowError as err:
+        # Backstop: _bounded_int already bounds every id in aisle_ids at the
+        # schema level, so this should be unreachable.
+        _send_domain_error(connection, msg["id"], err)
         return
     connection.send_result(msg["id"], {"aisles": len(msg["aisle_ids"])})
 

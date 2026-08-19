@@ -227,6 +227,23 @@ def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
 
     net = parse_net_quantity(product)
     nutrition, rejections = _nutrition_per_100(product)
+    rejections = list(rejections)
+
+    # A value was sent but did not survive the plausibility check: recorded
+    # by column name (not a sentence, unlike the nutrition rejections above)
+    # so a caller — article_create's off_dropped_fields — can merge these
+    # straight in without having to parse free-form English out of them.
+    # Only counted when OFF actually sent something: a field that was never
+    # present is an absence, not a rejection.
+    nutriscore_raw = product.get("nutriscore_grade")
+    nutriscore = _plausible_nutriscore(nutriscore_raw)
+    if nutriscore_raw is not None and nutriscore is None:
+        rejections.append("nutriscore")
+
+    nova_raw = product.get("nova_group")
+    nova = _plausible_nova(nova_raw)
+    if nova_raw is not None and nova is None:
+        rejections.append("nova")
 
     return MappedArticle(
         off_source=off_source,
@@ -237,8 +254,8 @@ def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
         net_quantity=net[0] if net else None,
         net_unit=net[1] if net else None,
         image=product.get("image_front_url") or None,
-        nutriscore=_plausible_nutriscore(product.get("nutriscore_grade")),
-        nova=_plausible_nova(product.get("nova_group")),
+        nutriscore=nutriscore,
+        nova=nova,
         ecoscore=(product.get("ecoscore_grade") or None),
         allergens=_tags(product, "allergens_tags"),
         traces=_tags(product, "traces_tags"),

@@ -92,6 +92,66 @@ async def test_add_stock_rejects_an_unknown_barcode(hass, seeded):
         }, blocking=True)
 
 
+# --- Fix round 4: services must not be the weaker surface ------------------
+# The websocket commands refuse "inf"/"nan" and an out-of-64-bit id before
+# they ever reach SQL (see tests/test_websocket_write.py); a service call —
+# an automation, a voice command through Bleuenn — used to have no such
+# guard and could write the exact same Inf/NaN into the append-only journal,
+# or crash uncaught on an id past 64 bits.
+
+async def test_add_stock_rejects_an_infinite_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": "inf",
+            "location_id": ids["location_id"],
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_infinite_price(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 100,
+            "location_id": ids["location_id"], "price_per_base_unit": "inf",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_infinite_packaging_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 1,
+            "location_id": ids["location_id"], "packaging_base_quantity": "inf",
+        }, blocking=True)
+
+
+async def test_adjust_inventory_rejects_a_non_finite_counted_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "adjust_inventory", {
+            "article_id": ids["article_id"], "location_id": ids["location_id"],
+            "counted_quantity": "nan",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_id_larger_than_64_bits(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": 2**64, "quantity": 1,
+            "location_id": ids["location_id"],
+        }, blocking=True)
+
+
+async def test_consume_rejects_an_id_larger_than_64_bits(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 2**64, "quantity": 1,
+        }, blocking=True)
+
+
 async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass, seeded):
     entry, ids = seeded
     await hass.services.async_call(DOMAIN, "add_stock", {
