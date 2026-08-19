@@ -34,3 +34,14 @@ describe('raccourcis de date de péremption', () => {
     }
   });
 });
+
+describe('raccourcis de date de péremption : heure locale, pas l’instant UTC', () => {
+  it('ne date pas la veille un rangement fait après minuit à Paris', () => {
+    // 22 h 30 UTC le 19 août = 0 h 30 le 20 août à Paris (CEST, UTC+2).
+    // `toISOString()` daterait tout sur le 19 (l'instant UTC) ; en heure
+    // locale, « aujourd'hui » est bien le 20, et +3 j tombe le 23.
+    const APRES_MINUIT_A_PARIS = new Date('2026-08-19T22:30:00Z');
+    const [troisJours] = raccourcisDlc(APRES_MINUIT_A_PARIS, null);
+    expect(troisJours.date).toBe('2026-08-23');
+  });
+});

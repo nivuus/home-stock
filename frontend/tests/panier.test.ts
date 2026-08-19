@@ -81,18 +81,23 @@ describe('<home-stock-panier>', () => {
   });
 
   it('affiche les lignes groupées par rayon dans l’ordre reçu, sans les retrier', async () => {
+    // Volontairement PAS alphabétique, ni au niveau des rayons ni des noms
+    // dans un même rayon : une fixture triée par accident laisse passer un
+    // .sort() ajouté par erreur dans render() (un relecteur a confirmé qu'un
+    // tel .sort() survit à toute la suite si la fixture est déjà triée).
+    // « Surgelés » avant « Boissons » (S > B), « Vin » avant « Eau » (V > E).
     const lignes = [
-      ligne({ id: 1, aisle_name: 'Épicerie', product_name: 'Farine' }),
-      ligne({ id: 2, aisle_name: 'Frais', product_name: 'Lait' }),
-      ligne({ id: 3, aisle_name: 'Frais', product_name: 'Yaourt' }),
+      ligne({ id: 1, aisle_name: 'Surgelés', product_name: 'Glace' }),
+      ligne({ id: 2, aisle_name: 'Boissons', product_name: 'Vin' }),
+      ligne({ id: 3, aisle_name: 'Boissons', product_name: 'Eau' }),
     ];
     const element = monter({ donnees: donnees(lignes, 12.5) });
     await element.updateComplete;
 
     const titres = Array.from(element.shadowRoot!.querySelectorAll('.rayon-nom')).map((n) => n.textContent);
-    expect(titres).toEqual(['Épicerie', 'Frais']);
+    expect(titres).toEqual(['Surgelés', 'Boissons']);
     const noms = Array.from(element.shadowRoot!.querySelectorAll('.nom')).map((n) => n.textContent);
-    expect(noms).toEqual(['Farine', 'Lait', 'Yaourt']);
+    expect(noms).toEqual(['Glace', 'Vin', 'Eau']);
   });
 
   it('affiche le total du serveur, jamais recalculé côté client', async () => {
@@ -164,7 +169,56 @@ describe('<home-stock-panier>', () => {
     expect(ajouter).toHaveBeenCalledWith('home_stock/session/update_line', { line_id: 1, quantity: 1500 });
 
     (element.shadowRoot!.querySelector('.moins') as HTMLButtonElement).click();
-    expect(ajouter).toHaveBeenCalledWith('home_stock/session/update_line', { line_id: 1, quantity: 500 });
+    // Le serveur n'a pas encore répondu (donnees.quantity reste 1000, la
+    // prop ne bouge pas dans ce test) : un « − » après un « + » doit annuler
+    // l'intention précédente, pas repartir de la base serveur comme si le
+    // premier appui n'avait pas eu lieu.
+    expect(ajouter).toHaveBeenCalledWith('home_stock/session/update_line', { line_id: 1, quantity: 1000 });
+  });
+
+  it('accumule l’intention hors ligne : trois appuis sur « + » demandent bien trois paquets de plus, '
+     + 'et l’affichage bouge à chaque appui', async () => {
+    const ajouter = vi.fn();
+    const rejouer = vi.fn().mockResolvedValue(undefined); // ne se résout jamais vers un nouveau `donnees` : hors ligne
+    const lignes = [ligne({ id: 1, quantity: 1000, net_quantity: 500, base_unit: 'g' })];
+    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer } });
+    await element.updateComplete;
+
+    const plus = element.shadowRoot!.querySelector('.plus') as HTMLButtonElement;
+    plus.click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.valeur-quantite')!.textContent).toContain('1500');
+
+    plus.click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.valeur-quantite')!.textContent).toContain('2000');
+
+    plus.click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.valeur-quantite')!.textContent).toContain('2500');
+
+    // Trois envois distincts, un par appui — trois paquets voulus, pas un.
+    expect(ajouter).toHaveBeenCalledTimes(3);
+    expect(ajouter).toHaveBeenNthCalledWith(1, 'home_stock/session/update_line', { line_id: 1, quantity: 1500 });
+    expect(ajouter).toHaveBeenNthCalledWith(2, 'home_stock/session/update_line', { line_id: 1, quantity: 2000 });
+    expect(ajouter).toHaveBeenNthCalledWith(3, 'home_stock/session/update_line', { line_id: 1, quantity: 2500 });
+  });
+
+  it('efface l’intention locale dès qu’une quantité serveur fraîche arrive pour la ligne', async () => {
+    const ajouter = vi.fn();
+    const lignes = [ligne({ id: 1, quantity: 1000, net_quantity: 500, base_unit: 'g' })];
+    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.plus') as HTMLButtonElement).click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.valeur-quantite')!.textContent).toContain('1500');
+
+    // Le serveur a confirmé 1500 (nouvelle valeur reçue) : l'intention locale
+    // n'a plus lieu d'être, l'affichage doit rester à 1500, pas grimper à 2000.
+    element.donnees = donnees([{ ...lignes[0], quantity: 1500 }], 7.5);
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.valeur-quantite')!.textContent).toContain('1500');
   });
 
   it('convertit le prix de paquet saisi en prix par unité de base avant l’envoi', async () => {
@@ -192,5 +246,87 @@ describe('<home-stock-panier>', () => {
     const element = monter({ donnees: null });
     await element.updateComplete;
     expect(element.shadowRoot!.querySelector('.vide')).not.toBeNull();
+  });
+
+  it('désactive le passage en caisse une fois la session sortie de « shopping » '
+     + '(un second appui serait refusé pour toujours)', async () => {
+    const lignes = [ligne({ id: 1 })];
+    const enCaisse: DonneesSession = {
+      ...donnees(lignes, 2.5),
+      session: { ...donnees(lignes, 2.5).session, state: 'to_store' },
+    };
+    const element = monter({ donnees: enCaisse });
+    await element.updateComplete;
+    expect((element.shadowRoot!.querySelector('.checkout') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('n’écrit jamais directement par connexion : sans file, un appui ne fait rien '
+     + '(il n’existe plus de chemin d’écriture hors file)', async () => {
+    const appeler = vi.fn().mockResolvedValue({});
+    const connexion = { appeler } as unknown as Connexion;
+    const lignes = [ligne({ id: 1 })];
+    const element = monter({ donnees: donnees(lignes, 2.5), connexion });
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.plus') as HTMLButtonElement).click();
+    await element.updateComplete;
+
+    expect(appeler).not.toHaveBeenCalled();
+  });
+
+  it('désarme une suppression en attente dès qu’une autre action a lieu (ajuster une quantité)', async () => {
+    const lignes = [ligne({ id: 1 }), ligne({ id: 2 })];
+    const element = monter({
+      donnees: donnees(lignes, 2.5),
+      file: { ajouter: vi.fn(), rejouer: vi.fn().mockResolvedValue(undefined) },
+    });
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelectorAll('.supprimer')[0] as HTMLButtonElement).click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.confirmer-suppression')).not.toBeNull();
+
+    // On ajuste la quantité d'une AUTRE ligne : la suppression armée doit
+    // retomber, pas rester une gâchette prête pour un appui égaré.
+    (element.shadowRoot!.querySelectorAll('.plus')[1] as HTMLButtonElement).click();
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.confirmer-suppression')).toBeNull();
+  });
+
+  it('désarme une suppression en attente sur un rafraîchissement des données', async () => {
+    const lignes = [ligne({ id: 1 })];
+    const element = monter({ donnees: donnees(lignes, 2.5) });
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.supprimer') as HTMLButtonElement).click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.confirmer-suppression')).not.toBeNull();
+
+    // Un rafraîchissement arrive (deux rayons plus loin, l'utilisateur a
+    // continué de scanner) : l'armement ne doit pas survivre.
+    element.donnees = donnees(lignes, 2.5);
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.confirmer-suppression')).toBeNull();
+  });
+
+  it('prévient plutôt que d’effacer en silence un prix tapé sur une ligne au poids sans poids connu', async () => {
+    const ajouter = vi.fn();
+    const lignes = [ligne({ id: 1, base_unit: 'g', net_quantity: null })];
+    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
+    await element.updateComplete;
+
+    const champPrix = element.shadowRoot!.querySelector('.prix-champ') as HTMLInputElement;
+    champPrix.value = '3,00';
+    champPrix.dispatchEvent(new Event('input'));
+    champPrix.dispatchEvent(new Event('change'));
+    await element.updateComplete;
+
+    // Rien n'est parti (aucune conversion possible sans poids connu), et la
+    // saisie reste affichée avec une raison — pas de retour muet à l'ancien prix.
+    expect(ajouter).not.toHaveBeenCalled();
+    expect(champPrix.value).toBe('3,00');
+    expect(element.shadowRoot!.querySelector('.erreur-prix')).not.toBeNull();
   });
 });

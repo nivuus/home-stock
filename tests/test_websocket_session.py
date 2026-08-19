@@ -164,3 +164,42 @@ async def test_an_unknown_location_on_store_line_is_a_readable_error(
 
     assert answer["success"] is False
     assert answer["error"]["message"] != "Unknown error"
+
+
+async def test_the_offline_queue_s_idempotency_key_is_accepted_on_every_line_write(
+    hass: HomeAssistant, setup_entry, hass_ws_client
+):
+    """FileAttente (the panel's offline queue) stamps `idempotency_key` onto
+    every action it sends, uniformly — it has no notion of "this command
+    doesn't take one". update_line, remove_line and store_line used to have
+    strict schemas with no such key, so a client replaying a queued edit or
+    removal got "extra keys not allowed" back, and worse: the queue treated
+    that refusal exactly like being offline and never moved past it, taking
+    the whole trip down. The three commands must accept the key (and may
+    ignore it) exactly like add_line and stock/add already do.
+    """
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=0.002, idempotency_key="scan-1")
+    line_id = added["result"]["id"]
+
+    updated = await _send(client, 3, "home_stock/session/update_line", line_id=line_id,
+                          quantity=750, idempotency_key="edit-1")
+    assert updated["success"] is True
+    assert updated["result"]["quantity"] == 750
+
+    await _send(client, 4, "home_stock/session/checkout")
+    stored = await _send(client, 5, "home_stock/session/store_line", line_id=line_id,
+                         location_id=1, best_before="2027-01-01", idempotency_key="store-1")
+    assert stored["success"] is True
+
+    added2 = await _send(client, 6, "home_stock/session/start", store="Leclerc")
+    assert added2["success"] is True
+    second_line = await _send(client, 7, "home_stock/session/add_line", article_id=1,
+                              quantity=200, unit_price=0.002, idempotency_key="scan-2")
+    removed = await _send(client, 8, "home_stock/session/remove_line",
+                          line_id=second_line["result"]["id"], idempotency_key="remove-1")
+    assert removed["success"] is True

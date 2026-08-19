@@ -60,6 +60,10 @@ export class PanneauGardeManger extends LitElement {
    *  serveur ne les représente tant qu'ils n'ont pas de lot, donc le panneau
    *  les garde le temps que l'écran de rangement les traite. */
   @state() private enAttenteRangement: LigneRangementAutonome[] = [];
+  /** Le dernier refus du serveur sur une écriture en file, en français
+   *  (c'est déjà le message du serveur) — jusqu'à ce qu'on l'accuse
+   *  réception ou qu'un nouveau refus le remplace. */
+  @state() private erreurFile: string | null = null;
 
   private connexion?: Connexion;
   private file?: FileAttente;
@@ -68,8 +72,11 @@ export class PanneauGardeManger extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this.connexion = new Connexion(this.hass);
-    this.file = new FileAttente(window.localStorage, (type, charge) =>
-      this.connexion!.appeler(type, charge));
+    this.file = new FileAttente(
+      window.localStorage,
+      (type, charge) => this.connexion!.appeler(type, charge),
+      (_action, message) => { this.erreurFile = message; },
+    );
     this.enAttente = this.file.taille();
     void this.file.rejouer().then(() => { this.enAttente = this.file!.taille(); });
     void this.actualiserSession();
@@ -188,6 +195,22 @@ export class PanneauGardeManger extends LitElement {
     return [...this.lignesSessionARanger, ...this.enAttenteRangement];
   }
 
+  /** Change d'écran, sauf s'il faut d'abord prévenir : quitter le rangement
+   *  alors que des articles autonomes attendent encore les perd pour de bon
+   *  — rien côté serveur ne les représente tant qu'ils n'ont pas de lot,
+   *  contrairement aux lignes de session qui, elles, survivent dans
+   *  `to_store`. */
+  private naviguerVers(cible: Ecran): void {
+    if (this.ecran === 'rangement' && cible !== 'rangement' && this.enAttenteRangement.length > 0) {
+      const confirme = window.confirm(
+        'Des articles rapportés seuls n’ont pas encore été rangés : ils seront perdus si vous quittez '
+        + 'maintenant. Continuer ?',
+      );
+      if (!confirme) return;
+    }
+    this.ecran = cible;
+  }
+
   private rendreNavigation() {
     if (this.ecran === 'fiche') return nothing;
     const enCourses = this.session?.session?.state === 'shopping';
@@ -195,19 +218,29 @@ export class PanneauGardeManger extends LitElement {
     return html`
       <nav class="navigation">
         ${this.ecran !== 'scanner' ? html`
-          <button class="nav-bouton" @click=${() => { this.ecran = 'scanner'; }}>Scanner</button>
+          <button class="nav-bouton" @click=${() => this.naviguerVers('scanner')}>Scanner</button>
         ` : nothing}
         ${enCourses && this.ecran !== 'panier' ? html`
-          <button class="nav-bouton" @click=${() => { this.ecran = 'panier'; }}>
+          <button class="nav-bouton" @click=${() => this.naviguerVers('panier')}>
             Panier${this.session!.totals.lines ? ` (${this.session!.totals.lines})` : ''}
           </button>
         ` : nothing}
         ${lignesRangement.length > 0 && this.ecran !== 'rangement' ? html`
-          <button class="nav-bouton" @click=${() => { this.ecran = 'rangement'; }}>
+          <button class="nav-bouton" @click=${() => this.naviguerVers('rangement')}>
             Ranger (${lignesRangement.length})
           </button>
         ` : nothing}
       </nav>
+    `;
+  }
+
+  private rendreErreurFile() {
+    if (!this.erreurFile) return nothing;
+    return html`
+      <p class="erreur-file">
+        ${this.erreurFile}
+        <button class="fermer-erreur-file" @click=${() => { this.erreurFile = null; }}>OK</button>
+      </p>
     `;
   }
 
@@ -217,6 +250,15 @@ export class PanneauGardeManger extends LitElement {
     .nav-bouton {
       flex: 1; min-height: 48px; border-radius: 8px; border: none; font-size: 0.95rem;
       background: var(--secondary-background-color); color: var(--primary-text-color);
+    }
+    .erreur-file {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin: 8px 12px 0; padding: 8px 12px; border-radius: 8px;
+      background: var(--error-color, #b3261e); color: #fff; font-size: 0.9rem;
+    }
+    .fermer-erreur-file {
+      min-height: 48px; min-width: 48px; border-radius: 8px; border: none;
+      background: rgba(255, 255, 255, 0.2); color: #fff; font-weight: 600;
     }
   `;
 
@@ -237,6 +279,7 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'rangement') {
       return html`
         <home-stock-rangement .lignes=${this.lignesARanger} .connexion=${this.connexion} .file=${this.file}
+          .enAttente=${this.enAttente}
           @ligne-autonome-rangee=${this.surLigneAutonomeRangee} @termine=${this.surRangementTermine}
           @file-changee=${this.surFileChangee}>
         </home-stock-rangement>`;
@@ -248,6 +291,6 @@ export class PanneauGardeManger extends LitElement {
   }
 
   render() {
-    return html`${this.rendreNavigation()}${this.rendreEcran()}`;
+    return html`${this.rendreNavigation()}${this.rendreErreurFile()}${this.rendreEcran()}`;
   }
 }

@@ -473,3 +473,122 @@ describe('panneau : parcours complet, du scan au lot rangé', () => {
     expect(element.ecran).toBe('scanner');
   });
 });
+
+
+describe('panneau : un refus du serveur sur une écriture en file remonte en français', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('affiche le message du serveur et le retire au clic sur OK', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(sessionOuverte('shopping', null));
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      if (msg.type === 'home_stock/session/add_line') {
+        return Promise.reject({ code: 'shopping_refused', message: 'Cette ligne est déjà rangée.' });
+      }
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+
+    const scanner = element.shadowRoot!.querySelector('home-stock-scanner')!;
+    scanner.dispatchEvent(new CustomEvent('code-lu', {
+      detail: { code: '3229820129488' }, bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const fiche = element.shadowRoot!.querySelector('home-stock-fiche')!;
+    fiche.dispatchEvent(new CustomEvent('article-pret', {
+      detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005, mode: 'panier', offDroppedFields: [] },
+      bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const banniere = element.shadowRoot!.querySelector('.erreur-file');
+    expect(banniere).not.toBeNull();
+    expect(banniere!.textContent).toContain('Cette ligne est déjà rangée.');
+
+    (element.shadowRoot!.querySelector('.fermer-erreur-file') as HTMLButtonElement).click();
+    await (element as any).updateComplete;
+    expect(element.shadowRoot!.querySelector('.erreur-file')).toBeNull();
+  });
+});
+
+describe('panneau : quitter le rangement avec des articles autonomes en attente prévient d’abord', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  async function monterSurLeRangement(): Promise<HTMLElement & { ecran: string; updateComplete: Promise<boolean> }> {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null); // pas de session : rangement
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+
+    const scanner = element.shadowRoot!.querySelector('home-stock-scanner')!;
+    scanner.dispatchEvent(new CustomEvent('code-lu', {
+      detail: { code: '3229820129488' }, bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const fiche = element.shadowRoot!.querySelector('home-stock-fiche')!;
+    fiche.dispatchEvent(new CustomEvent('article-pret', {
+      detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005, mode: 'rangement', offDroppedFields: [] },
+      bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    expect(element.ecran).toBe('rangement');
+    return element;
+  }
+
+  it('reste sur le rangement si l’utilisateur annule l’avertissement', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const element = await monterSurLeRangement();
+
+    const boutonScanner = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement;
+    boutonScanner.click();
+    await element.updateComplete;
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(element.ecran).toBe('rangement');
+  });
+
+  it('quitte le rangement si l’utilisateur confirme l’avertissement', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const element = await monterSurLeRangement();
+
+    const boutonScanner = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement;
+    boutonScanner.click();
+    await element.updateComplete;
+
+    expect(element.ecran).toBe('scanner');
+  });
+});

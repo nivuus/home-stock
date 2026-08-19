@@ -7,7 +7,8 @@
  *     le panneau construit lui-même faute de ligne serveur à interroger.
  *
  *  Les deux se rangent au même geste : choisir un emplacement (préposé sur
- *  celui du produit) et un raccourci de DLC (`raccourcisDlc`), en un appui.
+ *  celui du produit s'il en a un, sinon un choix explicite est exigé — voir
+ *  `emplacementPour`) et un raccourci de DLC (`raccourcisDlc`), en un appui.
  *  Quand la liste se vide, l'écran l'annonce puis revient au scanner.
  */
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
@@ -41,10 +42,6 @@ export type LigneRangement = LigneRangementSession | LigneRangementAutonome;
 
 export type Emplacement = { id: number; name: string; kind: string; position: number };
 
-function idLigne(ligne: LigneRangement): number | string {
-  return ligne.id;
-}
-
 function nomLigne(ligne: LigneRangement): string {
   return ligne.source === 'session' ? (ligne.article_label ?? ligne.product_name) : ligne.product_name;
 }
@@ -77,14 +74,21 @@ export class EcranRangement extends LitElement {
   @property({ attribute: false }) lignes: LigneRangement[] = [];
   @property({ attribute: false }) connexion?: Connexion;
   @property({ attribute: false }) file?: FileAttente;
+  /** Nombre d'écritures en attente dans la file — comme sur le panier. */
+  @property({ attribute: false }) enAttente = 0;
 
   @state() private emplacements: Emplacement[] = [];
   @state() private erreurEmplacements: string | null = null;
   /** Emplacement choisi à la main, par id de ligne — tant qu'absent, le
-   *  sélecteur reste préposé sur `default_location_id`. */
+   *  sélecteur reste préposé sur `default_location_id`. Sans l'un ni
+   *  l'autre, il n'y a PAS de repli implicite (voir `emplacementPour`) :
+   *  ranger un produit jamais vu dans n'importe quel emplacement qui trie
+   *  premier serait le classer au hasard, en silence. */
   @state() private emplacementChoisi: Record<string, number> = {};
   /** Lignes dont le rangement est en cours d'envoi : ignorées d'un second
-   *  appui, réaffichées seulement si l'envoi échoue. */
+   *  appui pendant l'attente, puis réactivées dans tous les cas quand
+   *  l'envoi se termine — qu'il ait réussi, été refusé, ou simplement pas
+   *  pu partir (hors ligne). Rien ne doit rester grisé pour toujours. */
   @state() private enCours: Set<string> = new Set();
 
   private aEuDesLignes = false;
@@ -119,24 +123,26 @@ export class EcranRangement extends LitElement {
     }
   }
 
+  /** L'emplacement qui recevra le lot, ou `null` si rien n'a encore été
+   *  décidé — jamais un premier emplacement pris au hasard faute de mieux.
+   *  Un produit sans emplacement suggéré exige un choix explicite : les
+   *  raccourcis de DLC restent désactivés tant qu'il n'est pas fait (voir
+   *  `rendreLigne`). */
   private emplacementPour(ligne: LigneRangement): number | null {
-    const choisi = this.emplacementChoisi[String(idLigne(ligne))];
+    const choisi = this.emplacementChoisi[String(ligne.id)];
     if (choisi !== undefined) return choisi;
-    if (ligne.default_location_id !== null) return ligne.default_location_id;
-    return this.emplacements[0]?.id ?? null;
+    return ligne.default_location_id;
   }
 
   /** Empile puis rejoue tout de suite — voir la même méthode dans
    *  `<home-stock-panier>` : `file-changee` tient le compteur du panneau à
-   *  jour, avant l'envoi puis après. */
-  private ecrire(type: string, charge: Record<string, unknown>): void {
-    if (this.file) {
-      this.file.ajouter(type, charge);
-      this.avertirFile();
-      void this.file.rejouer().then(() => this.avertirFile());
-    } else if (this.connexion) {
-      void this.connexion.appeler(type, charge).catch(() => {});
-    }
+   *  jour, avant l'envoi puis après. Sans `file`, rien à faire : il n'existe
+   *  plus de chemin d'écriture direct par `connexion`. */
+  private ecrire(type: string, charge: Record<string, unknown>): Promise<void> {
+    if (!this.file) return Promise.resolve();
+    this.file.ajouter(type, charge);
+    this.avertirFile();
+    return this.file.rejouer().then(() => { this.avertirFile(); });
   }
 
   private avertirFile(): void {
@@ -146,22 +152,28 @@ export class EcranRangement extends LitElement {
   private ranger(ligne: LigneRangement, raccourci: Raccourci): void {
     const emplacementId = this.emplacementPour(ligne);
     if (emplacementId === null) return;
-    const cle = String(idLigne(ligne));
+    const cle = String(ligne.id);
     if (this.enCours.has(cle)) return;
     this.enCours = new Set(this.enCours).add(cle);
 
+    const terminer = (): void => {
+      const restant = new Set(this.enCours);
+      restant.delete(cle);
+      this.enCours = restant;
+    };
+
     if (ligne.source === 'session') {
-      this.ecrire('home_stock/session/store_line', {
-        line_id: ligne.id, location_id: emplacementId, best_before: raccourci.date,
-      });
       // La ligne disparaîtra de la liste quand le résumé de session se
       // rafraîchira (le panneau y est abonné) : rien à faire ici de plus,
       // sous peine d'afficher un état que le serveur n'a pas encore confirmé.
+      void this.ecrire('home_stock/session/store_line', {
+        line_id: ligne.id, location_id: emplacementId, best_before: raccourci.date,
+      }).then(terminer);
     } else {
-      this.ecrire('home_stock/stock/add', {
+      void this.ecrire('home_stock/stock/add', {
         article_id: ligne.article_id, quantity: ligne.quantity, location_id: emplacementId,
         best_before: raccourci.date, price_per_base_unit: ligne.unit_price,
-      });
+      }).then(terminer);
       // Un article autonome n'existe nulle part côté serveur tant qu'il
       // n'est pas rangé : rien à réconcilier, on le retire tout de suite.
       this.dispatchEvent(new CustomEvent('ligne-autonome-rangee', {
@@ -171,7 +183,7 @@ export class EcranRangement extends LitElement {
   }
 
   private rendreLigne(ligne: LigneRangement) {
-    const cle = String(idLigne(ligne));
+    const cle = String(ligne.id);
     const enCours = this.enCours.has(cle);
     const emplacementId = this.emplacementPour(ligne);
     const raccourcis = raccourcisDlc(new Date(), ligne.default_shelf_life_days);
@@ -193,11 +205,17 @@ export class EcranRangement extends LitElement {
                   [cle]: Number((e.target as HTMLSelectElement).value),
                 };
               }}>
+              ${emplacementId === null ? html`
+                <option value="" disabled selected>Choisir…</option>
+              ` : nothing}
               ${this.emplacements.map((emp) => html`
                 <option value=${String(emp.id)} ?selected=${emp.id === emplacementId}>${emp.name}</option>
               `)}
             </select>
           </label>
+          ${emplacementId === null ? html`
+            <p class="emplacement-manquant">Choisissez un emplacement avant de ranger.</p>
+          ` : nothing}
           ${this.erreurEmplacements ? html`<p class="erreur">${this.erreurEmplacements}</p>` : nothing}
           <div class="raccourcis-dlc">
             ${raccourcis.map((raccourci) => html`
@@ -218,6 +236,9 @@ export class EcranRangement extends LitElement {
     }
     const groupes = grouperParEmplacement(this.lignes, this.emplacements);
     return html`
+      ${this.enAttente > 0 ? html`
+        <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
+      ` : nothing}
       ${groupes.map((groupe) => html`
         <section class="emplacement">
           <h3 class="emplacement-nom">${groupe.nom}</h3>
@@ -230,6 +251,7 @@ export class EcranRangement extends LitElement {
   static styles = css`
     :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
     .tout-range { text-align: center; font-size: 1.2rem; margin-top: 32px; }
+    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 8px; }
     .emplacement-nom {
       margin: 16px 0 4px; font-size: 0.9rem; text-transform: uppercase;
       color: var(--secondary-text-color); letter-spacing: 0.04em;
@@ -243,6 +265,7 @@ export class EcranRangement extends LitElement {
     .quantite { margin: 0 0 4px; color: var(--secondary-text-color); }
     .emplacement-label { display: block; font-size: 0.85rem; margin-bottom: 8px; }
     .emplacement-champ { min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; }
+    .emplacement-manquant { color: var(--error-color, #b3261e); font-size: 0.85rem; margin: 0 0 8px; }
     .erreur { color: var(--error-color, #b3261e); font-size: 0.85rem; }
     .raccourcis-dlc { display: flex; flex-wrap: wrap; gap: 8px; }
     .raccourci-dlc {

@@ -175,4 +175,101 @@ describe('<home-stock-rangement>', () => {
 
     expect(termine).not.toHaveBeenCalled();
   });
+
+  it('exige un choix explicite d’emplacement quand le produit n’en a pas de suggéré : '
+     + 'les raccourcis restent désactivés, avec une raison affichée', async () => {
+    const ajouter = vi.fn();
+    const element = monter({
+      lignes: [ligneSession({ id: 1, default_location_id: null })],
+      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) },
+    });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    // Pas de repli silencieux sur le premier emplacement de la liste.
+    const boutons = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc')) as HTMLButtonElement[];
+    expect(boutons.every((b) => b.disabled)).toBe(true);
+    expect(element.shadowRoot!.querySelector('.emplacement-manquant')).not.toBeNull();
+
+    boutons[0].click();
+    expect(ajouter).not.toHaveBeenCalled();
+
+    // Un choix explicite lève le blocage.
+    const select = element.shadowRoot!.querySelector('.emplacement-champ') as HTMLSelectElement;
+    select.value = '2';
+    select.dispatchEvent(new Event('change'));
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.emplacement-manquant')).toBeNull();
+    const boutonSansDlc = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
+      .find((b) => b.textContent?.includes('Sans DLC')) as HTMLButtonElement;
+    expect(boutonSansDlc.disabled).toBe(false);
+    boutonSansDlc.click();
+    expect(ajouter).toHaveBeenCalledWith('home_stock/session/store_line', {
+      line_id: 1, location_id: 2, best_before: null,
+    });
+  });
+
+  it('réactive la ligne après un rangement qui n’a pas pu partir (hors ligne), au lieu de la geler', async () => {
+    // rejouer() qui ne se résout jamais vers un succès : le mock ne fait
+    // rien avancer, exactement comme une panne réseau — mais il se RÉSOUT
+    // (rejouer() ne rejette jamais, voir FileAttente.rejouer), donc le
+    // .then(terminer) doit quand même s'exécuter.
+    const ajouter = vi.fn();
+    const rejouer = vi.fn().mockResolvedValue(undefined);
+    const element = monter({
+      lignes: [ligneSession({ id: 1, default_location_id: 2 })],
+      connexion: connexionFactice(), file: { ajouter, rejouer },
+    });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const boutonSansDlc = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
+      .find((b) => b.textContent?.includes('Sans DLC')) as HTMLButtonElement;
+    boutonSansDlc.click();
+    await element.updateComplete;
+    expect(boutonSansDlc.textContent).toContain('Rangement…');
+    expect(boutonSansDlc.disabled).toBe(true);
+
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    // La ligne reste dans la liste (rien ne l'a retirée : ce n'est pas
+    // rangé), mais elle redevient tapable — pas gelée pour toujours.
+    expect(boutonSansDlc.disabled).toBe(false);
+    expect(boutonSansDlc.textContent).not.toContain('Rangement…');
+  });
+
+  it('affiche le compteur d’actions en attente comme le panier', async () => {
+    const element = document.createElement('home-stock-rangement') as HTMLElement & {
+      lignes: LigneRangement[]; connexion?: Connexion; enAttente: number; updateComplete: Promise<boolean>;
+    };
+    element.lignes = [ligneSession({ id: 1 })];
+    element.connexion = connexionFactice();
+    element.enAttente = 3;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.en-attente')!.textContent).toContain('3');
+  });
+
+  it('n’écrit jamais directement par connexion : sans file, un appui ne fait rien', async () => {
+    const appeler = vi.fn().mockResolvedValue({ locations: EMPLACEMENTS });
+    const connexion = { appeler } as unknown as Connexion;
+    const element = monter({
+      lignes: [ligneSession({ id: 1, default_location_id: 1 })],
+      connexion,
+    });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    appeler.mockClear(); // on ignore l'appel de chargement des emplacements
+
+    const boutonSansDlc = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
+      .find((b) => b.textContent?.includes('Sans DLC')) as HTMLButtonElement;
+    boutonSansDlc.click();
+    await element.updateComplete;
+
+    expect(appeler).not.toHaveBeenCalled();
+  });
 });

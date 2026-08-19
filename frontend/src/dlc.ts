@@ -6,10 +6,18 @@
  */
 export type Raccourci = { libelle: string; date: string | null };
 
-const JOUR_MS = 86_400_000;
-
+/** `depuis` construit en heures locales, jamais `toISOString()` : celle-ci
+ *  formate un instant UTC, donc un rangement à 00 h 30 à Paris donnerait
+ *  « +3 j » pour la veille. Les composants locaux de `Date` gèrent déjà le
+ *  report de mois/année (`getDate() + jours` au-delà de la fin du mois roule
+ *  correctement) ; le validateur du serveur est strict sur `AAAA-MM-JJ`, donc
+ *  la forme rendue doit rester exactement celle-là. */
 function dans(jours: number, depuis: Date): string {
-  return new Date(depuis.getTime() + jours * JOUR_MS).toISOString().slice(0, 10);
+  const local = new Date(depuis.getFullYear(), depuis.getMonth(), depuis.getDate() + jours);
+  const annee = String(local.getFullYear()).padStart(4, '0');
+  const mois = String(local.getMonth() + 1).padStart(2, '0');
+  const jour = String(local.getDate()).padStart(2, '0');
+  return `${annee}-${mois}-${jour}`;
 }
 
 export function raccourcisDlc(aujourdhui: Date, dureeParDefaut: number | null): Raccourci[] {

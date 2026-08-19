@@ -82,3 +82,50 @@ describe('file d’attente hors ligne', () => {
     expect(new FileAttente(stockage, async () => {}).taille()).toBe(0);
   });
 });
+
+describe('file d’attente hors ligne : refus du serveur contre panne réseau', () => {
+  it('un refus (avec code) est retiré de la file et n’empêche pas la suite de partir', async () => {
+    // Une file empoisonnée : la première action est refusée par le serveur
+    // (mauvaise règle métier), la seconde ne l'est pas. Un `+` refusé au
+    // début d'un trajet ne doit jamais couper tout ce qui vient après.
+    const vus: number[] = [];
+    const file = new FileAttente(new StockageFactice(), async (_t, charge) => {
+      const n = (charge as { n: number }).n;
+      if (n === 1) throw { code: 'shopping_refused', message: 'Cette ligne est déjà rangée.' };
+      vus.push(n);
+    });
+    file.ajouter('t', { n: 1 });
+    file.ajouter('t', { n: 2 });
+
+    await file.rejouer();
+
+    expect(vus).toEqual([2]);          // la bonne action est bien partie
+    expect(file.taille()).toBe(0);     // les deux ont quitté la file (l'une refusée, l'autre envoyée)
+  });
+
+  it('prévient l’appelant avec le message du serveur quand une action est refusée', async () => {
+    const surRefus = vi.fn();
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'invalid_field', message: 'Écriture refusée : donnée invalide.' };
+    }, surRefus);
+    file.ajouter('home_stock/session/update_line', { line_id: 1, quantity: -5 });
+
+    await file.rejouer();
+
+    expect(surRefus).toHaveBeenCalledTimes(1);
+    const [action, message] = surRefus.mock.calls[0];
+    expect(action.type).toBe('home_stock/session/update_line');
+    expect(message).toBe('Écriture refusée : donnée invalide.');
+  });
+
+  it('une panne réseau (sans code) reste bien en tête de file, elle', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw new Error('hors ligne');
+    });
+    file.ajouter('t', { n: 1 });
+
+    await file.rejouer();
+
+    expect(file.taille()).toBe(1);
+  });
+});

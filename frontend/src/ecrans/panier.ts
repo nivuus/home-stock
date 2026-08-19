@@ -10,7 +10,7 @@
  *  des lignes affichées. Un panier qui contredit la caisse est pire qu'un
  *  panier sans total.
  */
-import { LitElement, html, css, nothing } from 'lit';
+import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
@@ -40,7 +40,10 @@ export type LigneSession = {
   aisle_position: number;
 };
 
-export type SessionLigne = {
+/** L'en-tête de la session (pas une ligne : `store`/`state`/dates) — nommé à
+ *  part de `LigneSession` pour ne pas laisser croire que c'est une ligne de
+ *  plus. */
+export type EnTeteSession = {
   id: number;
   state: 'shopping' | 'to_store' | 'done';
   store: string | null;
@@ -52,7 +55,7 @@ export type Totaux = { lines: number; pending: number; total: number };
 
 /** Ce que `home_stock/session/current` répond quand une session existe. */
 export type DonneesSession = {
-  session: SessionLigne;
+  session: EnTeteSession;
   lines: LigneSession[];
   totals: Totaux;
   stores: string[];
@@ -92,65 +95,120 @@ export class EcranPanier extends LitElement {
   @property({ attribute: false }) donnees: DonneesSession | null = null;
   @property({ attribute: false }) connexion?: Connexion;
   /** La file hors-ligne : la raison d'être de cet écran est le rayon d'un
-   *  magasin, l'endroit où le réseau lâche le plus souvent. */
+   *  magasin, l'endroit où le réseau lâche le plus souvent. Chaque écriture
+   *  y passe — il n'existe plus de chemin direct par `connexion` : un
+   *  contournement de la file est exactement le défaut que ce lot interdit. */
   @property({ attribute: false }) file?: FileAttente;
   /** Nombre d'écritures en attente dans la file — affiché seulement si non nul. */
   @property({ attribute: false }) enAttente = 0;
 
   /** Id de la ligne dont la suppression est armée (premier appui) : le
-   *  deuxième appui, sur le même bouton, confirme. Une seule ligne armée à
-   *  la fois — en armer une autre désarme silencieusement la précédente. */
+   *  deuxième appui, sur le même bouton, confirme. Toute autre action —
+   *  ajuster une quantité, valider un prix, passer en caisse — ou un
+   *  simple rafraîchissement des données désarme : un « × » retrouvé deux
+   *  rayons plus loin ne doit jamais rester une gâchette armée. */
   @state() private ligneArmee: number | null = null;
   /** Saisie de prix en cours, par id de ligne, tant qu'elle n'a pas été
    *  validée : la même logique que la fiche (état local jusqu'à l'envoi). */
   @state() private prixSaisiParLigne: Record<number, string> = {};
+  /** Message affiché quand un prix tapé n'a pas pu être converti (poids de
+   *  paquet inconnu) : la saisie reste visible, mais n'est pas envoyée en
+   *  silence — sans ce message, le champ semblerait avoir juste oublié ce
+   *  qui a été tapé. */
+  @state() private erreurPrixParLigne: Record<number, string> = {};
+  /** Ce que l'utilisateur a demandé en plus de la dernière quantité connue
+   *  du serveur, par id de ligne : trois appuis sur « + » hors ligne doivent
+   *  faire bouger le chiffre affiché trois fois, pas une seule fois de plus
+   *  que la dernière valeur reçue. Remis à zéro dès qu'une nouvelle quantité
+   *  serveur arrive pour cette ligne (voir `willUpdate`). */
+  @state() private deltaParLigne: Record<number, number> = {};
+  /** La dernière quantité serveur vue par ligne, pour détecter qu'un
+   *  rafraîchissement vient d'arriver (et donc remettre `deltaParLigne` à
+   *  zéro pour cette ligne) plutôt que de comparer à une valeur déjà stale. */
+  private quantiteVueParLigne: Record<number, number> = {};
+
+  protected willUpdate(changed: PropertyValues): void {
+    if (changed.has('donnees')) {
+      // Un rafraîchissement désarme une suppression en attente : re-armer
+      // est un appui, le risque de la garder est un panier vidé par erreur.
+      this.ligneArmee = null;
+      for (const ligne of this.donnees?.lines ?? []) {
+        if (this.quantiteVueParLigne[ligne.id] !== ligne.quantity) {
+          this.quantiteVueParLigne[ligne.id] = ligne.quantity;
+          if (this.deltaParLigne[ligne.id]) {
+            const { [ligne.id]: _oublie, ...reste } = this.deltaParLigne;
+            this.deltaParLigne = reste;
+          }
+        }
+      }
+    }
+  }
 
   /** Empile puis rejoue tout de suite : la file existe pour tenir bon quand
    *  le réseau refuse, pas pour attendre un déclencheur extérieur. Le panneau
    *  garde le compteur de la file — `file-changee` le prévient, avant l'envoi
-   *  (la ligne vient d'être ajoutée) et après (elle a pu partir ou rester). */
-  private ecrire(type: string, charge: Record<string, unknown>): void {
-    if (this.file) {
-      this.file.ajouter(type, charge);
-      this.avertirFile();
-      void this.file.rejouer().then(() => this.avertirFile());
-    } else if (this.connexion) {
-      void this.connexion.appeler(type, charge).catch(() => {});
-    }
+   *  (la ligne vient d'être ajoutée) et après (elle a pu partir, être
+   *  refusée, ou rester). Sans `file` il n'y a rien à faire : il n'existe
+   *  plus de deuxième chemin d'écriture par `connexion` directe. */
+  private ecrire(type: string, charge: Record<string, unknown>): Promise<void> {
+    if (!this.file) return Promise.resolve();
+    this.file.ajouter(type, charge);
+    this.avertirFile();
+    return this.file.rejouer().then(() => { this.avertirFile(); });
   }
 
   private avertirFile(): void {
     this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
   }
 
-  private ajusterQuantite(ligne: LigneSession, delta: number): void {
-    const nouvelle = ligne.quantity + delta;
-    if (nouvelle <= 0) return;
-    this.ecrire('home_stock/session/update_line', { line_id: ligne.id, quantity: nouvelle });
+  private quantiteAffichee(ligne: LigneSession): number {
+    return ligne.quantity + (this.deltaParLigne[ligne.id] ?? 0);
+  }
+
+  private ajusterQuantite(ligne: LigneSession, pasSigne: number): void {
+    this.ligneArmee = null;
+    const nouveauDelta = (this.deltaParLigne[ligne.id] ?? 0) + pasSigne;
+    const nouvelleQuantite = ligne.quantity + nouveauDelta;
+    if (nouvelleQuantite <= 0) return;
+    this.deltaParLigne = { ...this.deltaParLigne, [ligne.id]: nouveauDelta };
+    void this.ecrire('home_stock/session/update_line', { line_id: ligne.id, quantity: nouvelleQuantite });
   }
 
   private saisirPrix(ligne: LigneSession, texte: string): void {
+    this.ligneArmee = null;
     this.prixSaisiParLigne = { ...this.prixSaisiParLigne, [ligne.id]: texte };
   }
 
   private validerPrix(ligne: LigneSession): void {
+    this.ligneArmee = null;
     const texte = this.prixSaisiParLigne[ligne.id];
     if (texte === undefined) return;
     const valeur = prixBaseDepuisSaisie(texte, ligne.base_unit, ligne.net_quantity);
-    if (valeur !== null) {
-      this.ecrire('home_stock/session/update_line', { line_id: ligne.id, unit_price: valeur });
+    if (valeur === null) {
+      // On ne fait pas disparaître la saisie en silence : sans poids de
+      // paquet connu il n'y a aucune conversion possible, et un champ qui
+      // reviendrait tout seul à l'ancien prix laisserait croire à une saisie
+      // acceptée puis oubliée.
+      this.erreurPrixParLigne = { ...this.erreurPrixParLigne, [ligne.id]: 'Prix non enregistré : poids du paquet inconnu.' };
+      return;
     }
+    if (this.erreurPrixParLigne[ligne.id]) {
+      const { [ligne.id]: _oublie, ...reste } = this.erreurPrixParLigne;
+      this.erreurPrixParLigne = reste;
+    }
+    void this.ecrire('home_stock/session/update_line', { line_id: ligne.id, unit_price: valeur });
     const { [ligne.id]: _oublie, ...reste } = this.prixSaisiParLigne;
     this.prixSaisiParLigne = reste;
   }
 
   private supprimer(ligne: LigneSession): void {
-    this.ecrire('home_stock/session/remove_line', { line_id: ligne.id });
+    void this.ecrire('home_stock/session/remove_line', { line_id: ligne.id });
     this.ligneArmee = null;
   }
 
   private passerEnCaisse(): void {
-    this.ecrire('home_stock/session/checkout', {});
+    this.ligneArmee = null;
+    void this.ecrire('home_stock/session/checkout', {});
   }
 
   private valeurPrix(ligne: LigneSession): string {
@@ -161,6 +219,7 @@ export class EcranPanier extends LitElement {
 
   private rendreLigne(ligne: LigneSession) {
     const pasLigne = pas(ligne);
+    const quantite = this.quantiteAffichee(ligne);
     const nom = ligne.article_label ?? ligne.product_name;
     return html`
       <article class="ligne">
@@ -168,10 +227,10 @@ export class EcranPanier extends LitElement {
         <div class="infos">
           <p class="nom">${nom}${ligne.brand ? ` — ${ligne.brand}` : ''}</p>
           <div class="quantite">
-            <button class="moins" aria-label="Retirer un paquet" ?disabled=${ligne.quantity <= pasLigne}
+            <button class="moins" aria-label="Retirer un paquet" ?disabled=${quantite <= pasLigne}
               @click=${() => this.ajusterQuantite(ligne, -pasLigne)}>−</button>
             <span class="valeur-quantite">
-              ${ligne.quantity}${ligne.base_unit !== 'piece' ? ` ${ligne.base_unit}` : ''}
+              ${quantite}${ligne.base_unit !== 'piece' ? ` ${ligne.base_unit}` : ''}
             </span>
             <button class="plus" aria-label="Ajouter un paquet"
               @click=${() => this.ajusterQuantite(ligne, pasLigne)}>+</button>
@@ -182,6 +241,9 @@ export class EcranPanier extends LitElement {
               @input=${(e: InputEvent) => this.saisirPrix(ligne, (e.target as HTMLInputElement).value)}
               @change=${() => this.validerPrix(ligne)} />
           </label>
+          ${this.erreurPrixParLigne[ligne.id] ? html`
+            <p class="erreur-prix">${this.erreurPrixParLigne[ligne.id]}</p>
+          ` : nothing}
         </div>
         ${this.ligneArmee === ligne.id ? html`
           <div class="confirmation-suppression">
@@ -201,6 +263,7 @@ export class EcranPanier extends LitElement {
     const donnees = this.donnees;
     if (!donnees) return html`<p class="vide">Aucune session de courses ouverte.</p>`;
     const groupes = grouperParRayon(donnees.lines);
+    const enCaisse = donnees.session.state !== 'shopping';
     return html`
       <section class="entete">
         <p class="magasin">${donnees.session.store ?? 'Sans enseigne'}</p>
@@ -220,8 +283,8 @@ export class EcranPanier extends LitElement {
         </section>
       `)}
 
-      <button class="checkout" ?disabled=${donnees.totals.lines === 0} @click=${this.passerEnCaisse}>
-        Passage en caisse
+      <button class="checkout" ?disabled=${donnees.totals.lines === 0 || enCaisse} @click=${this.passerEnCaisse}>
+        ${enCaisse ? 'Déjà en caisse' : 'Passage en caisse'}
       </button>
     `;
   }
@@ -253,6 +316,7 @@ export class EcranPanier extends LitElement {
     .valeur-quantite { min-width: 56px; text-align: center; }
     .prix-label { display: block; font-size: 0.85rem; margin-top: 4px; }
     .prix-champ { min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px; }
+    .erreur-prix { color: var(--error-color, #b3261e); font-size: 0.8rem; margin: 4px 0 0; }
     .supprimer {
       min-width: 48px; min-height: 48px; border-radius: 8px; border: none; font-size: 1.2rem;
       background: var(--error-color, #b3261e); color: #fff; flex-shrink: 0;

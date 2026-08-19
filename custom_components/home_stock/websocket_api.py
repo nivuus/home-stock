@@ -862,6 +862,12 @@ async def session_add_line(hass, connection, msg) -> None:
     vol.Required("line_id"): _bounded_int,
     vol.Optional("quantity"): vol.Any(_finite_float, None),
     vol.Optional("unit_price"): vol.Any(_finite_float, None),
+    # Accepted like every other write, and ignored: an edit is last-write-win,
+    # nothing here to deduplicate. But the panel's offline queue stamps this
+    # key onto EVERY action uniformly (see FileAttente.ajouter) — a schema
+    # that refuses it here just to accept it on add_line/stock_add makes the
+    # client re-litigate which commands are which. Uniform accept is honest.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def session_update_line(hass, connection, msg) -> None:
@@ -883,6 +889,8 @@ async def session_update_line(hass, connection, msg) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/session/remove_line",
     vol.Required("line_id"): _bounded_int,
+    # See session/update_line: accepted and ignored, for the same reason.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def session_remove_line(hass, connection, msg) -> None:
@@ -921,6 +929,10 @@ async def session_checkout(hass, connection, msg) -> None:
     vol.Required("line_id"): _bounded_int,
     vol.Required("location_id"): _bounded_int,
     vol.Optional("best_before"): _iso_date,
+    # Accepted and ignored: store_line already derives its own key internally
+    # (f"shopping_line:{line_id}", see ShoppingService.store_line) — see
+    # session/update_line for why the schema still accepts one uniformly.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def session_store_line(hass, connection, msg) -> None:
