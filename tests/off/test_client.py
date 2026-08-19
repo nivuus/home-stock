@@ -168,6 +168,26 @@ async def test_a_non_dict_payload_is_treated_as_absence_not_a_crash(clock, malfo
     assert len(transport.calls) == len(BASES)
 
 
+# --- Fix round 2: a malformed "product" inside an otherwise well-formed body ---
+
+@pytest.mark.parametrize("malformed_product", [["a", "list"], "a bare string", 42])
+async def test_a_non_dict_product_is_treated_as_absence_not_a_crash(clock, malformed_product):
+    """status == 1 with a "product" that is not a dict must not reach
+    map_article() (which raises ValueError on exactly that shape) — this is
+    the same defensive shape already applied to the payload and item list."""
+    class MalformedProductTransport(FakeTransport):
+        async def get_json(self, url, headers, timeout):
+            self.calls.append(url.split("/")[2])
+            return 200, {"status": 1, "product": malformed_product}
+
+    transport = MalformedProductTransport({})
+    result = await OffClient(transport, user_agent="home_stock/1.0", clock=clock).lookup("123")
+
+    assert result.record is None
+    assert result.throttled is False
+    assert len(transport.calls) == len(BASES)
+
+
 # --- Fix round 1: the budget bounds the wall clock, not just the per-call check ---
 
 async def test_the_cascade_gives_each_base_only_the_time_left_in_the_budget(clock):

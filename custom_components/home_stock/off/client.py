@@ -115,8 +115,15 @@ class OffClient:
                 # usable. Checked explicitly so a malformed body reads as an
                 # expected condition, not an accident that raises on us.
                 continue
-            if payload.get("status") == 1 and payload.get("product"):
-                return OffLookup(record=OffRecord(code, off_source, payload["product"]))
+            product = payload.get("product")
+            # Same defensive shape as the payload check above: OFF has been
+            # seen to answer status 1 with a "product" that is not a dict
+            # (a bare list, a string). map_article() raises ValueError on
+            # exactly that shape, so letting it through here would turn one
+            # base's malformed record into a crash instead of "try the next
+            # base" — checked explicitly, not folded into the outer except.
+            if payload.get("status") == 1 and isinstance(product, dict) and product:
+                return OffLookup(record=OffRecord(code, off_source, product))
 
         return OffLookup()
 

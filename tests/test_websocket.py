@@ -3,12 +3,10 @@ import pytest
 from custom_components.home_stock.aisles import AISLES
 from custom_components.home_stock.storage import repositories as repo
 
-from conftest import setup_entry
-
 
 @pytest.fixture
-async def entry(hass):
-    return await setup_entry(hass)
+async def entry(setup_entry):
+    return await setup_entry()
 
 
 @pytest.fixture
@@ -86,8 +84,9 @@ async def test_product_get_reports_an_unknown_id(client):
     assert message["error"]["code"] == "not_found"
 
 
-async def test_movements_list_returns_them_in_order_and_respects_since(hass, hass_ws_client):
-    entry = await setup_entry(hass)
+async def test_movements_list_returns_them_in_order_and_respects_since(
+        hass, setup_entry, hass_ws_client):
+    entry = await setup_entry()
     manager = entry.runtime_data.manager
 
     def _seed() -> None:

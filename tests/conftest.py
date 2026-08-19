@@ -3,6 +3,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
+from custom_components.home_stock.off.client import OffLookup
 from custom_components.home_stock.storage import repositories as repo
 
 
@@ -26,12 +27,97 @@ def hass_config_dir(hass_tmp_config_dir: str) -> str:
     return hass_tmp_config_dir
 
 
-async def setup_entry(hass, *, with_article: bool = False,
-                      with_piece_product: bool = False) -> MockConfigEntry:
+class _LandmineSession:
+    """Stands in for the real aiohttp session async_setup_entry hands to
+    AiohttpTransport. Its .get() fails the test loudly instead of quietly
+    reaching prices.openfoodfacts.org or world.openfoodfacts.org.
+
+    Every path that could make a real request goes through setup_entry(),
+    which always replaces entry.runtime_data.off_client and .transport with
+    an inert or fake double before a test touches them (see _InertOffClient/
+    _InertTransport below, and FakeOffClient/FakeTransport in
+    tests/test_websocket_write.py) — so .get() firing here means one of
+    those replacements was skipped, which is itself the bug to catch.
+    """
+
+    def get(self, *args, **kwargs):
+        pytest.fail(
+            "a test reached the real aiohttp session: off_client/transport "
+            "was not replaced with a fake before use"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """Proof, not an argument: async_setup_entry's only source of a real
+    session is homeassistant.helpers.aiohttp_client.async_get_clientsession.
+    Patched in two places, deliberately redundant:
+
+    - `custom_components.home_stock.async_get_clientsession`, the name
+      `__init__.py` bound at import time (`from ... import
+      async_get_clientsession`) — patching the source module attribute alone
+      does not reach an already-bound name like this one.
+    - `homeassistant.helpers.aiohttp_client.async_get_clientsession`, the
+      source attribute itself — catches any *other* call site, including one
+      that imports it fresh inside a function body (exactly the shape the
+      original bug in websocket_api.py had, and confirmed by temporarily
+      reintroducing it: without this second patch the regression reached a
+      real aiohttp session and only failed on an unrelated event-loop error,
+      not on this guard).
+
+    Either transport ever making a real request now surfaces as an
+    immediate test failure, instead of staying invisible behind
+    latest_price()'s own "a suggestion must never fail a scan" exception
+    handling.
+    """
+    monkeypatch.setattr(
+        "custom_components.home_stock.async_get_clientsession",
+        lambda hass: _LandmineSession(),
+    )
+    monkeypatch.setattr(
+        "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+        lambda hass: _LandmineSession(),
+    )
+
+
+class _InertOffClient:
+    """The off_client setup_entry() installs by default: answers "not found"
+    and never reaches the network. A test that needs a real-looking OFF
+    answer replaces entry.runtime_data.off_client with its own fake — see
+    FakeOffClient in tests/test_websocket_write.py."""
+
+    async def lookup(self, code: str) -> OffLookup:
+        return OffLookup()
+
+    async def lookup_with_retry(self, code: str, **kwargs) -> OffLookup:
+        return await self.lookup(code)
+
+
+class _InertTransport:
+    """The transport setup_entry() installs by default: an empty Open Prices
+    answer, never a real request. A test that needs to observe the calls (or
+    a specific price) replaces entry.runtime_data.transport with its own
+    fake — see FakeTransport in tests/test_websocket_write.py."""
+
+    async def get_json(self, url: str, headers: dict, timeout: float):
+        return 200, {"items": []}
+
+
+@pytest.fixture
+def setup_entry(hass):
     """Set up the home_stock integration for a test, and optionally seed it.
+
+    Returns an async callable rather than being one itself: a plain function
+    importable across test files broke under --import-mode=importlib the
+    moment tests/__init__.py would exist, so this now works the way pytest
+    is meant to share fixtures — dependency injection, no import.
 
     Called with no arguments, this is exactly what every lot 0 test already
     did by hand: add a bare MockConfigEntry and let the integration load.
+    Every entry it returns gets an off_client and a transport that are inert
+    by default — neither one reaches the network — so no test has to
+    remember to swap them out just to stay silent; only a test that actually
+    cares what OFF or Open Prices answered needs to install its own fake.
 
     `with_article` adds a location and a g-based article with no batch yet —
     ready for home_stock/stock/add. `with_piece_product` adds a piece-based
@@ -39,40 +125,46 @@ async def setup_entry(hass, *, with_article: bool = False,
     Both insert their location/product/article first, so with either flag
     alone the seeded row lands on id 1, matching the ids the tests hardcode.
     """
-    entry = MockConfigEntry(domain=DOMAIN, data={})
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    async def _setup_entry(*, with_article: bool = False,
+                           with_piece_product: bool = False) -> MockConfigEntry:
+        entry = MockConfigEntry(domain=DOMAIN, data={})
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        entry.runtime_data.off_client = _InertOffClient()
+        entry.runtime_data.transport = _InertTransport()
 
-    if not (with_article or with_piece_product):
+        if not (with_article or with_piece_product):
+            return entry
+
+        manager = entry.runtime_data.manager
+
+        def _seed() -> tuple[int | None, int | None]:
+            piece_article_id = piece_location_id = None
+            with manager.db.write() as conn:
+                if with_article:
+                    location_id = repo.insert_location(conn, name="Placard", kind="pantry")
+                    product_id = repo.insert_product(
+                        conn, name="Article prêt à ranger", base_unit="g")
+                    repo.insert_article(conn, product_id=product_id)
+                if with_piece_product:
+                    piece_location_id = repo.insert_location(
+                        conn, name="Frigo courses", kind="fridge")
+                    piece_product_id = repo.insert_product(
+                        conn, name="Yaourts nature", base_unit="piece")
+                    piece_article_id = repo.insert_article(
+                        conn, product_id=piece_product_id, net_quantity=125)
+            return piece_article_id, piece_location_id
+
+        piece_article_id, piece_location_id = await hass.async_add_executor_job(_seed)
+        if with_piece_product:
+            await hass.async_add_executor_job(lambda: manager.add_stock(
+                article_id=piece_article_id, quantity=6, location_id=piece_location_id,
+                occurred_at="2026-08-18T10:00:00"))
+        # Mirror what both production write paths (the services, the todo
+        # entity) do: refresh the coordinator after writing directly through
+        # the manager, bypassing both of those paths.
+        await entry.runtime_data.coordinator.async_request_refresh()
         return entry
 
-    manager = entry.runtime_data.manager
-
-    def _seed() -> tuple[int | None, int | None]:
-        piece_article_id = piece_location_id = None
-        with manager.db.write() as conn:
-            if with_article:
-                location_id = repo.insert_location(conn, name="Placard", kind="pantry")
-                product_id = repo.insert_product(
-                    conn, name="Article prêt à ranger", base_unit="g")
-                repo.insert_article(conn, product_id=product_id)
-            if with_piece_product:
-                piece_location_id = repo.insert_location(
-                    conn, name="Frigo courses", kind="fridge")
-                piece_product_id = repo.insert_product(
-                    conn, name="Yaourts nature", base_unit="piece")
-                piece_article_id = repo.insert_article(
-                    conn, product_id=piece_product_id, net_quantity=125)
-        return piece_article_id, piece_location_id
-
-    piece_article_id, piece_location_id = await hass.async_add_executor_job(_seed)
-    if with_piece_product:
-        await hass.async_add_executor_job(lambda: manager.add_stock(
-            article_id=piece_article_id, quantity=6, location_id=piece_location_id,
-            occurred_at="2026-08-18T10:00:00"))
-    # Mirror what both production write paths (the services, the todo entity)
-    # do: refresh the coordinator after writing directly through the manager,
-    # bypassing both of those paths.
-    await entry.runtime_data.coordinator.async_request_refresh()
-    return entry
+    return _setup_entry

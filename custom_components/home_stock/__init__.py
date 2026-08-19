@@ -32,6 +32,13 @@ class HomeStockData:
     coordinator: HomeStockCoordinator
     shopping: ShoppingService
     off_client: OffClient
+    # The single transport both the OFF cascade (via off_client) and the
+    # websocket handlers' Open Prices calls run over. Held here, once, rather
+    # than each caller building its own AiohttpTransport(async_get_clientsession(hass)):
+    # a test that swaps this one field out for a fake closes every network
+    # path at once, instead of having to know about every call site that
+    # happens to construct its own transport.
+    transport: AiohttpTransport
     user_agent: str
 
 
@@ -65,13 +72,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     # version and a way to reach its owner — the contact OFF asks for.
     version = (await async_get_integration(hass, DOMAIN)).version or "1.0"
     user_agent = f"home_stock/{version} (Home Assistant; maxime@allanic.me)"
-    off_client = OffClient(
-        AiohttpTransport(async_get_clientsession(hass)), user_agent=user_agent
-    )
+    transport = AiohttpTransport(async_get_clientsession(hass))
+    off_client = OffClient(transport, user_agent=user_agent)
     shopping = ShoppingService(manager)
 
     entry.runtime_data = HomeStockData(
-        database, manager, coordinator, shopping, off_client, user_agent
+        database, manager, coordinator, shopping, off_client, transport, user_agent
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

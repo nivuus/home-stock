@@ -5,8 +5,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.home_stock.off.client import OffLookup, OffRecord
-
-from conftest import setup_entry
+from custom_components.home_stock.storage import repositories as repo
 
 
 class FakeOffClient:
@@ -22,6 +21,23 @@ class FakeOffClient:
 
     async def lookup_with_retry(self, code: str, **kwargs) -> OffLookup:
         return await self.lookup(code)
+
+
+class FakeTransport:
+    """Stands in for Open Prices. Nothing here reaches the network.
+
+    `calls` records every URL asked for, so a test can prove the fake was
+    actually reached instead of the real network silently never firing.
+    """
+
+    def __init__(self, status: int = 200, payload: dict | None = None):
+        self.status = status
+        self.payload = payload if payload is not None else {"items": []}
+        self.calls: list[str] = []
+
+    async def get_json(self, url: str, headers: dict, timeout: float):
+        self.calls.append(url)
+        return self.status, self.payload
 
 
 MUESLI = OffRecord("3229820129488", "food", {
@@ -40,9 +56,11 @@ MUESLI = OffRecord("3229820129488", "food", {
 
 
 async def test_an_unknown_barcode_comes_back_with_its_off_card(hass: HomeAssistant,
-                                                               hass_ws_client):
-    entry = await setup_entry(hass)
+                                                               setup_entry, hass_ws_client):
+    entry = await setup_entry()
     entry.runtime_data.off_client = FakeOffClient(MUESLI)
+    transport = FakeTransport()
+    entry.runtime_data.transport = transport
     client = await hass_ws_client(hass)
 
     await client.send_json({"id": 1, "type": "home_stock/lookup",
@@ -54,10 +72,14 @@ async def test_an_unknown_barcode_comes_back_with_its_off_card(hass: HomeAssista
     assert result["off"]["net_quantity"] == 375
     assert result["off"]["aisle"] == "Petit-déjeuner"
     assert result["off"]["nutriscore"] == "a"
+    # Proves the price cascade went through the fake, not a real socket: a
+    # network regression here would otherwise pass silently (Open Prices
+    # failures are swallowed on purpose — see off/open_prices.py).
+    assert transport.calls
 
 
-async def test_a_lookup_never_writes(hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass)
+async def test_a_lookup_never_writes(hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry()
     entry.runtime_data.off_client = FakeOffClient(MUESLI)
     client = await hass_ws_client(hass)
 
@@ -72,8 +94,8 @@ async def test_a_lookup_never_writes(hass: HomeAssistant, hass_ws_client):
 
 
 async def test_a_throttled_lookup_says_so_instead_of_pretending(hass: HomeAssistant,
-                                                                hass_ws_client):
-    entry = await setup_entry(hass)
+                                                                setup_entry, hass_ws_client):
+    entry = await setup_entry()
     entry.runtime_data.off_client = FakeOffClient(throttled=True)
     client = await hass_ws_client(hass)
 
@@ -85,8 +107,8 @@ async def test_a_throttled_lookup_says_so_instead_of_pretending(hass: HomeAssist
 
 
 async def test_creating_an_article_attaches_it_and_remembers_the_barcode(
-        hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass)
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry()
     entry.runtime_data.off_client = FakeOffClient(MUESLI)
     client = await hass_ws_client(hass)
 
@@ -107,8 +129,8 @@ async def test_creating_an_article_attaches_it_and_remembers_the_barcode(
 
 
 async def test_a_created_article_carries_its_nutrition_per_base_unit(
-        hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass)
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry()
     client = await hass_ws_client(hass)
 
     await client.send_json({
@@ -126,8 +148,9 @@ async def test_a_created_article_carries_its_nutrition_per_base_unit(
     assert await hass.async_add_executor_job(kcal) == pytest.approx(3.6)
 
 
-async def test_the_raw_off_answer_is_kept_verbatim(hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass)
+async def test_the_raw_off_answer_is_kept_verbatim(hass: HomeAssistant, setup_entry,
+                                                    hass_ws_client):
+    entry = await setup_entry()
     client = await hass_ws_client(hass)
 
     await client.send_json({
@@ -146,8 +169,8 @@ async def test_the_raw_off_answer_is_kept_verbatim(hass: HomeAssistant, hass_ws_
 
 
 async def test_editing_an_article_by_hand_protects_it_from_a_resync(
-        hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass)
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry()
     client = await hass_ws_client(hass)
     await client.send_json({
         "id": 1, "type": "home_stock/article/create", "code": "1",
@@ -168,11 +191,35 @@ async def test_editing_an_article_by_hand_protects_it_from_a_resync(
     assert "kcal_per_base_unit" in (await hass.async_add_executor_job(manual))
 
 
+async def test_a_correction_typed_at_creation_is_also_protected_from_a_resync(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """manual_fields must be seeded at creation, not only on a later update —
+    otherwise a correction typed on the creation screen is overwritten by the
+    article's first OFF resync."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+        "off": MUESLI.product, "off_source": "food",
+        "fields": {"kcal_per_base_unit": 4.0},
+    })
+    created = (await client.receive_json())["result"]
+
+    def manual() -> str:
+        return entry.runtime_data.database.read().execute(
+            "SELECT manual_fields FROM article WHERE id = ?",
+            (created["article_id"],)).fetchone()[0]
+
+    assert "kcal_per_base_unit" in (await hass.async_add_executor_job(manual))
+
+
 async def test_an_unknown_column_is_refused_rather_than_written(
-        hass: HomeAssistant, hass_ws_client):
+        hass: HomeAssistant, setup_entry, hass_ws_client):
     """The update path interpolates column names into SQL. The whitelist is
     what keeps that safe."""
-    await setup_entry(hass)
+    await setup_entry()
     client = await hass_ws_client(hass)
 
     await client.send_json({"id": 1, "type": "home_stock/product/update",
@@ -180,12 +227,137 @@ async def test_an_unknown_column_is_refused_rather_than_written(
     answer = await client.receive_json()
 
     assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_a_non_boolean_active_value(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """SQLite is dynamically typed: without value validation, "oui" lands
+    straight in the `active` column and the product silently vanishes from
+    every "active only" listing, with no error anywhere."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"active": "oui"}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_a_non_numeric_min_quantity(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A string in `min_quantity` would silently disable the shortage sensor
+    for this product (the SQL comparison against it just never matches)."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"min_quantity": "abc"}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def min_quantity():
+        return entry.runtime_data.database.read().execute(
+            "SELECT min_quantity FROM product WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(min_quantity) is None
+
+
+async def test_article_update_refuses_a_non_numeric_kcal(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A string in `kcal_per_base_unit` would make every later stock/add on
+    this article fail deep inside movement_values() instead of being caught
+    here, where the panel can actually explain what is wrong."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/update",
+                            "article_id": 1, "fields": {"kcal_per_base_unit": "beaucoup"}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def kcal():
+        return entry.runtime_data.database.read().execute(
+            "SELECT kcal_per_base_unit FROM article WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(kcal) is None
+
+
+async def test_article_create_refuses_an_unknown_field_instead_of_dropping_it(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """article/create must refuse a non-whitelisted key exactly like
+    article/update and product/update do, instead of silently dropping it."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+        "fields": {"id = 1; DROP TABLE article; --": 1},
+    })
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_creating_an_article_without_a_product_target_is_refused_in_french(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/create", "code": "1"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_creating_a_second_article_under_an_existing_product_name_is_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The ordinary "I scanned a second size and typed the same name" flow
+    must come back as a clear French refusal, not unknown_error plus a
+    traceback."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+    })
+    await client.receive_json()
+
+    await client.send_json({
+        "id": 2, "type": "home_stock/article/create", "code": "2",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+    })
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "already_exists"
+    assert "Muesli" in answer["error"]["message"]
 
 
 async def test_a_dry_run_conversion_reports_without_touching_anything(
-        hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass, with_piece_product=True)
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry(with_piece_product=True)
     client = await hass_ws_client(hass)
+
+    def snapshot():
+        conn = entry.runtime_data.database.read()
+        product = conn.execute(
+            "SELECT base_unit FROM product WHERE id = 1").fetchone()
+        batch = conn.execute(
+            "SELECT remaining FROM batch WHERE article_id = 1").fetchone()
+        return product["base_unit"], batch["remaining"]
+
+    before = await hass.async_add_executor_job(snapshot)
 
     await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
                             "product_id": 1, "to_unit": "g",
@@ -195,10 +367,63 @@ async def test_a_dry_run_conversion_reports_without_touching_anything(
     assert report["applied"] is False
     assert report["to_unit"] == "g"
 
+    after = await hass.async_add_executor_job(snapshot)
+    assert after == before
+
+
+async def test_converting_a_product_already_in_the_target_unit_is_a_success(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A replayed conversion (the panel lost the connection before the ack,
+    and replays from its offline queue) must not look like a refusal: the
+    product already being in the requested unit is the success case."""
+    entry = await setup_entry()
+    manager = entry.runtime_data.manager
+
+    def seed_product() -> int:
+        with manager.db.write() as conn:
+            return repo.insert_product(conn, name="Farine", base_unit="g")
+
+    product_id = await hass.async_add_executor_job(seed_product)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
+                            "product_id": product_id, "to_unit": "g",
+                            "reference_quantity": 500})
+    answer = await client.receive_json()
+
+    assert answer["success"] is True
+    assert answer["result"]["applied"] is False
+    assert answer["result"]["already_converted"] is True
+
+
+async def test_converting_between_two_non_piece_units_is_still_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """Only the "already at the requested unit" case is a success. A genuine
+    ml -> g request on a product that was never "à la pièce" stays refused."""
+    entry = await setup_entry()
+    manager = entry.runtime_data.manager
+
+    def seed_product() -> int:
+        with manager.db.write() as conn:
+            return repo.insert_product(conn, name="Lait", base_unit="ml")
+
+    product_id = await hass.async_add_executor_job(seed_product)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
+                            "product_id": product_id, "to_unit": "g",
+                            "reference_quantity": 500})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "conversion_refused"
+    # The domain's own English wording must never reach the panel verbatim.
+    assert "already stocked in" not in answer["error"]["message"]
+
 
 async def test_reordering_aisles_writes_the_new_walking_order(hass: HomeAssistant,
-                                                              hass_ws_client):
-    entry = await setup_entry(hass)
+                                                              setup_entry, hass_ws_client):
+    entry = await setup_entry()
     client = await hass_ws_client(hass)
 
     def ids() -> list[int]:
@@ -215,9 +440,22 @@ async def test_reordering_aisles_writes_the_new_walking_order(hass: HomeAssistan
     assert await hass.async_add_executor_job(ids) == reversed_order
 
 
+async def test_reordering_with_an_unknown_aisle_id_is_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/aisles/reorder",
+                            "aisle_ids": [999999]})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "not_found"
+
+
 async def test_storing_directly_creates_a_batch_outside_any_session(
-        hass: HomeAssistant, hass_ws_client):
-    entry = await setup_entry(hass, with_article=True)
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry(with_article=True)
     client = await hass_ws_client(hass)
 
     await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
@@ -231,3 +469,66 @@ async def test_storing_directly_creates_a_batch_outside_any_session(
     again = (await client.receive_json())["result"]
 
     assert first["batch_id"] == again["batch_id"]
+
+    def counts() -> tuple[int, int]:
+        conn = entry.runtime_data.database.read()
+        batches = conn.execute("SELECT COUNT(*) FROM batch").fetchone()[0]
+        movements = conn.execute("SELECT COUNT(*) FROM movement").fetchone()[0]
+        return batches, movements
+
+    assert await hass.async_add_executor_job(counts) == (1, 1)
+
+
+async def test_storing_stock_for_an_unknown_article_is_refused_in_french(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 999,
+                            "quantity": 100, "location_id": 1})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "not_found"
+    assert "999" in answer["error"]["message"]
+
+
+async def test_storing_a_negative_quantity_is_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": -5, "location_id": 1})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_value"
+
+
+async def test_storing_stock_at_an_unknown_location_is_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 999})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_updating_an_unknown_product_is_refused_instead_of_answering_success(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """article/update already got this right by fetching the row first;
+    product/update must not silently answer success on zero matched rows."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 999, "fields": {"name": "Nouveau nom"}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "not_found"
