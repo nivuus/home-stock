@@ -2,9 +2,11 @@
 import pytest
 
 from custom_components.home_stock.off.client import (
+    AiohttpTransport,
     BASES,
     CASCADE_BUDGET,
     OffClient,
+    TIMEOUT_PER_BASE,
 )
 
 
@@ -147,3 +149,146 @@ async def test_the_requested_fields_are_the_ones_the_mapping_reads(clock):
                    "generic_name_fr", "nutrition_data_per", "serving_quantity",
                    "nutriscore_grade", "labels_tags", "image_front_url"):
         assert needed in FIELDS
+
+
+# --- Fix round 1: a malformed 200 body must not raise ----------------------
+
+@pytest.mark.parametrize("malformed_payload", [["a", "list"], "a bare string", 42])
+async def test_a_non_dict_payload_is_treated_as_absence_not_a_crash(clock, malformed_payload):
+    class MalformedTransport(FakeTransport):
+        async def get_json(self, url, headers, timeout):
+            self.calls.append(url.split("/")[2])
+            return 200, malformed_payload
+
+    transport = MalformedTransport({})
+    result = await OffClient(transport, user_agent="home_stock/1.0", clock=clock).lookup("123")
+
+    assert result.record is None
+    assert result.throttled is False
+    assert len(transport.calls) == len(BASES)
+
+
+# --- Fix round 1: the budget bounds the wall clock, not just the per-call check ---
+
+async def test_the_cascade_gives_each_base_only_the_time_left_in_the_budget(clock):
+    """A base queried near the end of the budget must not get a full
+    TIMEOUT_PER_BASE on top of what is already spent."""
+    timeouts: list[float] = []
+
+    class LatentTransport(FakeTransport):
+        LATENCY = 7.0
+
+        async def get_json(self, url, headers, timeout):
+            timeouts.append(timeout)
+            clock.advance(min(self.LATENCY, timeout))
+            return await super().get_json(url, headers, timeout)
+
+    transport = LatentTransport({})
+    started = clock()
+    result = await OffClient(transport, user_agent="home_stock/1.0", clock=clock).lookup("123")
+
+    assert timeouts[0] == TIMEOUT_PER_BASE
+    assert timeouts[-1] < TIMEOUT_PER_BASE
+    assert clock() - started <= CASCADE_BUDGET
+    assert result.timed_out is True  # cut short: not every base got queried
+
+
+# --- Fix round 1: a full walk that overruns slightly is absence, not a timeout ---
+
+async def test_a_full_walk_that_overruns_slightly_is_not_reported_as_timed_out(clock):
+    """Every base got queried and answered nothing; that is a genuine
+    absence, not "we did not look", even though the last call pushes the
+    clock a bit past CASCADE_BUDGET."""
+
+    class SlowButThorough(FakeTransport):
+        async def get_json(self, url, headers, timeout):
+            clock.advance(5.5)
+            return await super().get_json(url, headers, timeout)
+
+    transport = SlowButThorough({})
+    started = clock()
+    result = await OffClient(transport, user_agent="home_stock/1.0", clock=clock).lookup("123")
+
+    assert clock() - started > CASCADE_BUDGET  # it did overrun, slightly
+    assert result.timed_out is False
+    assert result.record is None
+    assert len(transport.calls) == len(BASES)
+
+
+# --- Fix round 1: AiohttpTransport, driven by a fake session, never a socket ---
+
+class FakeResponse:
+    def __init__(self, status: int, body):
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def json(self, content_type=None):
+        return self._body
+
+
+class FakeSession:
+    def __init__(self, response=None, *, raises: Exception | None = None):
+        self._response = response
+        self._raises = raises
+        self.calls: list[tuple[str, dict, float]] = []
+
+    def get(self, url, *, headers, timeout):
+        self.calls.append((url, headers, timeout))
+        if self._raises is not None:
+            raise self._raises
+        return self._response
+
+
+async def test_aiohttp_transport_returns_the_decoded_body_on_200():
+    body = {"status": 1, "product": {"code": "123"}}
+    session = FakeSession(FakeResponse(200, body))
+    transport = AiohttpTransport(session)
+
+    status, payload = await transport.get_json("https://example.org/x", {}, 10.0)
+
+    assert status == 200
+    assert payload == body
+
+
+async def test_aiohttp_transport_turns_a_404_into_an_absence():
+    session = FakeSession(FakeResponse(404, None))
+    transport = AiohttpTransport(session)
+
+    status, payload = await transport.get_json("https://example.org/x", {}, 10.0)
+
+    assert status == 404
+    assert payload is None
+
+
+async def test_aiohttp_transport_turns_a_429_into_a_throttle_signal():
+    session = FakeSession(FakeResponse(429, None))
+    transport = AiohttpTransport(session)
+
+    status, payload = await transport.get_json("https://example.org/x", {}, 10.0)
+
+    assert status == 429
+    assert payload is None
+
+
+async def test_aiohttp_transport_lets_whatever_the_session_raises_propagate():
+    session = FakeSession(raises=ConnectionError("no route to host"))
+    transport = AiohttpTransport(session)
+
+    with pytest.raises(ConnectionError):
+        await transport.get_json("https://example.org/x", {}, 10.0)
+
+
+async def test_lookup_swallows_what_the_aiohttp_transport_raises(clock):
+    session = FakeSession(raises=ConnectionError("no route to host"))
+    transport = AiohttpTransport(session)
+    result = await OffClient(transport, user_agent="home_stock/1.0", clock=clock).lookup("123")
+
+    assert result.record is None
+    assert result.throttled is False
+    assert result.timed_out is False

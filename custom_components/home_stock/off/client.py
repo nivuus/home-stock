@@ -76,35 +76,48 @@ class OffClient:
         self._sleep = sleeper
 
     async def lookup(self, code: str) -> OffLookup:
-        """One pass down the cascade. Never raises."""
+        """One pass down the cascade. Never raises.
+
+        `timed_out` is reported only when the walk was cut short — at least
+        one base never got queried. A walk that reached every base and found
+        nothing is a genuine absence, not "we did not look", even if the
+        last call slightly overran CASCADE_BUDGET finishing its own request.
+        """
         started = self._clock()
         headers = {"User-Agent": self._user_agent}
 
         for off_source, host in BASES:
-            if self._clock() - started >= CASCADE_BUDGET:
+            remaining = CASCADE_BUDGET - (self._clock() - started)
+            if remaining <= 0:
                 return OffLookup(timed_out=True)
 
+            # CASCADE_BUDGET is a promise to the person holding the phone: cap
+            # what we ask of this base at what is actually left, so one base
+            # queried near the end of the budget cannot add its own full
+            # TIMEOUT_PER_BASE on top and push the real wall clock past it.
+            timeout = min(TIMEOUT_PER_BASE, remaining)
             url = f"https://{host}/api/v2/product/{code}.json?fields={FIELDS}"
             try:
-                status, payload = await self._transport.get_json(
-                    url, headers, TIMEOUT_PER_BASE
-                )
-            except TimeoutError:
-                continue
-            except Exception:  # noqa: BLE001 - a scan never fails the caller
+                status, payload = await self._transport.get_json(url, headers, timeout)
+            except Exception:  # noqa: BLE001 - deliberately swallows everything the
+                # transport can raise (timeout, connection error, ...): a scan
+                # that fails must return nothing, never throw at the user.
                 continue
 
             if status == 429:
                 # Walking on to the next base would only deepen the throttle:
                 # the limit is per client, not per host.
                 return OffLookup(throttled=True)
-            if status == 404 or payload is None:
+            if status != 200 or not isinstance(payload, dict):
+                # A 404, any other non-200 status, or a 200 body that did not
+                # deserialise into a dict (OFF has been seen to answer with a
+                # bare list/string/number) — either way this base has nothing
+                # usable. Checked explicitly so a malformed body reads as an
+                # expected condition, not an accident that raises on us.
                 continue
             if payload.get("status") == 1 and payload.get("product"):
                 return OffLookup(record=OffRecord(code, off_source, payload["product"]))
 
-        if self._clock() - started >= CASCADE_BUDGET:
-            return OffLookup(timed_out=True)
         return OffLookup()
 
     async def lookup_with_retry(self, code: str, *, attempts: int = 5,
