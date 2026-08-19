@@ -23,16 +23,22 @@ from .storage import repositories as repo
 # kcal/cost totals for stock that really did leave the pantry.
 CONSUME_REASONS = (REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED)
 
-ADD_STOCK_SCHEMA = vol.Schema({
-    vol.Exclusive("article_id", "article"): cv.positive_int,
-    vol.Exclusive("barcode", "article"): cv.string,
-    vol.Required("quantity"): vol.Coerce(float),
-    vol.Required("location_id"): cv.positive_int,
-    vol.Optional("best_before"): cv.string,
-    vol.Optional("price_per_base_unit"): vol.Coerce(float),
-    vol.Optional("packaging_base_quantity"): vol.Coerce(float),
-    vol.Optional("idempotency_key"): cv.string,
-})
+ADD_STOCK_SCHEMA = vol.All(
+    vol.Schema({
+        vol.Exclusive("article_id", "article"): cv.positive_int,
+        vol.Exclusive("barcode", "article"): cv.string,
+        vol.Required("quantity"): vol.Coerce(float),
+        vol.Required("location_id"): cv.positive_int,
+        vol.Optional("best_before"): cv.string,
+        vol.Optional("price_per_base_unit"): vol.Coerce(float),
+        vol.Optional("packaging_base_quantity"): vol.Coerce(float),
+        vol.Optional("idempotency_key"): cv.string,
+    }),
+    # vol.Exclusive above only forbids giving both; without at least one, the
+    # service reaches services.add_stock() with neither, tries to resolve
+    # `None` as a barcode and answers the confusing "Code-barres None inconnu".
+    cv.has_at_least_one_key("article_id", "barcode"),
+)
 CONSUME_SCHEMA = vol.Schema({
     vol.Required("product_id"): cv.positive_int,
     vol.Required("quantity"): vol.Coerce(float),

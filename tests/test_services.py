@@ -69,6 +69,18 @@ async def test_add_stock_accepts_a_barcode(hass, seeded):
     assert hass.states.get("sensor.home_stock_batches").state == "1"
 
 
+async def test_add_stock_requires_an_article_id_or_a_barcode(hass, seeded):
+    """Neither field is required on its own (vol.Exclusive only forbids giving
+    both), so without this the call would reach the service handler with
+    article_id=None, resolve barcode=None too, and answer the confusing
+    "Code-barres None inconnu" — caught here at schema validation instead."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid, match="at least one of"):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "quantity": 1, "location_id": ids["location_id"],
+        }, blocking=True)
+
+
 async def test_add_stock_rejects_an_unknown_barcode(hass, seeded):
     entry, ids = seeded
     # Creating an article from an EAN needs Open Food Facts: that is lot 1.
