@@ -314,3 +314,134 @@ def shortage_rows(conn) -> list[dict[str, Any]]:
         " HAVING quantity < p.min_quantity"
         " ORDER BY p.name"
     ))
+
+
+# --- shopping sessions ------------------------------------------------------
+
+def open_session(conn, *, started_at: str, store: str | None) -> int:
+    """Start a shopping session. The partial unique index refuses a second one."""
+    return _insert(conn, "shopping_session",
+                   {"started_at": started_at, "store": store, "state": "shopping"})
+
+
+def current_session(conn) -> dict[str, Any] | None:
+    """The session the panel should show: the open one, else the last one still
+    waiting to be put away."""
+    return _row(conn.execute(
+        """
+        SELECT * FROM shopping_session
+        WHERE state IN ('shopping', 'to_store')
+        ORDER BY CASE state WHEN 'shopping' THEN 0 ELSE 1 END, started_at DESC
+        LIMIT 1
+        """
+    ).fetchone())
+
+
+def get_session(conn, session_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM shopping_session WHERE id = ?", (session_id,)).fetchone())
+
+
+def set_session_state(conn, session_id: int, state: str, *,
+                      closed_at: str | None = None) -> None:
+    conn.execute("UPDATE shopping_session SET state = ?, closed_at = ? WHERE id = ?",
+                 (state, closed_at, session_id))
+
+
+def add_line(conn, *, session_id: int, article_id: int, quantity: float,
+             unit_price: float | None, scanned_at: str,
+             idempotency_key: str | None) -> int:
+    return _insert(conn, "shopping_line", {
+        "session_id": session_id, "article_id": article_id, "quantity": quantity,
+        "unit_price": unit_price, "scanned_at": scanned_at,
+        "idempotency_key": idempotency_key,
+    })
+
+
+def update_line(conn, line_id: int, *, quantity: float | None = None,
+                unit_price: float | None = None) -> None:
+    """Only the fields actually passed are written: None means "leave it", which
+    is not the same as "clear it"."""
+    if quantity is not None:
+        conn.execute("UPDATE shopping_line SET quantity = ? WHERE id = ?",
+                     (quantity, line_id))
+    if unit_price is not None:
+        conn.execute("UPDATE shopping_line SET unit_price = ? WHERE id = ?",
+                     (unit_price, line_id))
+
+
+def remove_line(conn, line_id: int) -> None:
+    """Drop a line. Safe because nothing entered the stock yet — a stored line
+    is refused by the caller, not here."""
+    conn.execute("DELETE FROM shopping_line WHERE id = ?", (line_id,))
+
+
+def line_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM shopping_line WHERE idempotency_key = ?",
+        (idempotency_key,)).fetchone())
+
+
+LINE_SELECT_SQL = """
+SELECT l.*, p.id AS product_id, p.name AS product_name, p.base_unit,
+       p.default_location_id, p.default_shelf_life_days, p.days_after_opening,
+       a.label AS article_label, a.brand, a.image, a.net_quantity,
+       ai.name AS aisle_name, COALESCE(ai.position, 999) AS aisle_position
+FROM shopping_line l
+JOIN article a ON a.id = l.article_id
+JOIN product p ON p.id = a.product_id
+LEFT JOIN aisle ai ON ai.id = p.aisle_id
+WHERE l.session_id = ?
+"""
+
+
+def list_lines(conn, session_id: int, *, pending_only: bool = False) -> list[dict[str, Any]]:
+    """The cart, in walking order. Scan order is never what a shopper wants."""
+    sql = LINE_SELECT_SQL
+    if pending_only:
+        sql += " AND l.stored_at IS NULL"
+    sql += " ORDER BY aisle_position, p.name, l.id"
+    return _rows(conn.execute(sql, (session_id,)))
+
+
+def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> None:
+    conn.execute("UPDATE shopping_line SET batch_id = ?, stored_at = ? WHERE id = ?",
+                 (batch_id, stored_at, line_id))
+
+
+def session_totals(conn, session_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS lines,
+               SUM(CASE WHEN stored_at IS NULL THEN 1 ELSE 0 END) AS pending,
+               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total
+        FROM shopping_line WHERE session_id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    return {"lines": row["lines"], "pending": row["pending"] or 0,
+            "total": round(row["total"], 4)}
+
+
+def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
+    row = conn.execute(
+        """
+        SELECT price_per_base_unit FROM price
+        WHERE article_id = ? AND store = ?
+        ORDER BY observed_on DESC, id DESC LIMIT 1
+        """,
+        (article_id, store),
+    ).fetchone()
+    return row["price_per_base_unit"] if row else None
+
+
+def list_stores(conn) -> list[str]:
+    """Shops already used, most recently seen first — the panel shows them as chips."""
+    rows = conn.execute(
+        """
+        SELECT store, MAX(observed_on) AS last_seen FROM price
+        WHERE store IS NOT NULL AND store <> ''
+        GROUP BY store ORDER BY last_seen DESC, store
+        """
+    ).fetchall()
+    return [row["store"] for row in rows]
