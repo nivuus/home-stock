@@ -128,4 +128,39 @@ describe('file d’attente hors ligne : refus du serveur contre panne réseau', 
 
     expect(file.taille()).toBe(1);
   });
+
+  it('ne montre jamais le texte brut d’un refus de schéma (voluptuous, en anglais, avec '
+     + 'un dict Python dedans) : un code inconnu obtient le message générique', async () => {
+    const surRefus = vi.fn();
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw {
+        code: 'invalid_format',
+        message: "extra keys not allowed @ data['idempotency_key']. Got {'id': 5, 'type': 'home_stock/session/checkout'}",
+      };
+    }, surRefus);
+    file.ajouter('home_stock/session/checkout', {});
+
+    await file.rejouer();
+
+    expect(surRefus).toHaveBeenCalledTimes(1);
+    const [, message] = surRefus.mock.calls[0];
+    expect(message).not.toContain('extra keys');
+    expect(message).not.toContain('{');
+    expect(message).toMatch(/^[A-ZÀ-Ü]/); // une vraie phrase française, pas un fragment technique
+  });
+
+  it('montre le message du serveur tel quel pour un code de refus métier connu (déjà en français)', async () => {
+    const surRefus = vi.fn();
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'shopping_refused', message: 'Cette ligne est déjà rangée : corrigez le lot, pas la liste.' };
+    }, surRefus);
+    file.ajouter('home_stock/session/remove_line', { line_id: 1 });
+
+    await file.rejouer();
+
+    expect(surRefus).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'home_stock/session/remove_line' }),
+      'Cette ligne est déjà rangée : corrigez le lot, pas la liste.',
+    );
+  });
 });

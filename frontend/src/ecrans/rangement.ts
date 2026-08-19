@@ -46,11 +46,20 @@ function nomLigne(ligne: LigneRangement): string {
   return ligne.source === 'session' ? (ligne.article_label ?? ligne.product_name) : ligne.product_name;
 }
 
-/** Regroupe par emplacement suggéré, en préservant l'ordre d'arrivée des
- *  groupes (première ligne rencontrée pour cet emplacement) — jamais un tri
- *  alphabétique qui mélangerait l'ordre du parcours de rayon. */
+/** Regroupe par emplacement, en préservant l'ordre d'arrivée des groupes
+ *  (première ligne rencontrée pour cet emplacement) — jamais un tri
+ *  alphabétique qui mélangerait l'ordre du parcours de rayon.
+ *
+ *  `emplacementResolu` décide QUEL emplacement compte pour une ligne — par
+ *  défaut la seule suggestion (`default_location_id`), mais le composant lui
+ *  passe `emplacementPour`, qui tient aussi compte d'un choix fait à la
+ *  main : sans ça, une ligne choisie par le sélecteur resterait affichée
+ *  sous « Emplacement à choisir » alors que le sélecteur montre déjà le bon
+ *  nom — l'intitulé du groupe doit suivre exactement ce que la ligne va
+ *  réellement recevoir, pas seulement ce qui a été suggéré au départ. */
 export function grouperParEmplacement(
   lignes: LigneRangement[], emplacements: Emplacement[],
+  emplacementResolu: (ligne: LigneRangement) => number | null = (l) => l.default_location_id,
 ): { emplacementId: number | null; nom: string; lignes: LigneRangement[] }[] {
   const nomDe = (id: number | null): string => {
     if (id === null) return 'Emplacement à choisir';
@@ -58,7 +67,7 @@ export function grouperParEmplacement(
   };
   const groupes: { emplacementId: number | null; nom: string; lignes: LigneRangement[] }[] = [];
   for (const ligne of lignes) {
-    const emplacementId = ligne.default_location_id;
+    const emplacementId = emplacementResolu(ligne);
     let groupe = groupes.find((g) => g.emplacementId === emplacementId);
     if (!groupe) {
       groupe = { emplacementId, nom: nomDe(emplacementId), lignes: [] };
@@ -137,12 +146,21 @@ export class EcranRangement extends LitElement {
   /** Empile puis rejoue tout de suite — voir la même méthode dans
    *  `<home-stock-panier>` : `file-changee` tient le compteur du panneau à
    *  jour, avant l'envoi puis après. Sans `file`, rien à faire : il n'existe
-   *  plus de chemin d'écriture direct par `connexion`. */
-  private ecrire(type: string, charge: Record<string, unknown>): Promise<void> {
-    if (!this.file) return Promise.resolve();
-    this.file.ajouter(type, charge);
+   *  plus de chemin d'écriture direct par `connexion`.
+   *
+   *  Rend `true` seulement si CETTE action a bien été envoyée — ni encore en
+   *  file (panne de transport), ni refusée. `ranger()` s'en sert pour ne
+   *  signaler une ligne autonome rangée qu'une fois que c'est vraiment le
+   *  cas : la signaler avant de connaître l'issue perdrait l'article pour de
+   *  bon dès le premier refus (rien côté serveur ne le représente). */
+  private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
+    if (!this.file) return Promise.resolve(false);
+    const cle = this.file.ajouter(type, charge);
     this.avertirFile();
-    return this.file.rejouer().then(() => { this.avertirFile(); });
+    return this.file.rejouer().then(() => {
+      this.avertirFile();
+      return this.file!.resultatDe(cle) === 'envoyee';
+    });
   }
 
   private avertirFile(): void {
@@ -173,12 +191,19 @@ export class EcranRangement extends LitElement {
       void this.ecrire('home_stock/stock/add', {
         article_id: ligne.article_id, quantity: ligne.quantity, location_id: emplacementId,
         best_before: raccourci.date, price_per_base_unit: ligne.unit_price,
-      }).then(terminer);
-      // Un article autonome n'existe nulle part côté serveur tant qu'il
-      // n'est pas rangé : rien à réconcilier, on le retire tout de suite.
-      this.dispatchEvent(new CustomEvent('ligne-autonome-rangee', {
-        detail: { id: ligne.id }, bubbles: true, composed: true,
-      }));
+      }).then((reussi) => {
+        terminer();
+        // Un article autonome n'existe nulle part côté serveur : le signaler
+        // rangé AVANT de savoir si l'envoi a réussi le perdrait pour de bon
+        // au premier refus (retiré de la liste locale, introuvable ailleurs).
+        // Sur un échec (refus ou panne réseau), on le garde : il reste dans
+        // la liste, prêt à être retenté d'un appui.
+        if (reussi) {
+          this.dispatchEvent(new CustomEvent('ligne-autonome-rangee', {
+            detail: { id: ligne.id }, bubbles: true, composed: true,
+          }));
+        }
+      });
     }
   }
 
@@ -234,7 +259,7 @@ export class EcranRangement extends LitElement {
     if (this.lignes.length === 0) {
       return html`<p class="tout-range">Tout est rangé.</p>`;
     }
-    const groupes = grouperParEmplacement(this.lignes, this.emplacements);
+    const groupes = grouperParEmplacement(this.lignes, this.emplacements, (l) => this.emplacementPour(l));
     return html`
       ${this.enAttente > 0 ? html`
         <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>

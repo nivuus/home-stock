@@ -567,8 +567,15 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
     return element;
   }
 
-  it('reste sur le rangement si l’utilisateur annule l’avertissement', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  // Volontairement AUCUN test ici ne stub `window.confirm` : c'est
+  // exactement ce que la popup native empêchait de vérifier. Là où les
+  // popups système sont coupées (Fully Kiosk, et jsdom qui répond « Not
+  // implemented »), `confirm()` rend `undefined` — un panneau qui en
+  // dépendrait resterait bloqué sur l'écran de rangement sans le moindre
+  // avertissement visible. Le remplacement est un geste à deux appuis, en
+  // boutons, dans l'écran — le même que la suppression d'une ligne.
+
+  it('arme un avertissement en boutons (pas de popup) au lieu de naviguer tout de suite', async () => {
     const element = await monterSurLeRangement();
 
     const boutonScanner = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
@@ -576,19 +583,61 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
     boutonScanner.click();
     await element.updateComplete;
 
-    expect(window.confirm).toHaveBeenCalled();
+    // Toujours sur le rangement : le premier appui arme, il ne navigue pas.
     expect(element.ecran).toBe('rangement');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
+    expect(element.shadowRoot!.querySelector('.confirmer-quitter')).not.toBeNull();
+    expect(element.shadowRoot!.querySelector('.annuler-quitter')).not.toBeNull();
   });
 
-  it('quitte le rangement si l’utilisateur confirme l’avertissement', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('reste sur le rangement si l’utilisateur choisit « Rester ici »', async () => {
     const element = await monterSurLeRangement();
 
-    const boutonScanner = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement;
-    boutonScanner.click();
+    (Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement).click();
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.annuler-quitter') as HTMLButtonElement).click();
+    await element.updateComplete;
+
+    expect(element.ecran).toBe('rangement');
+    // L'avertissement lui-même a disparu : un appui sur « Scanner » sans
+    // confirmer ne doit pas laisser une gâchette armée en silence.
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).toBeNull();
+  });
+
+  it('quitte le rangement quand l’utilisateur confirme « Quitter quand même »', async () => {
+    const element = await monterSurLeRangement();
+
+    (Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement).click();
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.confirmer-quitter') as HTMLButtonElement).click();
     await element.updateComplete;
 
     expect(element.ecran).toBe('scanner');
+  });
+
+  it('ne demande rien pour naviguer ailleurs quand rien n’est en attente', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(sessionOuverte('shopping', 'Leclerc'));
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const boutonPanier = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Panier')) as HTMLButtonElement;
+    boutonPanier.click();
+    await element.updateComplete;
+
+    expect(element.ecran).toBe('panier');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).toBeNull();
   });
 });

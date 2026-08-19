@@ -50,7 +50,8 @@ describe('grouperParEmplacement', () => {
 });
 
 function monter(props: { lignes?: LigneRangement[]; connexion?: Connexion;
-                         file?: { ajouter: ReturnType<typeof vi.fn>; rejouer?: ReturnType<typeof vi.fn> } } = {}) {
+                         file?: { ajouter: ReturnType<typeof vi.fn>; rejouer?: ReturnType<typeof vi.fn>;
+                                  resultatDe?: ReturnType<typeof vi.fn> } } = {}) {
   const element = document.createElement('home-stock-rangement') as HTMLElement & {
     lignes: LigneRangement[]; connexion?: Connexion; file?: unknown; updateComplete: Promise<boolean>;
   };
@@ -88,10 +89,10 @@ describe('<home-stock-rangement>', () => {
   });
 
   it('range une ligne de session d’un appui : appelle store_line avec l’emplacement préposé', async () => {
-    const ajouter = vi.fn();
+    const ajouter = vi.fn().mockReturnValue('cle-test');
     const element = monter({
       lignes: [ligneSession({ id: 42, default_location_id: 2, default_shelf_life_days: null })],
-      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) },
+      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') },
     });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -106,11 +107,11 @@ describe('<home-stock-rangement>', () => {
   });
 
   it('range une ligne autonome d’un appui : appelle stock/add et signale la ligne rangée', async () => {
-    const ajouter = vi.fn();
+    const ajouter = vi.fn().mockReturnValue('cle-test');
     const recu = vi.fn();
     const element = monter({
       lignes: [ligneAutonome({ id: 'auto-1', article_id: 7, quantity: 2, unit_price: 1.5, default_location_id: 1 })],
-      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) },
+      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') },
     });
     element.addEventListener('ligne-autonome-rangee', (e) => recu((e as CustomEvent).detail));
     await laisserPasserLesMicrotaches();
@@ -119,6 +120,10 @@ describe('<home-stock-rangement>', () => {
     const boutonSansDlc = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
       .find((b) => b.textContent?.includes('Sans DLC')) as HTMLButtonElement;
     boutonSansDlc.click();
+    // ligne-autonome-rangee n'est émis qu'une fois l'issue connue (voir
+    // `ecrire`/`resultatDe`), après la résolution de `rejouer()` — jamais
+    // avant, sous peine de perdre l'article pour de bon sur un refus.
+    await laisserPasserLesMicrotaches();
 
     expect(ajouter).toHaveBeenCalledWith('home_stock/stock/add', {
       article_id: 7, quantity: 2, location_id: 1, best_before: null, price_per_base_unit: 1.5,
@@ -126,11 +131,35 @@ describe('<home-stock-rangement>', () => {
     expect(recu).toHaveBeenCalledWith({ id: 'auto-1' });
   });
 
+  it('ne signale PAS une ligne autonome rangée si l’envoi est refusé : elle reste, pour être retentée',
+     async () => {
+    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const recu = vi.fn();
+    const element = monter({
+      lignes: [ligneAutonome({ id: 'auto-1', article_id: 7, quantity: 2, unit_price: 1.5, default_location_id: 1 })],
+      connexion: connexionFactice(),
+      file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('refusee') },
+    });
+    element.addEventListener('ligne-autonome-rangee', (e) => recu((e as CustomEvent).detail));
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const boutonSansDlc = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
+      .find((b) => b.textContent?.includes('Sans DLC')) as HTMLButtonElement;
+    boutonSansDlc.click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    expect(recu).not.toHaveBeenCalled();
+    // L'article seul n'a nulle part ailleurs où exister : il reste affiché.
+    expect(element.lignes).toHaveLength(1);
+  });
+
   it('respecte l’emplacement choisi à la main plutôt que la suggestion', async () => {
-    const ajouter = vi.fn();
+    const ajouter = vi.fn().mockReturnValue('cle-test');
     const element = monter({
       lignes: [ligneSession({ id: 1, default_location_id: 1 })],
-      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) },
+      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') },
     });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -147,6 +176,29 @@ describe('<home-stock-rangement>', () => {
     expect(ajouter).toHaveBeenCalledWith('home_stock/session/store_line', {
       line_id: 1, location_id: 2, best_before: null,
     });
+  });
+
+  it('le titre du groupe suit le choix fait à la main, pas seulement la suggestion de départ', async () => {
+    const element = monter({
+      lignes: [ligneSession({ id: 1, default_location_id: null })],
+      connexion: connexionFactice(),
+      file: { ajouter: vi.fn().mockReturnValue('cle-test'), rejouer: vi.fn().mockResolvedValue(undefined),
+              resultatDe: vi.fn().mockReturnValue('envoyee') },
+    });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.emplacement-nom')!.textContent).toBe('Emplacement à choisir');
+
+    const select = element.shadowRoot!.querySelector('.emplacement-champ') as HTMLSelectElement;
+    select.value = '2';
+    select.dispatchEvent(new Event('change'));
+    await element.updateComplete;
+
+    // Le sélecteur affiche « Frigo » ; le titre du groupe doit dire pareil,
+    // pas rester bloqué sur « Emplacement à choisir » comme si de rien n'était.
+    expect(element.shadowRoot!.querySelector('.emplacement-nom')!.textContent).toBe('Frigo');
+    expect((element.shadowRoot!.querySelector('.emplacement-champ') as HTMLSelectElement).value).toBe('2');
   });
 
   it('annonce « Tout est rangé » et prévient le panneau quand la liste se vide', async () => {
@@ -178,10 +230,10 @@ describe('<home-stock-rangement>', () => {
 
   it('exige un choix explicite d’emplacement quand le produit n’en a pas de suggéré : '
      + 'les raccourcis restent désactivés, avec une raison affichée', async () => {
-    const ajouter = vi.fn();
+    const ajouter = vi.fn().mockReturnValue('cle-test');
     const element = monter({
       lignes: [ligneSession({ id: 1, default_location_id: null })],
-      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) },
+      connexion: connexionFactice(), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') },
     });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -215,11 +267,12 @@ describe('<home-stock-rangement>', () => {
     // rien avancer, exactement comme une panne réseau — mais il se RÉSOUT
     // (rejouer() ne rejette jamais, voir FileAttente.rejouer), donc le
     // .then(terminer) doit quand même s'exécuter.
-    const ajouter = vi.fn();
+    const ajouter = vi.fn().mockReturnValue('cle-test');
     const rejouer = vi.fn().mockResolvedValue(undefined);
+    const resultatDe = vi.fn().mockReturnValue(undefined); // toujours en file : pas encore de sort
     const element = monter({
       lignes: [ligneSession({ id: 1, default_location_id: 2 })],
-      connexion: connexionFactice(), file: { ajouter, rejouer },
+      connexion: connexionFactice(), file: { ajouter, rejouer, resultatDe },
     });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;

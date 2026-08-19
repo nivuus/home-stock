@@ -559,6 +559,10 @@ async def article_create(hass, connection, msg) -> None:
     vol.Required("type"): "home_stock/article/update",
     vol.Required("article_id"): _bounded_int,
     vol.Required("fields"): dict,
+    # See session/update_line: the panel's offline queue stamps this key on
+    # every action uniformly (FileAttente.ajouter), including a queued
+    # weight correction — accepted and ignored here for the same reason.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def article_update(hass, connection, msg) -> None:
@@ -908,7 +912,12 @@ async def session_remove_line(hass, connection, msg) -> None:
     connection.send_result(msg["id"], {"line_id": msg["line_id"]})
 
 
-@websocket_api.websocket_command({vol.Required("type"): "home_stock/session/checkout"})
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/checkout",
+    # See session/update_line: accepted and ignored, for the same reason —
+    # the queue stamps this key on every action, checkout included.
+    vol.Optional("idempotency_key"): _bounded_text,
+})
 @websocket_api.async_response
 async def session_checkout(hass, connection, msg) -> None:
     runtime = _runtime(hass)

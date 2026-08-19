@@ -20,14 +20,44 @@ function estRefusServeur(erreur: unknown): erreur is ErreurServeur {
     && typeof (erreur as { message?: unknown }).message === 'string';
 }
 
+/** Les codes que le domaine de la maison (pas la couche transport de Home
+ *  Assistant) choisit lui-même en réponse à un refus — voir
+ *  `websocket_api.py` : `_send_domain_error`, `_send_integrity_error`,
+ *  `_shopping_error`, `_send_not_loaded`. Leur `message` est rédigé en
+ *  français pour être lu tel quel. Tout le reste — au premier rang
+ *  `invalid_format`, le code que Home Assistant lui-même répond quand le
+ *  schéma refuse un champ — porte un texte anglais de voluptuous avec un
+ *  dict Python imprimé dedans (« extra keys not allowed. Got {'id': 5,
+ *  … } »), jamais montrable tel quel à quelqu'un debout dans un magasin.
+ *  Liste blanche plutôt que liste noire : un code de refus qu'on ne
+ *  reconnaît pas obtient le message générique, jamais son texte brut. */
+const CODES_DE_REFUS_EN_FRANCAIS: ReadonlySet<string> = new Set([
+  'not_loaded', 'invalid_field', 'invalid_value', 'not_found',
+  'already_exists', 'conversion_refused', 'shopping_refused',
+]);
+
+const MESSAGE_REFUS_GENERIQUE = 'Une action a été refusée et n’a pas pu être envoyée.';
+
+function messageAffichable(erreur: ErreurServeur): string {
+  return CODES_DE_REFUS_EN_FRANCAIS.has(erreur.code) ? erreur.message : MESSAGE_REFUS_GENERIQUE;
+}
+
 /** Prévenu quand une action est abandonnée parce que le serveur l'a refusée
  *  (jamais pour une simple panne réseau, celle-là reste en file). */
 export type SurRefus = (action: { type: string; charge: Record<string, unknown> }, message: string) => void;
+
+export type ResultatAction = 'envoyee' | 'refusee';
 
 const CLE_STOCKAGE = 'home_stock.file';
 
 export class FileAttente {
   private actions: Action[] = [];
+  /** Le sort de chaque action qui vient de quitter la file, par clé
+   *  d'idempotence — le temps que l'appelant qui l'a posée le récupère (voir
+   *  `resultatDe`, qui le consomme). Une action qui reste bloquée par une
+   *  panne de transport n'y apparaît jamais : elle n'a pas encore de sort,
+   *  elle est toujours en file. */
+  private resultats = new Map<string, ResultatAction>();
 
   constructor(private stockage: Storage, private envoyer: Envoyeur, private surRefus?: SurRefus) {
     try {
@@ -59,25 +89,38 @@ export class FileAttente {
    *  changera jamais d'avis à un prochain essai : le garder en tête bloquerait
    *  tout ce qui le suit pour toujours — un seul `+` refusé au début d'un
    *  trajet couperait la totalité du panier. On le retire donc, on prévient
-   *  l'appelant (message déjà en français, c'est celui du serveur), et on
-   *  continue avec le reste. */
+   *  l'appelant d'un message TOUJOURS montrable (voir `messageAffichable` —
+   *  jamais le texte brut d'un refus de schéma), et on continue avec le reste. */
   async rejouer(): Promise<void> {
     while (this.actions.length) {
       const action = this.actions[0];
+      const cle = action.charge.idempotency_key as string | undefined;
       try {
         await this.envoyer(action.type, action.charge);
       } catch (erreur) {
         if (estRefusServeur(erreur)) {
           this.actions.shift();
           this.ecrire();
-          this.surRefus?.(action, erreur.message);
+          if (cle) this.resultats.set(cle, 'refusee');
+          this.surRefus?.(action, messageAffichable(erreur));
           continue;
         }
         return;   // panne de transport : on garde la file intacte et on réessaiera
       }
       this.actions.shift();
       this.ecrire();
+      if (cle) this.resultats.set(cle, 'envoyee');
     }
+  }
+
+  /** Le sort d'une action posée par `ajouter`, une fois `rejouer` retombé —
+   *  `undefined` tant qu'elle est toujours en file (panne de transport, ou
+   *  simplement pas encore essayée). Consommé au premier appel : un appelant
+   *  ne lit le sort de SA propre action qu'une fois, ce n'est pas un journal. */
+  resultatDe(cle: string): ResultatAction | undefined {
+    const resultat = this.resultats.get(cle);
+    this.resultats.delete(cle);
+    return resultat;
   }
 
   private ecrire(): void {

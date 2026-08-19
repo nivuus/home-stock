@@ -149,12 +149,22 @@ export class EcranPanier extends LitElement {
    *  garde le compteur de la file — `file-changee` le prévient, avant l'envoi
    *  (la ligne vient d'être ajoutée) et après (elle a pu partir, être
    *  refusée, ou rester). Sans `file` il n'y a rien à faire : il n'existe
-   *  plus de deuxième chemin d'écriture par `connexion` directe. */
-  private ecrire(type: string, charge: Record<string, unknown>): Promise<void> {
-    if (!this.file) return Promise.resolve();
-    this.file.ajouter(type, charge);
+   *  plus de deuxième chemin d'écriture par `connexion` directe.
+   *
+   *  Rend `true` si CETTE action a bien été envoyée (voir la même méthode
+   *  dans `<home-stock-rangement>`) — le panier ne s'en sert pas encore pour
+   *  changer son affichage (aucune ligne locale à faire disparaître ici,
+   *  contrairement à une ligne autonome du rangement), mais la même
+   *  signature évite deux contrats différents pour la même méthode dupliquée
+   *  dans les deux écrans. */
+  private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
+    if (!this.file) return Promise.resolve(false);
+    const cle = this.file.ajouter(type, charge);
     this.avertirFile();
-    return this.file.rejouer().then(() => { this.avertirFile(); });
+    return this.file.rejouer().then(() => {
+      this.avertirFile();
+      return this.file!.resultatDe(cle) === 'envoyee';
+    });
   }
 
   private avertirFile(): void {

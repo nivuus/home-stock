@@ -64,6 +64,10 @@ export class PanneauGardeManger extends LitElement {
    *  (c'est déjà le message du serveur) — jusqu'à ce qu'on l'accuse
    *  réception ou qu'un nouveau refus le remplace. */
   @state() private erreurFile: string | null = null;
+  /** La cible de navigation en attente de confirmation, quand on quitte le
+   *  rangement avec des articles autonomes encore en attente — `null` tant
+   *  qu'aucun départ n'est armé (voir `demanderNavigation`). */
+  @state() private navigationArmee: Ecran | null = null;
 
   private connexion?: Connexion;
   private file?: FileAttente;
@@ -170,6 +174,10 @@ export class PanneauGardeManger extends LitElement {
   };
 
   private surRangementTermine = (): void => {
+    // La liste s'est vidée d'elle-même (tout a été rangé) : rien à confirmer,
+    // mais un départ resté armé d'un geste précédent ne doit pas survivre à
+    // un écran qui n'existe plus.
+    this.navigationArmee = null;
     this.ecran = 'scanner';
   };
 
@@ -199,34 +207,60 @@ export class PanneauGardeManger extends LitElement {
    *  alors que des articles autonomes attendent encore les perd pour de bon
    *  — rien côté serveur ne les représente tant qu'ils n'ont pas de lot,
    *  contrairement aux lignes de session qui, elles, survivent dans
-   *  `to_store`. */
-  private naviguerVers(cible: Ecran): void {
+   *  `to_store`. Pas de `window.confirm` : ni ses cibles tactiles ni son
+   *  contraste ne sont sous notre main, il bloque le fil, ses libellés
+   *  suivent la langue du navigateur plutôt que le français de l'appli, et
+   *  là où les popups système sont coupées — Fully Kiosk le permet, jsdom
+   *  répond « Not implemented » — il rend `undefined`, donc refuse
+   *  silencieusement de naviguer plutôt que d'avertir. Même geste à deux
+   *  appuis que la suppression d'une ligne : armer, puis confirmer ou
+   *  annuler, en boutons, dans l'écran. */
+  private demanderNavigation(cible: Ecran): void {
     if (this.ecran === 'rangement' && cible !== 'rangement' && this.enAttenteRangement.length > 0) {
-      const confirme = window.confirm(
-        'Des articles rapportés seuls n’ont pas encore été rangés : ils seront perdus si vous quittez '
-        + 'maintenant. Continuer ?',
-      );
-      if (!confirme) return;
+      this.navigationArmee = cible;
+      return;
     }
     this.ecran = cible;
   }
 
+  private confirmerNavigation(): void {
+    const cible = this.navigationArmee;
+    this.navigationArmee = null;
+    if (cible) this.ecran = cible;
+  }
+
+  private annulerNavigation(): void {
+    this.navigationArmee = null;
+  }
+
   private rendreNavigation() {
     if (this.ecran === 'fiche') return nothing;
+    if (this.navigationArmee) {
+      return html`
+        <div class="confirmation-quitter-rangement">
+          <p>
+            Des articles rapportés seuls n’ont pas encore été rangés : ils seront perdus si vous quittez
+            maintenant.
+          </p>
+          <button class="confirmer-quitter" @click=${this.confirmerNavigation}>Quitter quand même</button>
+          <button class="annuler-quitter" @click=${this.annulerNavigation}>Rester ici</button>
+        </div>
+      `;
+    }
     const enCourses = this.session?.session?.state === 'shopping';
     const lignesRangement = this.lignesARanger;
     return html`
       <nav class="navigation">
         ${this.ecran !== 'scanner' ? html`
-          <button class="nav-bouton" @click=${() => this.naviguerVers('scanner')}>Scanner</button>
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('scanner')}>Scanner</button>
         ` : nothing}
         ${enCourses && this.ecran !== 'panier' ? html`
-          <button class="nav-bouton" @click=${() => this.naviguerVers('panier')}>
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('panier')}>
             Panier${this.session!.totals.lines ? ` (${this.session!.totals.lines})` : ''}
           </button>
         ` : nothing}
         ${lignesRangement.length > 0 && this.ecran !== 'rangement' ? html`
-          <button class="nav-bouton" @click=${() => this.naviguerVers('rangement')}>
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('rangement')}>
             Ranger (${lignesRangement.length})
           </button>
         ` : nothing}
@@ -260,6 +294,16 @@ export class PanneauGardeManger extends LitElement {
       min-height: 48px; min-width: 48px; border-radius: 8px; border: none;
       background: rgba(255, 255, 255, 0.2); color: #fff; font-weight: 600;
     }
+    .confirmation-quitter-rangement {
+      display: flex; flex-direction: column; gap: 8px; padding: 12px;
+      background: var(--secondary-background-color); color: var(--primary-text-color);
+    }
+    .confirmation-quitter-rangement p { margin: 0; }
+    .confirmer-quitter, .annuler-quitter {
+      min-height: 48px; width: 100%; border-radius: 8px; border: none; font-size: 0.95rem;
+    }
+    .confirmer-quitter { background: var(--error-color, #b3261e); color: #fff; }
+    .annuler-quitter { background: var(--primary-color); color: var(--text-primary-color, #fff); }
   `;
 
   private rendreEcran() {
