@@ -56,5 +56,90 @@ CATEGORY_TO_AISLE: Final = {
     "Pharmacie/Parapharmacie": "Hygiène et beauté",
 }
 
-# Task 2 (OFF classification) adds TAG_TO_AISLE, SOURCE_TO_AISLE and
-# resolve_aisle() here.
+# OFF category tags, from the specific to the generic. resolve_aisle() walks
+# categories_tags backwards — OFF orders them general first — so the first
+# match is the most precise statement OFF makes about the product.
+TAG_TO_AISLE: Final = {
+    "en:fresh-vegetables": "Fruits et légumes",
+    "en:vegetables": "Fruits et légumes",
+    "en:fresh-fruits": "Fruits et légumes",
+    "en:fruits": "Fruits et légumes",
+    "en:legumes": "Fruits et légumes",
+    "en:meats": "Boucherie",
+    "en:fresh-meats": "Boucherie",
+    "en:poultry": "Boucherie",
+    "en:beef": "Boucherie",
+    "en:fishes": "Poissonnerie",
+    "en:seafood": "Poissonnerie",
+    "en:hams": "Charcuterie et traiteur",
+    "en:charcuteries": "Charcuterie et traiteur",
+    "en:prepared-meats": "Charcuterie et traiteur",
+    "en:delicatessen": "Charcuterie et traiteur",
+    "en:cheeses": "Fromages",
+    "en:dairies": "Crémerie",
+    "en:milks": "Crémerie",
+    "en:yogurts": "Crémerie",
+    "en:creams": "Crémerie",
+    "en:butters": "Crémerie",
+    "en:eggs": "Crémerie",
+    "en:breads": "Boulangerie",
+    "en:bakery-products": "Boulangerie",
+    "en:viennoiseries": "Boulangerie",
+    "en:breakfast-cereals": "Petit-déjeuner",
+    "en:breakfasts": "Petit-déjeuner",
+    "en:spreads": "Petit-déjeuner",
+    "en:jams": "Petit-déjeuner",
+    "en:coffees": "Petit-déjeuner",
+    "en:teas": "Petit-déjeuner",
+    "en:beverages": "Boissons",
+    "en:waters": "Boissons",
+    "en:juices": "Boissons",
+    "en:alcoholic-beverages": "Boissons",
+    "en:frozen-foods": "Surgelés",
+    "en:ice-creams": "Surgelés",
+    "en:frozen-desserts": "Surgelés",
+    "en:biscuits": "Épicerie sucrée",
+    "en:biscuits-and-cakes": "Épicerie sucrée",
+    "en:chocolates": "Épicerie sucrée",
+    "en:confectioneries": "Épicerie sucrée",
+    "en:sweet-snacks": "Épicerie sucrée",
+    "en:desserts": "Épicerie sucrée",
+    "en:pastas": "Épicerie salée",
+    "en:rice": "Épicerie salée",
+    "en:canned-foods": "Épicerie salée",
+    "en:sauces": "Épicerie salée",
+    "en:condiments": "Épicerie salée",
+    "en:spices": "Épicerie salée",
+    "en:vegetable-oils": "Épicerie salée",
+    "en:salty-snacks": "Épicerie salée",
+    "en:groceries": "Épicerie salée",
+    "en:hygiene": "Hygiène et beauté",
+    "en:body-care": "Hygiène et beauté",
+    "en:hair-care": "Hygiène et beauté",
+    "en:cosmetics": "Hygiène et beauté",
+    "en:household-products": "Entretien et maison",
+    "en:cleaning-products": "Entretien et maison",
+    "en:laundry": "Entretien et maison",
+    "en:sponges": "Entretien et maison",
+    "en:batteries": "Entretien et maison",
+    "en:pet-foods": "Animalerie",
+    "en:cat-foods": "Animalerie",
+    "en:dog-foods": "Animalerie",
+}
+
+# What a database says about a product when none of its tags is recognised.
+SOURCE_TO_AISLE: Final = {
+    "food": "Épicerie salée",
+    "products": "Entretien et maison",
+    "beauty": "Hygiène et beauté",
+    "petfood": "Animalerie",
+}
+
+
+def resolve_aisle(categories_tags: list[str] | None, off_source: str | None) -> str:
+    """Pick the aisle a scanned article belongs to. Always returns a real aisle."""
+    for tag in reversed(categories_tags or []):
+        aisle = TAG_TO_AISLE.get(tag)
+        if aisle is not None:
+            return aisle
+    return SOURCE_TO_AISLE.get(off_source or "", FALLBACK_AISLE)
