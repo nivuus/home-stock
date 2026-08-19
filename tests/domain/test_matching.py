@@ -1,7 +1,7 @@
 """Attaching a scanned article to a catalogue product."""
-import pytest
-
 from custom_components.home_stock.domain.matching import (
+    PRESELECT_MARGIN,
+    PRESELECT_SCORE,
     Candidate,
     candidates,
     normalise,
@@ -29,9 +29,41 @@ def test_a_simple_plural_does_not_break_a_match():
     assert normalise("yaourts") == normalise("yaourt")
 
 
+def test_an_invariant_singular_still_matches_itself():
+    """"ananas"/"couscous" are not plurals, but the trim is applied
+    symmetrically on both sides of every comparison, so an invariant
+    singular still folds to the same form wherever it appears and still
+    matches itself — even though the trimmed form ("anana", "couscou") is
+    not a real word."""
+    assert normalise("ananas") == normalise("Ananas")
+    found = candidates(names=["ananas"], products=[{"id": 1, "name": "Ananas"},
+                                                     {"id": 2, "name": "Pâtes"}])
+    assert found[0].product_id == 1
+
+
 def test_the_brand_is_removed_before_comparing():
     assert strip_brand("Bjorg Muesli Raisin Figue", "Bjorg") == "Muesli Raisin Figue"
     assert strip_brand("Muesli", None) == "Muesli"
+
+
+def test_the_brand_removal_does_not_corrupt_neighbouring_words():
+    """A bare substring replace would turn "Porc fumé Or Label" into
+    "P{o}rc fumé Label" when stripping the brand "Or" — the letters "or"
+    inside "Porc" must survive."""
+    assert strip_brand("Porc fumé Or Label", "Or") == "Porc fumé Label"
+
+
+def test_a_brand_ending_in_punctuation_still_strips_cleanly():
+    assert strip_brand("Bjorg (bio) Muesli", "Bjorg (bio)") == "Muesli"
+
+
+def test_brands_with_symbols_still_strip_cleanly():
+    assert strip_brand("M&S Biscuits", "M&S") == "Biscuits"
+    assert strip_brand("Coop+ Lait", "Coop+") == "Lait"
+
+
+def test_a_brand_absent_from_the_name_leaves_it_untouched():
+    assert strip_brand("Muesli", "Nonexistent") == "Muesli"
 
 
 def test_the_generic_name_finds_the_product():
@@ -90,6 +122,32 @@ def test_no_candidates_preselect_to_nothing():
     assert preselect([]) is None
 
 
+def test_a_score_exactly_at_the_threshold_does_not_preselect():
+    """The score boundary is exclusive on purpose: exactly PRESELECT_SCORE is
+    the threshold itself, not "clearly above" it."""
+    found = [Candidate(1, "Pâtes", PRESELECT_SCORE)]
+    assert preselect(found) is None
+
+
+def test_a_score_just_above_the_threshold_preselects():
+    found = [Candidate(1, "Pâtes", PRESELECT_SCORE + 0.01)]
+    assert preselect(found).product_id == 1
+
+
+def test_a_margin_exactly_at_the_threshold_does_not_preselect():
+    """The margin boundary is exclusive on purpose: exactly PRESELECT_MARGIN
+    over the runner-up is the threshold itself, not a clear gap."""
+    best = PRESELECT_SCORE + 0.15
+    found = [Candidate(1, "Pâtes", best), Candidate(2, "Muesli", best - PRESELECT_MARGIN)]
+    assert preselect(found) is None
+
+
+def test_a_margin_just_above_the_threshold_preselects():
+    best = PRESELECT_SCORE + 0.15
+    found = [Candidate(1, "Pâtes", best), Candidate(2, "Muesli", best - PRESELECT_MARGIN - 0.01)]
+    assert preselect(found).product_id == 1
+
+
 def test_the_real_catalogue_matches_a_real_card():
     """Reads the 34 captured cards and the real product names."""
     import json
@@ -100,10 +158,17 @@ def test_the_real_catalogue_matches_a_real_card():
              if e.get("product")]
     assert cards, "the fixtures must be present"
 
+    any_candidates = False
     for entry in cards:
         product = entry["product"]
         names = [product.get("generic_name_fr"), product.get("product_name_fr")]
         found = candidates(names=names, products=CATALOGUE)
+        any_candidates = any_candidates or bool(found)
         # Nothing is asserted about which product wins — the point is that
         # scoring never raises and never returns a score outside [0, 1].
         assert all(0.0 <= c.score <= 1.0 for c in found)
+
+    # A stubbed-out matcher that always returns [] would satisfy every
+    # assertion above; require that real scoring actually happens at least
+    # once across the 34 records.
+    assert any_candidates

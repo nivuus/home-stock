@@ -39,7 +39,13 @@ def normalise(text: str) -> str:
     stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
     words = _NON_WORD.sub(" ", stripped.casefold()).split()
     # Trim a trailing plural s, but only on words long enough for it to be one:
-    # "os" and "gaz" are not plurals.
+    # "os" and "gaz" are not plurals. This is symmetric folding, not a
+    # linguistically correct French pluraliser: an invariant singular like
+    # "ananas" or "couscous" gets trimmed too ("anana", "couscou"), but since
+    # both sides of every comparison go through the same trim, an invariant
+    # singular still folds to itself and still matches itself consistently.
+    # A real pluraliser would fix that at the cost of a permanent dependency,
+    # for a collision nobody has demonstrated in the real catalogue.
     return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words)
 
 
@@ -51,7 +57,12 @@ def strip_brand(name: str, brands: str | None) -> str:
     for brand in brands.split(","):
         brand = brand.strip()
         if brand:
-            result = re.sub(re.escape(brand), " ", result, flags=re.IGNORECASE)
+            # Anchor with lookarounds rather than substring replace or `\b`:
+            # a bare substring match would corrupt "Porc fumé Or Label" into
+            # "P c fumé Label" when stripping brand "Or", and `\b` misbehaves
+            # when the brand itself ends in punctuation, as "Bjorg (bio)" does.
+            pattern = rf"(?<!\w){re.escape(brand)}(?!\w)"
+            result = re.sub(pattern, " ", result, flags=re.IGNORECASE)
     return " ".join(result.split())
 
 
@@ -96,7 +107,10 @@ def preselect(found: Sequence[Candidate]) -> Candidate | None:
     """The one candidate the panel may tick on its own — or nothing.
 
     Requires both a strong best score and a clear gap to the runner-up: a
-    hesitation between two products is exactly what a human is for.
+    hesitation between two products is exactly what a human is for. Both
+    boundaries are exclusive on purpose: a score of exactly PRESELECT_SCORE,
+    or a margin of exactly PRESELECT_MARGIN, is not "clearly above" — it is
+    the threshold itself, and does not preselect.
     """
     if not found:
         return None
