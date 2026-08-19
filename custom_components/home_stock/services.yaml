@@ -25,7 +25,7 @@ add_stock:
     price_per_base_unit:
       name: Prix par unité de base
       description: En euros. 0,004 €/g pour un paquet de 500 g à 2 €.
-      selector: { number: { min: 0, step: 0.0001, mode: box } }
+      selector: { number: { min: 0, step: any, mode: box } }
     packaging_base_quantity:
       name: Taille du conditionnement
       description: Si la quantité est en paquets, le nombre d'unités de base par paquet.

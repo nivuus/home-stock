@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.service import async_get_all_descriptions
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
@@ -191,3 +192,25 @@ async def test_import_grocy_catalog_apply_refreshes_the_coordinator(hass, seeded
         blocking=True, return_response=True,
     )
     entry.runtime_data.coordinator.async_request_refresh.assert_called_once()
+
+
+async def test_services_yaml_parses_for_every_service(hass, seeded):
+    # A single invalid selector (e.g. a number `step` below Home Assistant's
+    # floor) makes HA discard services.yaml wholesale: every service falls
+    # back to its bare name with no French description or fields, silently,
+    # with only a WARNING in the log. This regresses that failure mode by
+    # asserting the real descriptions loader actually produced our text.
+    descriptions = await async_get_all_descriptions(hass)
+    assert descriptions[DOMAIN]["add_stock"]["name"] == "Ajouter au stock"
+    assert descriptions[DOMAIN]["add_stock"]["description"] == (
+        "Crée un lot et son mouvement d'achat."
+    )
+    assert (
+        descriptions[DOMAIN]["add_stock"]["fields"]["price_per_base_unit"]["name"]
+        == "Prix par unité de base"
+    )
+    for service in (
+        "add_stock", "consume", "open_batch", "transfer_batch",
+        "adjust_inventory", "query_stock", "export_journal", "import_grocy_catalog",
+    ):
+        assert descriptions[DOMAIN][service]["name"], service
