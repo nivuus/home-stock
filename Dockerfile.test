@@ -1,0 +1,5 @@
+FROM ghcr.io/home-assistant/home-assistant:2026.8.2
+RUN pip install --no-cache-dir --break-system-packages \
+      pytest-homeassistant-custom-component==0.13.356 \
+ || pip install --no-cache-dir pytest-homeassistant-custom-component==0.13.356
+WORKDIR /src

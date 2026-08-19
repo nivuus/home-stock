@@ -345,10 +345,16 @@ somme jamais des valeurs déjà arrondies.
 | `waste` | − | **oui**, et compté séparément comme gaspillage |
 | `expired` | − | **oui**, idem |
 | `inventory` | ± | non — c'est une correction, pas une consommation |
-| `transfer` | ± | non — deux lignes de somme nulle, changement d'emplacement |
+| `transfer` | 0 | non — **une** ligne de quantité nulle, l'emplacement d'arrivée en référence |
 
 Le gaspillage compte dans le total du jour parce que la question posée est « ce qui
 est sorti du stock », mais il reste distingué : un capteur dédié permet de le voir.
+
+> **Corrigé le 2026-08-18, pendant l'implémentation** : ce tableau annonçait pour le
+> transfert « deux lignes de somme nulle ». Elles ne porteraient aucune information —
+> la table `movement` n'a pas de colonne d'emplacement — et gonfleraient le journal
+> d'une ligne inutile par déplacement. Un transfert écrit donc **un** mouvement de
+> quantité nulle, portant l'emplacement d'arrivée dans `ref_type`/`ref_id`.
 
 ### 7.6 Ouverture d'un lot
 
@@ -370,10 +376,15 @@ fournir : tout est local). Options modifiables ensuite :
 | Option | Défaut | Effet |
 |---|---|---|
 | `expiration_alert_days` | 3 | Seuil de `binary_sensor.home_stock_expirations` et du `todo` associé |
-| `default_currency` | EUR | Affichage seulement ; aucun taux de change |
 
 Le chemin du fichier de base n'est **pas** configurable : `config/home_stock.db`,
 pour que les sauvegardes HA l'emportent sans réglage.
+
+> **Retiré le 2026-08-18, pendant l'implémentation** : l'option `default_currency` (EUR,
+> « affichage seulement ») figurait ici. Aucun code ne la lit — les capteurs portent l'unité
+> `EUR` en dur — et une option qui ne change rien promet dans l'interface un comportement qui
+> n'existe pas. Le foyer est en France ; le jour où une seconde devise sera nécessaire, il
+> faudra de toute façon un taux de change, donc bien plus que cette option.
 
 ### 8.1 Entités du lot 0
 
@@ -491,10 +502,17 @@ Eco-Score, marque, allergènes) et les calories.
 
 - unité de masse ou de volume Grocy (`g`, `kg`, `cl`, `l`) → `base_unit` `g` ou `ml`,
   conversion directe ;
-- unité de conditionnement (`Paquet`, `Pot`, `Pièce`) → `base_unit = 'piece'`, **plus**
-  une ligne `packaging` portant le poids net quand OFF ou le nom du produit le
-  donnent. Ce qui est réellement compté (œufs, brocolis) reste compté : on n'invente
-  pas de grammage.
+- unité de conditionnement (`Paquet`, `Pot`, `Pièce`) → `base_unit = 'piece'`. Ce qui
+  est réellement compté (œufs, brocolis) reste compté : on n'invente pas de grammage.
+
+> **Reporté au lot 1, décidé le 2026-08-18** : cette règle prévoyait aussi de créer une
+> ligne `packaging` portant le poids net « quand OFF ou le nom du produit le donnent ».
+> L'import ne le fait pas, et c'est délibéré. Sur la base réelle, **239 des 299 produits
+> actifs** sont stockés dans une unité de conditionnement et **37 seulement** portent un
+> poids dans leur nom — avec des pièges qu'aucune analyse de nom ne franchit
+> proprement (« San Pellegrino 6x1L », « Purée pomme 8x100g », « Sac poubelle 20L »).
+> Le poids net viendra d'Open Food Facts au lot 1, via `product_quantity`, qui est une
+> mesure et non une devinette. `repo.insert_packaging` existe déjà et l'attend.
 
 Les calories Grocy sont déjà exprimées **par unité de stock**. Comme l'unité de
 base reprend systématiquement l'unité de stock (`g`/`ml` pour les masses et volumes,

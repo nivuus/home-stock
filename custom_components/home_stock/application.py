@@ -1,0 +1,368 @@
+"""The application layer: composes the domain rules with the repositories.
+
+Everything here is synchronous. Home Assistant calls it from the executor.
+"""
+from __future__ import annotations
+
+import unicodedata
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
+from .const import (
+    QUANTITY_EPSILON,
+    REASON_CONSUMPTION,
+    REASON_INVENTORY,
+    REASON_PURCHASE,
+    REASON_TRANSFER,
+)
+from .domain.nutrition import movement_values
+from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
+from .domain.units import format_quantity, to_base_quantity
+from .storage import repositories as repo
+from .storage.database import Database
+
+
+def _now() -> str:
+    return datetime.now(UTC).replace(microsecond=0, tzinfo=None).isoformat()
+
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards so a key is matched literally, not as a pattern.
+
+    A HA service call or a voice-generated idempotency key can legally contain
+    '%' or '_', both of which are LIKE wildcards. Without escaping, a key like
+    "dinner_1" would also match rows keyed "dinnerX1#1" and a replay would
+    return movement ids belonging to a different consumption.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# NFD decomposition splits an accented letter into the base letter plus a
+# combining mark, but it does NOT split the œ/æ ligatures — those are single
+# code points, not a letter plus an accent. Expand them by hand first, or
+# "œufs" never matches a product named "Œufs" (services.yaml promises
+# case- and accent-insensitive matching for query_stock, the voice path).
+_LIGATURES = {"œ": "oe", "æ": "ae", "Œ": "OE", "Æ": "AE"}
+
+
+def _fold_for_search(text: str) -> str:
+    """Case- and accent-insensitive form of `text`, for query_stock matching."""
+    for ligature, expanded in _LIGATURES.items():
+        text = text.replace(ligature, expanded)
+    decomposed = unicodedata.normalize("NFD", text)
+    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return without_accents.casefold()
+
+
+def _namespaced_key(operation: str, key: str | None) -> str | None:
+    """Prefix a caller-supplied idempotency key with the operation that owns it.
+
+    idempotency_key is a single UNIQUE column shared by every service: without
+    a namespace, an add_stock call replaying a key first used by consume()
+    would find that unrelated movement and return ITS batch_id instead of
+    doing its own work.
+    """
+    return f"{operation}:{key}" if key else None
+
+
+def _as_batch_view(row: dict[str, Any]) -> BatchView:
+    return BatchView(
+        id=row["id"],
+        remaining=row["remaining"],
+        best_before=date.fromisoformat(row["best_before"]) if row["best_before"] else None,
+        entered_at=datetime.fromisoformat(row["entered_at"]),
+        opened_at=datetime.fromisoformat(row["opened_at"]) if row["opened_at"] else None,
+        price_per_base_unit=row["price_per_base_unit"],
+        kcal_per_base_unit=row["kcal_per_base_unit"],
+    )
+
+
+class StockManager:
+    """Every write to the stock goes through here."""
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    # --- writes -------------------------------------------------------------
+
+    def add_stock(self, *, article_id: int, quantity: float, location_id: int,
+                  best_before: str | None = None,
+                  price_per_base_unit: float | None = None,
+                  packaging_base_quantity: float | None = None,
+                  occurred_at: str | None = None,
+                  idempotency_key: str | None = None) -> int:
+        """Create a batch and its purchase movement. Returns the batch id."""
+        moment = occurred_at or _now()
+        amount = to_base_quantity(quantity, packaging_base_quantity)
+        stored_key = _namespaced_key("add_stock", idempotency_key)
+        with self.db.write() as conn:
+            if stored_key and repo.movement_exists(conn, stored_key):
+                row = conn.execute(
+                    "SELECT batch_id FROM movement WHERE idempotency_key = ?",
+                    (stored_key,),
+                ).fetchone()
+                return int(row["batch_id"])
+            article = repo.get_article(conn, article_id)
+            if article is None:
+                raise ValueError(f"unknown article {article_id}")
+            batch_id = repo.insert_batch(
+                conn, article_id=article_id, location_id=location_id, quantity=amount,
+                entered_at=moment, best_before=best_before,
+                price_per_base_unit=price_per_base_unit,
+            )
+            kcal_rate = repo.resolve_kcal_rate(conn, article)
+            values = movement_values(amount, kcal_rate, price_per_base_unit)
+            repo.insert_movement(
+                conn, occurred_at=moment, product_id=article["product_id"],
+                article_id=article_id, batch_id=batch_id, quantity=amount,
+                reason=REASON_PURCHASE, kcal=values.kcal, cost=values.cost,
+                idempotency_key=stored_key,
+            )
+            if price_per_base_unit is not None:
+                repo.insert_price(
+                    conn, article_id=article_id, observed_on=moment[:10],
+                    price_per_base_unit=price_per_base_unit, source="manual",
+                )
+            return batch_id
+
+    def consume(self, *, product_id: int, quantity: float,
+                reason: str = REASON_CONSUMPTION, occurred_at: str | None = None,
+                idempotency_key: str | None = None) -> list[int]:
+        """Take a quantity out of stock, across as many batches as needed."""
+        moment = occurred_at or _now()
+        stored_key = _namespaced_key("consume", idempotency_key)
+        with self.db.write() as conn:
+            if stored_key and repo.movement_exists(conn, stored_key):
+                # Replayed call: return the movements the first call wrote.
+                # The key itself is escaped so '%'/'_' inside it are matched
+                # literally; only the trailing '%' we append is a real wildcard.
+                rows = conn.execute(
+                    "SELECT id FROM movement WHERE idempotency_key = ?"
+                    " OR idempotency_key LIKE ? ESCAPE '\\' ORDER BY id",
+                    (stored_key, f"{_escape_like(stored_key)}#%"),
+                ).fetchall()
+                return [int(row["id"]) for row in rows]
+            batches = [_as_batch_view(row)
+                       for row in repo.list_batches_for_product(conn, product_id)]
+            allocations = allocate(batches, quantity)   # raises InsufficientStock
+            movement_ids: list[int] = []
+            for index, allocation in enumerate(allocations):
+                article_row = conn.execute(
+                    "SELECT article_id FROM batch WHERE id = ?", (allocation.batch_id,)
+                ).fetchone()
+                values = movement_values(allocation.quantity,
+                                         allocation.kcal_per_base_unit,
+                                         allocation.price_per_base_unit)
+                # One consumption can span several batches, but the key is UNIQUE:
+                # the first movement carries it, the next ones carry "key#1", "key#2".
+                key = None
+                if stored_key:
+                    key = stored_key if index == 0 else f"{stored_key}#{index}"
+                movement_ids.append(repo.insert_movement(
+                    conn, occurred_at=moment, product_id=product_id,
+                    article_id=article_row["article_id"], batch_id=allocation.batch_id,
+                    quantity=-allocation.quantity, reason=reason, kcal=values.kcal,
+                    cost=values.cost, idempotency_key=key,
+                ))
+                repo.set_batch_remaining(
+                    conn, allocation.batch_id, allocation.remaining_after,
+                    closed_at=moment if allocation.closes_batch else None,
+                )
+            return movement_ids
+
+    def consume_batch(self, batch_id: int, *, quantity: float | None = None,
+                      reason: str = REASON_CONSUMPTION,
+                      occurred_at: str | None = None) -> int:
+        """Take from one precise batch. Without a quantity, empties it.
+
+        The expiry list checks off a batch, not a product: FIFO must not apply.
+        """
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            row = conn.execute(
+                # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
+                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit"
+                " FROM batch b"
+                " JOIN article a ON a.id = b.article_id"
+                " JOIN product p ON p.id = a.product_id"
+                " WHERE b.id = ? AND b.closed_at IS NULL",
+                (batch_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown or closed batch {batch_id}")
+            taken = row["remaining"] if quantity is None else float(quantity)
+            if taken > row["remaining"] + QUANTITY_EPSILON:
+                raise InsufficientStock(requested=taken, available=row["remaining"])
+            remaining_after = row["remaining"] - taken
+            closes = is_empty(remaining_after)
+            values = movement_values(taken, row["kcal_per_base_unit"],
+                                     row["price_per_base_unit"])
+            movement_id = repo.insert_movement(
+                conn, occurred_at=moment, product_id=row["product_id"],
+                article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
+                reason=reason, kcal=values.kcal, cost=values.cost,
+            )
+            repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
+                                     closed_at=moment if closes else None)
+            return movement_id
+
+    def open_batch(self, batch_id: int, *, occurred_at: str | None = None) -> None:
+        """Mark a batch open and, if the product says so, bring its date closer."""
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            row = conn.execute(
+                "SELECT b.best_before, p.days_after_opening FROM batch b"
+                " JOIN article a ON a.id = b.article_id"
+                " JOIN product p ON p.id = a.product_id WHERE b.id = ?",
+                (batch_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown batch {batch_id}")
+            best_before = row["best_before"]
+            if row["days_after_opening"]:
+                shortened = (
+                    datetime.fromisoformat(moment).date()
+                    + timedelta(days=int(row["days_after_opening"]))
+                ).isoformat()
+                if best_before is None or shortened < best_before:
+                    best_before = shortened
+            repo.set_batch_opened(conn, batch_id, moment, best_before)
+
+    def transfer_batch(self, batch_id: int, location_id: int, *,
+                       occurred_at: str | None = None) -> int:
+        """Move a batch to another location. Nothing is consumed."""
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            row = conn.execute(
+                "SELECT b.article_id, a.product_id FROM batch b"
+                " JOIN article a ON a.id = b.article_id WHERE b.id = ?",
+                (batch_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown batch {batch_id}")
+            repo.set_batch_location(conn, batch_id, location_id)
+            return repo.insert_movement(
+                conn, occurred_at=moment, product_id=row["product_id"],
+                article_id=row["article_id"], batch_id=batch_id, quantity=0,
+                reason=REASON_TRANSFER, ref_type="location", ref_id=location_id,
+            )
+
+    def adjust_inventory(self, *, article_id: int, location_id: int,
+                         counted_quantity: float,
+                         occurred_at: str | None = None) -> int | None:
+        """Record what was actually counted. Returns the movement id, or None."""
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            article = repo.get_article(conn, article_id)
+            if article is None:
+                raise ValueError(f"unknown article {article_id}")
+            rows = conn.execute(
+                "SELECT * FROM batch WHERE article_id = ? AND location_id = ?"
+                " AND closed_at IS NULL", (article_id, location_id),
+            ).fetchall()
+            current = sum(row["remaining"] for row in rows)
+            delta = counted_quantity - current
+            if abs(delta) < QUANTITY_EPSILON:
+                return None
+            if delta < 0:
+                # Reuse the same BatchView construction as consume(): the rows
+                # from `SELECT * FROM batch` do not carry kcal_per_base_unit, so
+                # inject the article's rate before handing them to the helper.
+                views = [
+                    _as_batch_view({**dict(row), "kcal_per_base_unit": article["kcal_per_base_unit"]})
+                    for row in rows
+                ]
+                for allocation in allocate(views, -delta):
+                    repo.set_batch_remaining(
+                        conn, allocation.batch_id, allocation.remaining_after,
+                        closed_at=moment if allocation.closes_batch else None,
+                    )
+                batch_id = None
+            else:
+                batch_id = repo.insert_batch(
+                    conn, article_id=article_id, location_id=location_id,
+                    quantity=delta, entered_at=moment,
+                )
+            # kcal and cost stay NULL: a correction is not a consumption (spec 7.5).
+            return repo.insert_movement(
+                conn, occurred_at=moment, product_id=article["product_id"],
+                article_id=article_id, batch_id=batch_id, quantity=delta,
+                reason=REASON_INVENTORY,
+            )
+
+    # --- reads --------------------------------------------------------------
+
+    def query_stock(self, *, name: str | None = None) -> list[dict[str, Any]]:
+        """What is in stock, aggregated per product. Feeds the voice answer."""
+        rows = repo.stock_rows(self.db.read())
+        grouped: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            entry = grouped.setdefault(row["product_id"], {
+                "product_id": row["product_id"], "product_name": row["product_name"],
+                "base_unit": row["base_unit"], "quantity": 0.0, "batches": 0,
+            })
+            entry["quantity"] += row["remaining"]
+            entry["batches"] += 1
+        result = list(grouped.values())
+        if name:
+            needle = _fold_for_search(name)
+            result = [e for e in result if needle in _fold_for_search(e["product_name"])]
+        for entry in result:
+            entry["display"] = format_quantity(entry["quantity"], entry["base_unit"])
+        return sorted(result, key=lambda e: e["product_name"])
+
+    def summary(self, *, expiration_alert_days: int,
+                today: str | None = None) -> dict[str, Any]:
+        """The numbers the entities publish."""
+        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        limit = reference + timedelta(days=expiration_alert_days)
+        conn = self.db.read()
+        rows = repo.stock_rows(conn)
+
+        value = 0.0
+        value_by_location: dict[str, float] = {}
+        unpriced = 0
+        expiring: list[dict[str, Any]] = []
+        for row in rows:
+            if row["price_per_base_unit"] is None:
+                unpriced += 1
+            else:
+                line_value = row["remaining"] * row["price_per_base_unit"]
+                value += line_value
+                value_by_location[row["location_name"]] = (
+                    value_by_location.get(row["location_name"], 0.0) + line_value
+                )
+            if row["best_before"] and date.fromisoformat(row["best_before"]) <= limit:
+                expiring.append({
+                    "batch_id": row["id"], "product_name": row["product_name"],
+                    "best_before": row["best_before"],
+                    "display": format_quantity(row["remaining"], row["base_unit"]),
+                })
+
+        # Shortages come from the product table, not from stock_rows: a product
+        # whose stock reached zero has no open batch left, hence no row in
+        # stock_rows, and must still be reported as a shortage (spec: "at
+        # least one product under its threshold").
+        shortages = [
+            {"product_name": row["product_name"],
+             "display": format_quantity(row["quantity"], row["base_unit"])}
+            for row in repo.shortage_rows(conn)
+        ]
+        totals = repo.counted_totals(conn)
+        return {
+            "stock_value": round(value, 2),
+            "stock_value_by_location": {
+                location: round(amount, 2) for location, amount in value_by_location.items()
+            },
+            "unpriced_batches": unpriced,
+            "batch_count": len(rows),
+            "open_batch_count": sum(1 for row in rows if row["opened_at"]),
+            "expiring": sorted(expiring, key=lambda e: e["best_before"]),
+            "shortages": shortages,
+            "kcal_total": round(totals["kcal"], 1),
+            "cost_total": round(totals["cost"], 2),
+        }
+
+    def export_journal(self) -> list[dict[str, Any]]:
+        """The whole append-only journal. It is enough to rebuild everything."""
+        return repo.list_movements(self.db.read())

@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Garde-manger",
+        "description": "Rien à configurer : la base est créée dans le dossier de configuration."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Le garde-manger est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options du garde-manger",
+        "data": {
+          "expiration_alert_days": "Alerter combien de jours avant la date limite"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stock_value": { "name": "Valeur du stock" },
+      "batches": { "name": "Lots en stock" },
+      "kcal_total": { "name": "Kilocalories sorties du stock" },
+      "cost_total": { "name": "Coût des sorties de stock" }
+    },
+    "binary_sensor": {
+      "expirations": { "name": "Péremptions proches" },
+      "shortages": { "name": "Ruptures" }
+    },
+    "todo": {
+      "expirations": { "name": "À consommer" }
+    }
+  }
+}
