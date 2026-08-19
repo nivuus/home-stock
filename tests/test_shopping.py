@@ -1,6 +1,8 @@
 """The shopping session, end to end, without Home Assistant."""
 import pytest
 
+from custom_components.home_stock import application as application_module
+from custom_components.home_stock import shopping as shopping_module
 from custom_components.home_stock.application import StockManager
 from custom_components.home_stock.shopping import ShoppingError, ShoppingService
 from custom_components.home_stock.storage.database import Database
@@ -163,9 +165,25 @@ def test_storing_the_last_line_closes_the_session(service):
     assert service.current() is None
 
 
-def test_a_shelf_life_is_learned_from_what_was_actually_posed(service):
+def test_a_shelf_life_is_learned_from_what_was_actually_posed(service, monkeypatch):
+    """The median of the last three, not the last one — pinned independently
+    of the day this test happens to run.
+
+    entered_at (read back by recent_shelf_lives) comes from
+    application._now(), used inside StockManager.add_stock; scanned_at and
+    stored_at come from shopping._now(). Both module-level clocks are frozen
+    here — patching only one would leave the batch's entered_at floating on
+    the real date, and the fix round exists precisely because that happened.
+    """
+    frozen_now = "2026-01-01T10:00:00"
+    monkeypatch.setattr(shopping_module, "_now", lambda: frozen_now)
+    monkeypatch.setattr(application_module, "_now", lambda: frozen_now)
+
     service.start(store="Leclerc")
-    for index, best_before in enumerate(["2026-09-01", "2026-09-03", "2026-09-02"]):
+    # entered_at is pinned to 2026-01-01. Offsets to best_before are the same
+    # {13, 15, 14} days as the original test, stored out of date order so the
+    # *last* line posed does not carry the middle offset.
+    for index, best_before in enumerate(["2026-01-14", "2026-01-16", "2026-01-15"]):
         line = service.add_line(article_id=10, quantity=500, unit_price=None,
                                 idempotency_key=f"a{index}")
         service.store_line(line["id"], location_id=1, best_before=best_before)
@@ -173,9 +191,62 @@ def test_a_shelf_life_is_learned_from_what_was_actually_posed(service):
     with service.manager.db.write() as conn:
         row = conn.execute(
             "SELECT default_shelf_life_days FROM product WHERE id = 1").fetchone()
-    # Median of the three, not the last one: one odd date must not move the default.
-    # entered_at is "today" (2026-08-19, the day this task was implemented), so
-    # the three shelf lives are 2026-08-19 -> {09-01, 09-03, 09-02} = {13, 15, 14}
-    # days. Their median is the middle value once sorted: 14, from 09-02 — not
-    # 15, the last one stored.
+    # Median of {13, 15, 14} sorted -> {13, 14, 15} is 14 (2026-01-15, the
+    # middle date entered) — not 15 (2026-01-16, the last one stored). This
+    # literal is hand-computed, not re-derived with the production code's own
+    # julianday/median arithmetic: doing that would only prove the code
+    # agrees with itself.
     assert row["default_shelf_life_days"] == 14
+
+
+def test_storing_a_priced_line_writes_exactly_one_price_row(service):
+    """The observation happens once, in the aisle, with its shop.
+
+    Regression for the fix round: add_stock used to insert a second,
+    unconditional price row at put-away time, stamped with store=None,
+    silently doubling every priced line in the price history that feeds the
+    suggestion cascade. Asserting the count, not just presence, is the point.
+    """
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=0.002,
+                            idempotency_key="a")
+    service.checkout()
+
+    service.store_line(line["id"], location_id=1, best_before=None)
+
+    with service.manager.db.write() as conn:
+        rows = conn.execute("SELECT store, source FROM price").fetchall()
+    assert len(rows) == 1
+    assert (rows[0]["store"], rows[0]["source"]) == ("Leclerc", "manual")
+
+
+def test_update_line_refuses_a_stored_line_and_writes_only_the_given_field(service):
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=0.002,
+                            idempotency_key="a")
+
+    updated = service.update_line(line["id"], quantity=750)
+
+    assert updated["quantity"] == pytest.approx(750)
+    assert updated["unit_price"] == pytest.approx(0.002)  # untouched by the update
+
+    service.checkout()
+    service.store_line(line["id"], location_id=1, best_before=None)
+
+    with pytest.raises(ShoppingError, match="rangée"):
+        service.update_line(line["id"], quantity=1000)
+
+
+def test_close_moves_an_open_session_to_done_and_stamps_closed_at(service):
+    service.start(store="Leclerc")
+
+    result = service.close()
+
+    assert result["state"] == "done"
+    assert result["closed_at"] is not None
+    assert service.current() is None
+
+
+def test_close_without_a_session_is_refused(service):
+    with pytest.raises(ShoppingError):
+        service.close()

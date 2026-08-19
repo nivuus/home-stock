@@ -117,7 +117,18 @@ class ShoppingService:
 
     def store_line(self, line_id: int, *, location_id: int,
                    best_before: str | None) -> dict[str, Any]:
-        """Turn a bought line into a real batch. This is where stock is created."""
+        """Turn a bought line into a real batch. This is where stock is created.
+
+        Known, harmless race: the read below takes no lock, so two concurrent
+        calls on the same not-yet-stored line can both pass the `stored_at`
+        check and both reach add_stock(). That is safe because add_stock is
+        idempotent on `f"shopping_line:{line_id}"` — the second call finds the
+        first call's movement and returns its batch_id instead of creating a
+        second batch. The only redundant work is below: mark_line_stored runs
+        twice (same values), the shelf life is learned twice from the same
+        data, and the session-close check runs twice — all idempotent in
+        effect, so not worth a lock for.
+        """
         line = self._line(self.manager.db.read(), line_id)
         if line["stored_at"]:
             return {"line_id": line_id, "batch_id": line["batch_id"],
@@ -127,11 +138,16 @@ class ShoppingService:
         # own transaction, so the read above must already be finished (it is
         # — self.manager.db.read() never took the lock) and this call must
         # not be nested inside another with self.manager.db.write() block.
+        # record_price_observation=False: the price was already recorded, with
+        # its shop, at scan time in add_line() — put-away is not a second
+        # observation, and writing it again here duplicated every priced
+        # line's price history.
         batch_id = self.manager.add_stock(
             article_id=line["article_id"], quantity=line["quantity"],
             location_id=location_id, best_before=best_before,
             price_per_base_unit=line["unit_price"],
             idempotency_key=f"shopping_line:{line_id}",
+            record_price_observation=False,
         )
 
         with self.manager.db.write() as conn:

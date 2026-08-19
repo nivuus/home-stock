@@ -99,8 +99,16 @@ class StockManager:
                   price_per_base_unit: float | None = None,
                   packaging_base_quantity: float | None = None,
                   occurred_at: str | None = None,
-                  idempotency_key: str | None = None) -> int:
-        """Create a batch and its purchase movement. Returns the batch id."""
+                  idempotency_key: str | None = None,
+                  record_price_observation: bool = True) -> int:
+        """Create a batch and its purchase movement. Returns the batch id.
+
+        `record_price_observation` defaults to True for every existing
+        caller. The one caller that must pass False is the shopping session
+        (shopping.store_line): a price observed in the aisle is recorded at
+        the moment of the scan, with the shop it was seen in — put-away time
+        is not a second observation, so add_stock must not write it again.
+        """
         moment = occurred_at or _now()
         amount = to_base_quantity(quantity, packaging_base_quantity)
         stored_key = _namespaced_key("add_stock", idempotency_key)
@@ -129,7 +137,7 @@ class StockManager:
                 kcal=values.kcal, cost=values.cost,
                 idempotency_key=stored_key,
             )
-            if price_per_base_unit is not None:
+            if price_per_base_unit is not None and record_price_observation:
                 repo.insert_price(
                     conn, article_id=article_id, observed_on=moment[:10],
                     price_per_base_unit=price_per_base_unit, source="manual",
