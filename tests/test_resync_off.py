@@ -1,6 +1,7 @@
 """home_stock.resync_off: a background catalogue refresh from Open Food Facts."""
 import asyncio
 import json
+import threading
 
 import pytest
 import voluptuous as vol
@@ -116,6 +117,34 @@ async def test_a_hand_corrected_field_survives_a_resync_that_disagrees(
     assert article["off_source"] == "food"
     assert article["off_synced_at"] is not None
     assert json.loads(article["off_raw"])["code"] == "3229820129488"
+
+
+async def test_manual_fields_cannot_suppress_the_record_of_the_sync_itself(
+        hass: HomeAssistant, entry):
+    """off_synced_at/off_raw are never subject to manual_fields, even if a
+    hand-edited (or corrupted) manual_fields value happens to name them —
+    the panel itself can never put them there (it validates against
+    ARTICLE_EDITABLE, which does not include either), but the review
+    ruling was explicit: a human may protect a value, never the fact that
+    a resync ran."""
+    manager = entry.runtime_data.manager
+    article_id = await hass.async_add_executor_job(
+        lambda: _seed_article(manager, kcal_per_base_unit=9.9,
+                              manual_fields=("off_synced_at", "off_raw")))
+
+    await hass.services.async_call(DOMAIN, "resync_off", {"article_id": article_id},
+                                   blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    def _read():
+        return repo.get_article(manager.db.read(), article_id)
+
+    article = await hass.async_add_executor_job(_read)
+    assert article["off_synced_at"] is not None
+    assert article["off_raw"] is not None
+    # kcal_per_base_unit was never named as protected here, so OFF's answer
+    # still won for it — this is not accidentally protecting everything.
+    assert article["kcal_per_base_unit"] == pytest.approx(3.6)
 
 
 async def test_an_unprotected_field_is_overwritten_by_the_resync(
@@ -283,22 +312,22 @@ async def test_resync_off_refuses_a_second_run_while_one_is_in_progress(
         hass: HomeAssistant, entry):
     """OFF's own rate limit is measured per client, not per request
     (off/client.py's own module docstring: one 429 after about twenty calls
-    at 1.5 s apart) — two passes running at once would double it."""
+    at 1.5 s apart) — two passes running at once would double it. Sets the
+    real guard flag directly, rather than driving an actual in-flight pass,
+    to test the guard's own logic in isolation from timing — the race
+    between two real concurrent calls is what the test below this one
+    proves instead."""
     manager = entry.runtime_data.manager
     article_id = await hass.async_add_executor_job(
         lambda: _seed_article(manager, kcal_per_base_unit=9.9))
 
-    async def never_finishes() -> None:
-        await asyncio.Event().wait()
-
-    entry.runtime_data.resync_task = hass.async_create_background_task(
-        never_finishes(), "test in-flight resync")
+    entry.runtime_data.resync_in_progress = True
 
     with pytest.raises(HomeAssistantError, match="déjà en cours"):
         await hass.services.async_call(
             DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
 
-    entry.runtime_data.resync_task.cancel()
+    entry.runtime_data.resync_in_progress = False
 
 
 async def test_resync_off_allows_a_new_run_once_the_previous_one_is_done(
@@ -307,18 +336,86 @@ async def test_resync_off_allows_a_new_run_once_the_previous_one_is_done(
     article_id = await hass.async_add_executor_job(
         lambda: _seed_article(manager, kcal_per_base_unit=9.9))
 
-    async def already_finished() -> None:
-        return None
+    assert entry.runtime_data.resync_in_progress is False
 
-    entry.runtime_data.resync_task = hass.async_create_background_task(
-        already_finished(), "test finished resync")
-    await hass.async_block_till_done(wait_background_tasks=True)
-    assert entry.runtime_data.resync_task.done()
-
-    # Must not raise: a finished task must never block the next run.
+    # Must not raise: nothing is in progress yet.
     await hass.services.async_call(
         DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
     await hass.async_block_till_done(wait_background_tasks=True)
+
+    # The flag releases once the pass finishes...
+    assert entry.runtime_data.resync_in_progress is False
+
+    # ...so a second call afterwards is not refused either.
+    await hass.services.async_call(
+        DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.runtime_data.resync_in_progress is False
+
+    def _read():
+        return repo.get_article(manager.db.read(), article_id)["brand"]
+
+    assert (await hass.async_add_executor_job(_read)) == "Bjorg"
+
+
+async def test_two_concurrent_calls_start_exactly_one_pass(
+        hass: HomeAssistant, entry, monkeypatch):
+    """The bug found in review round 2: the guard used to be claimed only
+    after the barcode-list read, an `await` away from the check. Two
+    automations firing at the same moment used to both pass the check and
+    both start a pass, with `resync_task` left naming only the second.
+
+    A plain `asyncio.gather` of two `hass.services.async_call(...)`s does
+    NOT reliably exercise this: the barcode-list read resolves fast enough
+    in this harness that the two calls run one to completion before the
+    other's check ever runs, regardless of whether the guard has the race
+    — confirmed by reverting the fix locally and re-running exactly that
+    construction, which still passed. This test instead pauses the first
+    call's barcode-list read on a real `threading.Event`, mid-flight —
+    genuinely overlapping the two calls' execution, the way two automations
+    firing "at the same moment" actually would — and only then issues the
+    second call, so the outcome is deterministic rather than a coin flip on
+    however this event loop happens to schedule two coroutines today.
+    """
+    manager = entry.runtime_data.manager
+    article_id = await hass.async_add_executor_job(
+        lambda: _seed_article(manager, kcal_per_base_unit=9.9))
+
+    entered_first_call = threading.Event()
+    release_first_call = threading.Event()
+    real_barcodes_to_resync = repo.barcodes_to_resync
+
+    def _paused_once(conn, **kwargs):
+        # Only the first call pauses — the second (and the real work once
+        # released) must run normally, or this would deadlock.
+        if not entered_first_call.is_set():
+            entered_first_call.set()
+            assert release_first_call.wait(timeout=5), "second call never arrived"
+        return real_barcodes_to_resync(conn, **kwargs)
+
+    monkeypatch.setattr(repo, "barcodes_to_resync", _paused_once)
+
+    first_call = hass.async_create_task(
+        hass.services.async_call(DOMAIN, "resync_off", {"article_id": article_id},
+                                 blocking=True))
+
+    # Block until the first call is provably inside its barcode-list read —
+    # past its own check, not yet at the point (old, buggy code) or before
+    # the point (fixed code) it claims the slot.
+    await hass.async_add_executor_job(entered_first_call.wait, 5)
+
+    with pytest.raises(HomeAssistantError, match="déjà en cours"):
+        await hass.services.async_call(
+            DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
+
+    # Let the first call's paused read through, and let it run to completion.
+    release_first_call.set()
+    await first_call
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    # The refusal did not leave anything stuck: the one pass that did run
+    # released the flag, and it actually applied OFF's answer.
+    assert entry.runtime_data.resync_in_progress is False
 
     def _read():
         return repo.get_article(manager.db.read(), article_id)["brand"]
@@ -346,11 +443,20 @@ async def test_resync_off_a_code_off_no_longer_knows_is_a_no_op(hass: HomeAssist
 
 
 async def test_resync_off_refuses_no_target_at_all(hass: HomeAssistant, entry):
-    """"all" no longer defaults to False, so has_at_least_one_key actually
-    means something: a call naming nothing to resync is refused instead of
-    quietly resyncing nothing."""
+    """A call naming nothing to resync is refused instead of quietly
+    resyncing nothing."""
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "resync_off", {}, blocking=True)
+
+
+async def test_resync_off_refuses_all_explicitly_false_with_nothing_else(
+        hass: HomeAssistant, entry):
+    """The exact no-op the ruling set out to remove: "all" left at its own
+    unchecked (`False`) state in the UI, with no id chosen either, used to
+    pass validation and silently resync nothing."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, "resync_off", {"all": False}, blocking=True)
 
 
 async def test_resync_off_refuses_an_id_and_the_catalogue_box_together(

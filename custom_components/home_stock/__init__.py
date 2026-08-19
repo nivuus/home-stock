@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -49,11 +49,13 @@ class HomeStockData:
     # seconds of real wall clock — the same pattern OffClient's own
     # `sleeper` constructor argument already uses.
     resync_sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep
-    # The in-flight resync_off background task, if any: lets the service
-    # refuse a second pass on top of a running one (OFF's rate limit is
-    # measured per client, not per request) instead of doubling the request
-    # rate against it.
-    resync_task: asyncio.Task[None] | None = field(default=None, compare=False)
+    # Claimed synchronously (no `await` between the check and the set) at
+    # the top of services.resync_off, before the barcode list is even read:
+    # lets the service refuse a second pass on top of a running one — OFF's
+    # rate limit is measured per client, not per request, so two passes at
+    # once would double the request rate against it — no matter how two
+    # concurrent calls interleave.
+    resync_in_progress: bool = False
 
 
 type HomeStockConfigEntry = ConfigEntry[HomeStockData]

@@ -153,6 +153,7 @@ resync_off:
       selector: { number: { min: 1, mode: box } }
     all:
       name: Tout le catalogue
-      description: Resynchronise tous les articles ayant un code-barres.
-      default: false
+      description: >-
+        Resynchronise tous les articles ayant un code-barres. Laisser vide pour
+        cibler un article ou un produit précis à la place.
       selector: { boolean: }

@@ -1,7 +1,6 @@
 """Home Assistant services. Every write refreshes the coordinator on success."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from functools import partial
@@ -71,19 +70,31 @@ INVENTORY_SCHEMA = vol.Schema({
     vol.Required("counted_quantity"): finite_float,
 })
 QUERY_SCHEMA = vol.Schema({vol.Optional("name"): cv.string})
+def _at_least_one_resync_target(value: dict[str, Any]) -> dict[str, Any]:
+    """"all" must be affirmatively true to count as a target: `has_at_least_
+    one_key` alone would let `{"all": False}` — the field's own unchecked
+    state in the UI, with no article_id or product_id either — through as
+    if something had been chosen, and silently resync nothing. That is
+    exactly the no-op this check exists to refuse, in French rather than
+    voluptuous's own generic English.
+    """
+    if value.get("article_id") is None and value.get("product_id") is None \
+            and not value.get("all"):
+        raise vol.Invalid(
+            "Choisissez un article, un produit ou tout le catalogue à resynchroniser.")
+    return value
+
+
 RESYNC_SCHEMA = vol.Schema(vol.All(
     {
-        # All three exclusive: no default on "all", so has_at_least_one_key
-        # below actually means something — a call with none of the three
-        # is refused instead of quietly resyncing nothing, and a call with
-        # both an id and the catalogue box ticked is refused instead of one
-        # silently winning a forty-minute pass the caller may not have meant
-        # to start.
+        # All three exclusive: a call naming two of them (an id AND the
+        # catalogue box ticked) is refused instead of one silently winning
+        # a forty-minute pass the caller may not have meant to start.
         vol.Exclusive("article_id", "resync_target"): _id,
         vol.Exclusive("product_id", "resync_target"): _id,
         vol.Exclusive("all", "resync_target"): cv.boolean,
     },
-    cv.has_at_least_one_key("article_id", "product_id", "all"),
+    _at_least_one_resync_target,
 ))
 
 
@@ -112,6 +123,11 @@ async def _run(hass: HomeAssistant, work) -> Any:
         # gap in that validation answers a French refusal instead of
         # "Unknown error".
         raise HomeAssistantError("Valeur numérique hors limites.") from error
+
+
+# Written unconditionally by _write_resync: a human can protect a value,
+# never the fact that a sync happened at all or what it answered.
+_NEVER_PROTECTED: Final = frozenset({"off_synced_at", "off_raw"})
 
 
 def _write_resync(runtime, article_id: int, record: OffRecord) -> None:
@@ -166,7 +182,13 @@ def _write_resync(runtime, article_id: int, record: OffRecord) -> None:
             record.product, record.off_source, product["base_unit"],
             synced_at=dt_util.utcnow().replace(microsecond=0, tzinfo=None).isoformat())
         values = dict(ingest.values)
-        for column in protected:
+        # A human can protect a value, never the fact that a resync ran:
+        # off_synced_at/off_raw are excluded from the pop below even if a
+        # hand-edited (or corrupted) manual_fields value happened to name
+        # them — the panel itself can never put them there (it validates
+        # against ARTICLE_EDITABLE, which does not include either), but
+        # this function must not trust that path is the only way in.
+        for column in protected - _NEVER_PROTECTED:
             values.pop(column, None)
 
         repo.update_article_fields(conn, article_id, values)
@@ -271,48 +293,75 @@ def async_register_services(hass: HomeAssistant) -> None:
         which barcodes are concerned and returns. Refuses to start a second
         pass on top of a running one: Open Food Facts' own rate limit is
         measured per client, not per request, so two passes at once would
-        double the request rate against it. Tied to the config entry
-        (`entry.async_create_background_task`, not `hass.async_create_
-        background_task`) so unloading the entry mid-pass cancels it instead
-        of leaving it writing to a database that is about to close.
+        double the request rate against it.
+
+        The slot is claimed by setting `resync_in_progress` synchronously,
+        with no `await` between the check and the claim: two automations
+        firing at the same moment both reach this handler, and cooperative
+        asyncio only guarantees exclusivity across a stretch of code with no
+        suspension point in it. Claiming it only after the barcode-list read
+        below (an earlier version of this fix did exactly that) leaves a
+        window where both calls read `False` before either writes `True` —
+        both start a pass, and the field then only names the second, making
+        the first invisible to the guard for the rest of its forty minutes.
+
+        Tied to the config entry (`entry.async_create_background_task`, not
+        `hass.async_create_background_task`) so unloading the entry mid-pass
+        cancels it instead of leaving it writing to a database that is about
+        to close.
         """
         entry = _entry(hass)
         runtime = entry.runtime_data
-        if runtime.resync_task is not None and not runtime.resync_task.done():
+        if runtime.resync_in_progress:
             raise HomeAssistantError(
                 "Une resynchronisation Open Food Facts est déjà en cours.")
+        runtime.resync_in_progress = True
 
-        codes = await hass.async_add_executor_job(partial(
-            repo.barcodes_to_resync, runtime.manager.db.read(),
-            article_id=call.data.get("article_id"),
-            product_id=call.data.get("product_id"),
-            everything=call.data.get("all", False),
-        ))
+        try:
+            codes = await hass.async_add_executor_job(partial(
+                repo.barcodes_to_resync, runtime.manager.db.read(),
+                article_id=call.data.get("article_id"),
+                product_id=call.data.get("product_id"),
+                everything=call.data.get("all", False),
+            ))
+        except Exception:
+            # Claimed the slot above but never actually started a pass:
+            # release it again so a transient read failure does not lock
+            # resync_off out forever.
+            runtime.resync_in_progress = False
+            raise
 
         async def run() -> None:
-            for index, (code, article_id) in enumerate(codes):
-                if index:
-                    await runtime.resync_sleeper(BULK_INTERVAL)
-                try:
-                    result = await runtime.off_client.lookup_with_retry(code)
-                    if result.record is None:
-                        continue
-                    await hass.async_add_executor_job(partial(
-                        _write_resync, runtime, article_id, result.record))
-                except Exception:  # noqa: BLE001 - deliberately catches
-                    # everything: a single bad card (a malformed OFF answer,
-                    # a transient database error from a mid-pass reload, a
-                    # bug this review round did not anticipate) must not be
-                    # why the other ~298 products in the catalogue never get
-                    # their turn. Logged with the barcode so the failure is
-                    # findable, not silent.
-                    _LOGGER.exception(
-                        "home_stock: resync_off failed for barcode %s (article %s)",
-                        code, article_id)
-            await runtime.coordinator.async_request_refresh()
+            try:
+                for index, (code, article_id) in enumerate(codes):
+                    if index:
+                        await runtime.resync_sleeper(BULK_INTERVAL)
+                    try:
+                        result = await runtime.off_client.lookup_with_retry(code)
+                        if result.record is None:
+                            continue
+                        await hass.async_add_executor_job(partial(
+                            _write_resync, runtime, article_id, result.record))
+                    except Exception:  # noqa: BLE001 - deliberately catches
+                        # everything: a single bad card (a malformed OFF
+                        # answer, a transient database error from a mid-pass
+                        # reload, a bug this review round did not
+                        # anticipate) must not be why the other ~298
+                        # products in the catalogue never get their turn.
+                        # Logged with the barcode so the failure is
+                        # findable, not silent.
+                        _LOGGER.exception(
+                            "home_stock: resync_off failed for barcode %s (article %s)",
+                            code, article_id)
+                await runtime.coordinator.async_request_refresh()
+            finally:
+                # Runs on normal completion, on a per-card exception already
+                # caught above, and on cancellation (the entry unloading
+                # mid-pass) alike: the slot must never stay claimed after
+                # the pass that claimed it is actually gone.
+                runtime.resync_in_progress = False
 
-        runtime.resync_task = entry.async_create_background_task(
-            hass, run(), "home_stock resync_off")
+        entry.async_create_background_task(hass, run(), "home_stock resync_off")
 
     hass.services.async_register(DOMAIN, "add_stock", add_stock, schema=ADD_STOCK_SCHEMA)
     hass.services.async_register(DOMAIN, "consume", consume, schema=CONSUME_SCHEMA)

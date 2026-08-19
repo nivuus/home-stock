@@ -63,6 +63,15 @@ ARTICLE_OFF_SCHEMA: Final[dict[str, Callable[[Any], Any]]] = {
     "nutriscore": vol.Any(_GRADE, None),
     "nova": _NOVA,
     "ecoscore": _TEXT,
+    # Free text from a collaborative database, exactly like label/brand: a
+    # long tag list (many allergens, many additives) belongs under the same
+    # cap, not an unbounded one just because it happens to be a join of tags
+    # rather than a single name — drop_invalid_off_values reports whichever
+    # one it drops the same way it already does for label.
+    "allergens": _TEXT,
+    "traces": _TEXT,
+    "additives": _TEXT,
+    "off_labels": _TEXT,
 }
 
 

@@ -92,3 +92,17 @@ def test_an_off_no_grade_sentinel_reports_nothing_dropped():
 
     assert "nutriscore" not in ingest.values
     assert ingest.dropped_fields == []
+
+
+def test_an_oversized_allergens_list_is_dropped_and_reported():
+    """allergens/traces/additives/off_labels are free text from a
+    collaborative database exactly like label/brand — a crafted (or simply
+    very long) tag list must not reach the database unbounded."""
+    off_payload = {**MUESLI, "allergens_tags": ["en:milk"] * 100}
+
+    ingest = build_article_values(off_payload, "food", "g", synced_at="2026-08-19T10:00:00")
+
+    assert "allergens" not in ingest.values
+    assert "allergens" in ingest.dropped_fields
+    # The rest of the record is unaffected by one oversized tag list.
+    assert ingest.values["brand"] == "Bjorg"
