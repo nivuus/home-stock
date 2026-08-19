@@ -59,6 +59,9 @@ CATEGORY_TO_AISLE: Final = {
 # OFF category tags, from the specific to the generic. resolve_aisle() walks
 # categories_tags backwards — OFF orders them general first — so the first
 # match is the most precise statement OFF makes about the product.
+# Non-food aisle entries (household, beauty, petfood) classify items found in the
+# food database; they are not dead weight. resolve_aisle() scopes lookups by
+# off_source, so these only match when processing food records.
 TAG_TO_AISLE: Final = {
     "en:fresh-vegetables": "Fruits et légumes",
     "en:vegetables": "Fruits et légumes",
@@ -137,9 +140,20 @@ SOURCE_TO_AISLE: Final = {
 
 
 def resolve_aisle(categories_tags: list[str] | None, off_source: str | None) -> str:
-    """Pick the aisle a scanned article belongs to. Always returns a real aisle."""
-    for tag in reversed(categories_tags or []):
-        aisle = TAG_TO_AISLE.get(tag)
-        if aisle is not None:
-            return aisle
+    """Pick the aisle a scanned article belongs to. Always returns a real aisle.
+
+    OFF orders categories_tags from general to specific. We walk them backwards
+    to match the most specific tag first. Tags are normalized (lowercased, spaces
+    replaced with hyphens) to handle variations in OFF data.
+
+    TAG_TO_AISLE is consulted only for 'food' source; non-food sources go
+    straight to SOURCE_TO_AISLE to avoid cross-database contamination (e.g.,
+    en:Creams on beauty is a hand cream, not dairy).
+    """
+    if off_source == "food":
+        for tag in reversed(categories_tags or []):
+            normalized_tag = tag.lower().replace(" ", "-")
+            aisle = TAG_TO_AISLE.get(normalized_tag)
+            if aisle is not None:
+                return aisle
     return SOURCE_TO_AISLE.get(off_source or "", FALLBACK_AISLE)
