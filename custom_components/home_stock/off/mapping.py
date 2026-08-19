@@ -253,12 +253,13 @@ def to_article_columns(per_base_unit: dict[str, float] | None) -> dict[str, floa
     `kcal` is stored in `article.kcal_per_base_unit`; the other eight keep
     their name. `repo.insert_article` silently drops keys it does not know,
     so a caller passing the raw dict would lose the calories and nothing
-    would say so — this function is the seam that prevents it.
+    would say so — this function is the seam meant to prevent exactly that.
+    A silent filter would BE that same failure mode one level up, so an
+    unrecognised key raises instead of vanishing.
     """
     if not per_base_unit:
         return {}
-    return {
-        _ARTICLE_COLUMN_NAMES[key]: value
-        for key, value in per_base_unit.items()
-        if key in _ARTICLE_COLUMN_NAMES
-    }
+    unexpected = sorted(set(per_base_unit) - set(_ARTICLE_COLUMN_NAMES))
+    if unexpected:
+        raise ValueError(f"unexpected nutrition keys: {unexpected}")
+    return {_ARTICLE_COLUMN_NAMES[key]: value for key, value in per_base_unit.items()}

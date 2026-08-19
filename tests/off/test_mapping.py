@@ -62,6 +62,28 @@ def test_a_lone_trailing_comma_is_rejected_rather_than_guessed():
     assert parse_net_quantity({"product_quantity": "1,", "product_quantity_unit": "kg"}) is None
 
 
+@pytest.mark.parametrize(
+    "unit, amount, expected",
+    [
+        ("g", 250, (250.0, "g")),
+        ("gr", 250, (250.0, "g")),
+        ("gram", 250, (250.0, "g")),
+        ("grammes", 250, (250.0, "g")),
+        ("kg", 1.5, (1500.0, "g")),
+        # A wrong factor here is exactly the class of bug this module exists
+        # to prevent: a mangled "mg" -> "g" factor would report 500 mg of a
+        # spice as 500 g, a thousand-fold overstatement.
+        ("mg", 500, (0.5, "g")),
+        ("ml", 250, (250.0, "ml")),
+        ("cl", 75, (750.0, "ml")),
+        ("dl", 5, (500.0, "ml")),
+        ("l", 1.5, (1500.0, "ml")),
+    ],
+)
+def test_every_unit_to_base_factor_is_pinned(unit, amount, expected):
+    assert parse_net_quantity({"product_quantity": amount, "product_quantity_unit": unit}) == expected
+
+
 # --- nutrition --------------------------------------------------------------
 
 def test_nutrition_comes_back_per_100_grams():
@@ -90,6 +112,44 @@ def test_values_given_per_serving_are_brought_back_to_100_grams():
 
 def test_prepared_values_are_ignored_because_we_stock_the_dry_product():
     mapped = map_article(_anomaly("prepare_seulement"), "food")
+    assert mapped.nutrition_per_100 is None
+
+
+def test_a_present_per_100_table_is_not_overwritten_by_a_serving_table():
+    """The per-100 table is the source of truth; the per-serving table is
+    only ever a fallback for its ABSENCE. Twenty-five of the thirty-four
+    real records carry both key families, so this is not a theoretical
+    case: if the "no per-100 data yet" guard around the serving fallback
+    were ever lost, a record's real per-100 figures would silently be
+    overwritten by its (here, deliberately disagreeing) per-serving ones.
+    Built inline rather than added to anomalies.json: this shape — a
+    complete per-100 table plus a contradicting per-serving one — did not
+    occur in the real captured data, so it does not belong in the fixture
+    that records what real data actually looks like."""
+    product = {
+        "nutriments": {
+            "energy-kcal_100g": 360,
+            "energy-kcal_serving": 150,  # 150 kcal / 30 g would rescale to 500/100g
+        },
+        "serving_quantity": 30,
+        "nutrition_data_per": "serving",
+    }
+    mapped = map_article(product, "food")
+    assert mapped.nutrition_per_100["kcal"] == pytest.approx(360)
+
+
+def test_serving_values_are_not_rescaled_without_an_explicit_per_serving_claim():
+    """*_serving keys are only trusted as a per-100 stand-in when OFF itself
+    marks nutrition_data_per == "serving". Without that explicit claim we do
+    not actually know what basis those numbers are on, and must not invent a
+    rescaling — the record must come back with no usable nutrition instead
+    of a confidently wrong one."""
+    product = {
+        "nutriments": {"energy-kcal_serving": 108},
+        "serving_quantity": 30,
+        "nutrition_data_per": "100g",
+    }
+    mapped = map_article(product, "food")
     assert mapped.nutrition_per_100 is None
 
 
@@ -193,6 +253,15 @@ def test_kcal_is_renamed_to_its_article_column():
 
 def test_none_yields_an_empty_dict_of_columns():
     assert to_article_columns(None) == {}
+
+
+def test_an_unexpected_nutrition_key_raises_instead_of_vanishing():
+    """This function's whole purpose is to be the seam where a key that
+    would otherwise vanish through repo.insert_article's silent filtering
+    stops the caller instead. Filtering it out here too would just move the
+    same silent failure one step earlier."""
+    with pytest.raises(ValueError):
+        to_article_columns({"kcal": 3.5, "mystery": 1.0})
 
 
 # --- the real catalogue -----------------------------------------------------
