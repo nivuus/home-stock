@@ -1,18 +1,14 @@
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.aisles import AISLES
-from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.storage import repositories as repo
+
+from conftest import setup_entry
 
 
 @pytest.fixture
 async def entry(hass):
-    entry = MockConfigEntry(domain=DOMAIN, data={})
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
+    return await setup_entry(hass)
 
 
 @pytest.fixture
@@ -91,10 +87,7 @@ async def test_product_get_reports_an_unknown_id(client):
 
 
 async def test_movements_list_returns_them_in_order_and_respects_since(hass, hass_ws_client):
-    entry = MockConfigEntry(domain=DOMAIN, data={})
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    entry = await setup_entry(hass)
     manager = entry.runtime_data.manager
 
     def _seed() -> None:

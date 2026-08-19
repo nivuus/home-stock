@@ -7,11 +7,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.loader import async_get_integration
 
 from .application import StockManager
-from .const import DATABASE_FILENAME
+from .const import DATABASE_FILENAME, DOMAIN
 from .coordinator import HomeStockCoordinator
+from .off.client import AiohttpTransport, OffClient
 from .services import async_register_services
+from .shopping import ShoppingService
 from .storage.database import Database
 from .storage.migrations import apply_migrations
 from .websocket_api import async_register_websocket
@@ -26,6 +30,9 @@ class HomeStockData:
     database: Database
     manager: StockManager
     coordinator: HomeStockCoordinator
+    shopping: ShoppingService
+    off_client: OffClient
+    user_agent: str
 
 
 type HomeStockConfigEntry = ConfigEntry[HomeStockData]
@@ -53,7 +60,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     manager = StockManager(database)
     coordinator = HomeStockCoordinator(hass, entry, manager)
     await coordinator.async_config_entry_first_refresh()
-    entry.runtime_data = HomeStockData(database, manager, coordinator)
+
+    # OFF refuses anonymous clients, so the agent names the integration, its
+    # version and a way to reach its owner — the contact OFF asks for.
+    version = (await async_get_integration(hass, DOMAIN)).version or "1.0"
+    user_agent = f"home_stock/{version} (Home Assistant; maxime@allanic.me)"
+    off_client = OffClient(
+        AiohttpTransport(async_get_clientsession(hass)), user_agent=user_agent
+    )
+    shopping = ShoppingService(manager)
+
+    entry.runtime_data = HomeStockData(
+        database, manager, coordinator, shopping, off_client, user_agent
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
