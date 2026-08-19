@@ -1,12 +1,14 @@
 """home_stock.resync_off: a background catalogue refresh from Open Food Facts."""
+import asyncio
 import json
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.home_stock.const import DOMAIN
-from custom_components.home_stock.off.client import OffLookup, OffRecord
+from custom_components.home_stock.off.client import BULK_INTERVAL, OffLookup, OffRecord
 from custom_components.home_stock.storage import repositories as repo
 
 MUESLI = {
@@ -22,6 +24,11 @@ MUESLI = {
                    "fat_100g": 6, "salt_100g": 0.02},
 }
 
+# Only a name — no brand, no net weight, no Nutri-Score, no nutrition table.
+# Stands in for an OFF page a contributor trimmed down after a fuller scan
+# (or a fuller resync) already stored something better.
+THIN_RECORD = {"code": "3229820129488", "product_name_fr": "Muesli"}
+
 
 class FakeOffClient:
     """Stands in for the cascade. Nothing here reaches the network."""
@@ -36,6 +43,29 @@ class FakeOffClient:
         if product is None:
             return OffLookup()
         return OffLookup(record=OffRecord(code, "food", product))
+
+
+class _FailsOnceOffClient:
+    """The first lookup raises — a per-card failure that must not abort the
+    rest of the pass — the rest answer normally."""
+
+    def __init__(self, records: dict[str, dict]):
+        self._records = records
+        self.calls = 0
+
+    async def lookup_with_retry(self, code: str, **kwargs) -> OffLookup:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("simulated network hiccup")
+        product = self._records.get(code)
+        if product is None:
+            return OffLookup()
+        return OffLookup(record=OffRecord(code, "food", product))
+
+
+async def _no_wait(seconds: float) -> None:
+    """A resync_sleeper that never actually waits — for tests with more than
+    one barcode that are not themselves testing the wait."""
 
 
 @pytest.fixture
@@ -108,13 +138,186 @@ async def test_an_unprotected_field_is_overwritten_by_the_resync(
     assert article["kcal_per_base_unit"] == pytest.approx(3.6)
 
 
-async def test_resync_off_refreshes_the_coordinator(hass: HomeAssistant, entry):
+async def test_a_thinner_off_record_does_not_erase_what_was_already_stored(
+        hass: HomeAssistant, entry):
+    """Review round 1's ruling: a resync may fill a gap or correct a value,
+    but must never erase one. Nothing in the household's 299 products has a
+    net weight today — this service is what will finally supply them — so a
+    contributor trimming a record months after a fuller scan must not take
+    one back."""
+    manager = entry.runtime_data.manager
+
+    def _seed() -> int:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+            article_id = repo.insert_article(
+                conn, product_id=product_id, brand="Bjorg", net_quantity=375,
+                nutriscore="a")
+            repo.link_barcode(conn, "3229820129488", article_id)
+            return article_id
+
+    article_id = await hass.async_add_executor_job(_seed)
+    entry.runtime_data.off_client = FakeOffClient({"3229820129488": THIN_RECORD})
+
+    await hass.services.async_call(DOMAIN, "resync_off", {"article_id": article_id},
+                                   blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    def _read():
+        return repo.get_article(manager.db.read(), article_id)
+
+    article = await hass.async_add_executor_job(_read)
+    assert article["brand"] == "Bjorg"
+    assert article["net_quantity"] == 375
+    assert article["nutriscore"] == "a"
+    # The sync itself still happened — only the erasing is refused.
+    assert article["off_synced_at"] is not None
+
+
+async def test_a_malformed_manual_fields_does_not_abort_the_pass(
+        hass: HomeAssistant, entry):
+    """Reproduces the bug found in review: an article whose manual_fields
+    column holds something unreadable used to raise json.JSONDecodeError
+    with nothing around it, killing the background task outright — the
+    barcode queued right after it was never even fetched. Now: that one
+    article's write is skipped (everything is protected when we cannot tell
+    what a human corrected), and the pass reaches the rest."""
+    manager = entry.runtime_data.manager
+
+    def _seed() -> tuple[int, int]:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+            broken = repo.insert_article(
+                conn, product_id=product_id, brand="Original",
+                manual_fields="{not valid json")
+            healthy = repo.insert_article(conn, product_id=product_id)
+            repo.link_barcode(conn, "111", broken)
+            repo.link_barcode(conn, "222", healthy)
+        return broken, healthy
+
+    broken_id, healthy_id = await hass.async_add_executor_job(_seed)
+    entry.runtime_data.off_client = FakeOffClient({"111": MUESLI, "222": MUESLI})
+    entry.runtime_data.resync_sleeper = _no_wait
+
+    await hass.services.async_call(DOMAIN, "resync_off", {"all": True}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    def _read(article_id: int):
+        return repo.get_article(manager.db.read(), article_id)
+
+    broken = await hass.async_add_executor_job(lambda: _read(broken_id))
+    healthy = await hass.async_add_executor_job(lambda: _read(healthy_id))
+
+    # The malformed row is left exactly as it was: nothing could be proven
+    # safe to overwrite, so the write was skipped entirely (not just the
+    # columns manual_fields would normally name).
+    assert broken["brand"] == "Original"
+    assert broken["off_synced_at"] is None
+    # The pass reached the barcode queued after the bad one anyway.
+    assert healthy["brand"] == "Bjorg"
+
+
+async def test_a_failing_card_does_not_stop_the_rest_of_the_pass(
+        hass: HomeAssistant, entry):
+    """The general case the malformed-manual_fields test above is one
+    instance of: any per-card exception (a transient OFF error, a database
+    hiccup from a mid-pass reload) must not end a forty-minute pass early."""
+    manager = entry.runtime_data.manager
+
+    def _seed() -> tuple[int, int]:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+            first = repo.insert_article(conn, product_id=product_id)
+            second = repo.insert_article(conn, product_id=product_id)
+            repo.link_barcode(conn, "111", first)
+            repo.link_barcode(conn, "222", second)
+        return first, second
+
+    first_id, second_id = await hass.async_add_executor_job(_seed)
+    entry.runtime_data.off_client = _FailsOnceOffClient({"222": MUESLI})
+    entry.runtime_data.resync_sleeper = _no_wait
+
+    await hass.services.async_call(DOMAIN, "resync_off", {"all": True}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    def _read(article_id: int) -> str | None:
+        return repo.get_article(manager.db.read(), article_id)["brand"]
+
+    assert (await hass.async_add_executor_job(lambda: _read(second_id))) == "Bjorg"
+
+
+async def test_resync_off_honours_the_bulk_interval_between_cards(
+        hass: HomeAssistant, entry):
+    """The interval that justifies running this as a background task at all:
+    every other test in this file resyncs one barcode, which would stay
+    green even if the wait were deleted outright."""
+    manager = entry.runtime_data.manager
+
+    def _seed() -> None:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+            first = repo.insert_article(conn, product_id=product_id)
+            second = repo.insert_article(conn, product_id=product_id)
+            repo.link_barcode(conn, "111", first)
+            repo.link_barcode(conn, "222", second)
+
+    await hass.async_add_executor_job(_seed)
+    entry.runtime_data.off_client = FakeOffClient({"111": MUESLI, "222": MUESLI})
+
+    waits: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        waits.append(seconds)
+
+    entry.runtime_data.resync_sleeper = sleeper
+
+    await hass.services.async_call(DOMAIN, "resync_off", {"all": True}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    # Exactly one wait, the right length, and — because there is exactly
+    # one entry — not before the first card either.
+    assert waits == [BULK_INTERVAL]
+
+
+async def test_resync_off_refuses_a_second_run_while_one_is_in_progress(
+        hass: HomeAssistant, entry):
+    """OFF's own rate limit is measured per client, not per request
+    (off/client.py's own module docstring: one 429 after about twenty calls
+    at 1.5 s apart) — two passes running at once would double it."""
     manager = entry.runtime_data.manager
     article_id = await hass.async_add_executor_job(
         lambda: _seed_article(manager, kcal_per_base_unit=9.9))
 
-    await hass.services.async_call(DOMAIN, "resync_off", {"article_id": article_id},
-                                   blocking=True)
+    async def never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    entry.runtime_data.resync_task = hass.async_create_background_task(
+        never_finishes(), "test in-flight resync")
+
+    with pytest.raises(HomeAssistantError, match="déjà en cours"):
+        await hass.services.async_call(
+            DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
+
+    entry.runtime_data.resync_task.cancel()
+
+
+async def test_resync_off_allows_a_new_run_once_the_previous_one_is_done(
+        hass: HomeAssistant, entry):
+    manager = entry.runtime_data.manager
+    article_id = await hass.async_add_executor_job(
+        lambda: _seed_article(manager, kcal_per_base_unit=9.9))
+
+    async def already_finished() -> None:
+        return None
+
+    entry.runtime_data.resync_task = hass.async_create_background_task(
+        already_finished(), "test finished resync")
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.runtime_data.resync_task.done()
+
+    # Must not raise: a finished task must never block the next run.
+    await hass.services.async_call(
+        DOMAIN, "resync_off", {"article_id": article_id}, blocking=True)
     await hass.async_block_till_done(wait_background_tasks=True)
 
     def _read():
@@ -142,7 +345,33 @@ async def test_resync_off_a_code_off_no_longer_knows_is_a_no_op(hass: HomeAssist
     assert (await hass.async_add_executor_job(_read)) == "Bjorg"
 
 
-async def test_resync_off_requires_a_loaded_entry(hass: HomeAssistant):
-    with pytest.raises(HomeAssistantError):
+async def test_resync_off_refuses_no_target_at_all(hass: HomeAssistant, entry):
+    """"all" no longer defaults to False, so has_at_least_one_key actually
+    means something: a call naming nothing to resync is refused instead of
+    quietly resyncing nothing."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "resync_off", {}, blocking=True)
+
+
+async def test_resync_off_refuses_an_id_and_the_catalogue_box_together(
+        hass: HomeAssistant, entry):
+    """A call naming both an id and "all" used to silently run the
+    forty-minute catalogue pass, ignoring the id — refused instead."""
+    manager = entry.runtime_data.manager
+    article_id = await hass.async_add_executor_job(
+        lambda: _seed_article(manager, kcal_per_base_unit=9.9))
+
+    with pytest.raises(vol.Invalid):
         await hass.services.async_call(
-            DOMAIN, "resync_off", {"all": True}, blocking=True)
+            DOMAIN, "resync_off", {"article_id": article_id, "all": True}, blocking=True)
+
+
+async def test_resync_off_requires_a_loaded_entry(hass: HomeAssistant, setup_entry):
+    """The service stays registered after the entry unloads (it is only ever
+    registered once, guarded by has_service) — so this reaches _entry()'s
+    own French refusal, not a bare "service not found"."""
+    entry = await setup_entry()
+    await hass.config_entries.async_unload(entry.entry_id)
+
+    with pytest.raises(HomeAssistantError, match="n'est pas configuré"):
+        await hass.services.async_call(DOMAIN, "resync_off", {"all": True}, blocking=True)

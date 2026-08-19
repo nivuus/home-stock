@@ -1,7 +1,9 @@
 """The Garde-manger integration."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -40,6 +42,18 @@ class HomeStockData:
     # happens to construct its own transport.
     transport: AiohttpTransport
     user_agent: str
+    # The wait services.resync_off takes between OFF cards, injectable for
+    # the same reason off_client/transport are: a test that needs to prove
+    # the interval is honoured (or that a second card ever gets a turn at
+    # all) replaces this with a fake instead of waiting BULK_INTERVAL
+    # seconds of real wall clock — the same pattern OffClient's own
+    # `sleeper` constructor argument already uses.
+    resync_sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep
+    # The in-flight resync_off background task, if any: lets the service
+    # refuse a second pass on top of a running one (OFF's rate limit is
+    # measured per client, not per request) instead of doubling the request
+    # rate against it.
+    resync_task: asyncio.Task[None] | None = field(default=None, compare=False)
 
 
 type HomeStockConfigEntry = ConfigEntry[HomeStockData]

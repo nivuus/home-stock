@@ -512,6 +512,14 @@ class StockManager:
         # write and show a session that no longer matches its own totals.
         session = repo.current_session(conn)
         cart_totals = repo.session_totals(conn, session["id"]) if session else None
+        # "Awaiting put-away" only starts once the trolley has left the
+        # shop: a line scanned in the aisle is not yet "to store" just
+        # because it has no batch, or sensor.home_stock_to_store would read
+        # 1 while the shopper is still walking the aisles, which is not
+        # what that name promises.
+        awaiting_storage = (
+            cart_totals["pending"] if session and session["state"] != "shopping" else 0
+        )
 
         return {
             "stock_value": round(value, 2),
@@ -525,10 +533,14 @@ class StockManager:
             "shortages": shortages,
             "kcal_total": round(totals["kcal"], 1),
             "cost_total": round(totals["cost"], 2),
-            "cart_total": cart_totals["total"] if cart_totals else 0.0,
+            # Rounded to 2 decimals like every other euro sensor
+            # (stock_value, cost_total): session_totals() itself keeps 4,
+            # for the websocket API's own precision needs.
+            "cart_total": round(cart_totals["total"], 2) if cart_totals else 0.0,
             "cart_lines": cart_totals["lines"] if cart_totals else 0,
             "cart_pending": cart_totals["pending"] if cart_totals else 0,
             "cart_store": session["store"] if session else None,
+            "cart_to_store": awaiting_storage,
         }
 
     def export_journal(self) -> list[dict[str, Any]]:

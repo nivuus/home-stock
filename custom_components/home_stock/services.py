@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from functools import partial
 from typing import Any, Final
 
@@ -17,9 +18,11 @@ from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
 from .off.client import BULK_INTERVAL, OffRecord
-from .off.mapping import map_article, nutrition_per_base_unit, to_article_columns
+from .off.ingest import build_article_values
 from .storage import repositories as repo
 from .validators import bounded_int, bounded_text, finite_float, iso_date
+
+_LOGGER = logging.getLogger(__name__)
 
 # Reasons a "consume" call may legitimately carry — the same three the
 # services.yaml selector offers. The other three reasons (purchase, inventory,
@@ -70,9 +73,15 @@ INVENTORY_SCHEMA = vol.Schema({
 QUERY_SCHEMA = vol.Schema({vol.Optional("name"): cv.string})
 RESYNC_SCHEMA = vol.Schema(vol.All(
     {
-        vol.Optional("article_id"): _id,
-        vol.Optional("product_id"): _id,
-        vol.Optional("all", default=False): cv.boolean,
+        # All three exclusive: no default on "all", so has_at_least_one_key
+        # below actually means something — a call with none of the three
+        # is refused instead of quietly resyncing nothing, and a call with
+        # both an id and the catalogue box ticked is refused instead of one
+        # silently winning a forty-minute pass the caller may not have meant
+        # to start.
+        vol.Exclusive("article_id", "resync_target"): _id,
+        vol.Exclusive("product_id", "resync_target"): _id,
+        vol.Exclusive("all", "resync_target"): cv.boolean,
     },
     cv.has_at_least_one_key("article_id", "product_id", "all"),
 ))
@@ -112,6 +121,15 @@ def _write_resync(runtime, article_id: int, record: OffRecord) -> None:
     untouched — that is the entire reason that column exists: a resync must
     never silently overwrite what a person already fixed by hand, even when
     OFF now disagrees with them.
+
+    When `manual_fields` itself cannot be read (malformed JSON, or valid
+    JSON that is not a list — a hand-edited row, a bug elsewhere), we
+    cannot tell what a human protected. The safe reading is "everything is
+    protected": this article's write is skipped entirely, with a warning
+    naming it, rather than risk overwriting a correction we cannot
+    identify. `run()` below still moves on to the next card either way —
+    one unreadable row must not be why a forty-minute pass never reaches
+    the other 298 products.
     """
     with runtime.manager.db.write() as conn:
         article = repo.get_article(conn, article_id)
@@ -124,33 +142,32 @@ def _write_resync(runtime, article_id: int, record: OffRecord) -> None:
         if product is None:
             return
 
-        mapped = map_article(record.product, record.off_source)
-        values: dict[str, Any] = {
-            "label": mapped.label, "brand": mapped.brand,
-            "net_quantity": mapped.net_quantity, "image": mapped.image,
-            "nutriscore": mapped.nutriscore, "nova": mapped.nova,
-            "ecoscore": mapped.ecoscore, "allergens": mapped.allergens,
-            "traces": mapped.traces, "additives": mapped.additives,
-            "off_labels": mapped.off_labels, "off_source": mapped.off_source,
-        }
-        per_base = nutrition_per_base_unit(
-            mapped.nutrition_per_100, product["base_unit"], mapped.net_quantity)
-        # to_article_columns renames `kcal` to the article's own
-        # `kcal_per_base_unit` — see off/mapping.py's own docstring for why
-        # skipping this renaming would silently drop the calories.
-        values.update(to_article_columns(per_base))
+        try:
+            raw_manual = json.loads(article["manual_fields"] or "[]")
+            if not isinstance(raw_manual, list):
+                raise ValueError("manual_fields is not a JSON list")
+            protected = set(raw_manual)
+        except (TypeError, ValueError):
+            _LOGGER.warning(
+                "home_stock: article %s has an unreadable manual_fields "
+                "value (%r); skipping its OFF resync rather than risk "
+                "overwriting a human correction we cannot identify",
+                article_id, article["manual_fields"],
+            )
+            return
 
-        protected = set(json.loads(article["manual_fields"] or "[]"))
+        # build_article_values (off/ingest.py) is the same mapping
+        # article/create's own scan-time ingestion uses: the value-dropping
+        # and off_raw size ceiling apply here exactly as they do there, and
+        # it never hands back a None for a column OFF simply did not answer
+        # this time — see its own docstring for why a resync must be able
+        # to fill a gap or correct a value, but never erase one.
+        ingest = build_article_values(
+            record.product, record.off_source, product["base_unit"],
+            synced_at=dt_util.utcnow().replace(microsecond=0, tzinfo=None).isoformat())
+        values = dict(ingest.values)
         for column in protected:
             values.pop(column, None)
-
-        # off_synced_at/off_raw record that a sync happened at all, and with
-        # what OFF actually answered: written unconditionally, never subject
-        # to manual_fields — a human can protect a nutrition or label value,
-        # never the fact that a resync ran.
-        values["off_synced_at"] = dt_util.utcnow().replace(
-            microsecond=0, tzinfo=None).isoformat()
-        values["off_raw"] = json.dumps(record.product, ensure_ascii=False)
 
         repo.update_article_fields(conn, article_id, values)
 
@@ -251,29 +268,51 @@ def async_register_services(hass: HomeAssistant) -> None:
         Runs as a background task: a full catalogue pass is roughly forty
         minutes at the rate OFF tolerates (BULK_INTERVAL between cards), and
         no service call should hold that long — the call itself only reads
-        which barcodes are concerned and returns.
+        which barcodes are concerned and returns. Refuses to start a second
+        pass on top of a running one: Open Food Facts' own rate limit is
+        measured per client, not per request, so two passes at once would
+        double the request rate against it. Tied to the config entry
+        (`entry.async_create_background_task`, not `hass.async_create_
+        background_task`) so unloading the entry mid-pass cancels it instead
+        of leaving it writing to a database that is about to close.
         """
         entry = _entry(hass)
         runtime = entry.runtime_data
+        if runtime.resync_task is not None and not runtime.resync_task.done():
+            raise HomeAssistantError(
+                "Une resynchronisation Open Food Facts est déjà en cours.")
+
         codes = await hass.async_add_executor_job(partial(
             repo.barcodes_to_resync, runtime.manager.db.read(),
             article_id=call.data.get("article_id"),
             product_id=call.data.get("product_id"),
-            everything=call.data["all"],
+            everything=call.data.get("all", False),
         ))
 
         async def run() -> None:
             for index, (code, article_id) in enumerate(codes):
                 if index:
-                    await asyncio.sleep(BULK_INTERVAL)
-                result = await runtime.off_client.lookup_with_retry(code)
-                if result.record is None:
-                    continue
-                await hass.async_add_executor_job(partial(
-                    _write_resync, runtime, article_id, result.record))
+                    await runtime.resync_sleeper(BULK_INTERVAL)
+                try:
+                    result = await runtime.off_client.lookup_with_retry(code)
+                    if result.record is None:
+                        continue
+                    await hass.async_add_executor_job(partial(
+                        _write_resync, runtime, article_id, result.record))
+                except Exception:  # noqa: BLE001 - deliberately catches
+                    # everything: a single bad card (a malformed OFF answer,
+                    # a transient database error from a mid-pass reload, a
+                    # bug this review round did not anticipate) must not be
+                    # why the other ~298 products in the catalogue never get
+                    # their turn. Logged with the barcode so the failure is
+                    # findable, not silent.
+                    _LOGGER.exception(
+                        "home_stock: resync_off failed for barcode %s (article %s)",
+                        code, article_id)
             await runtime.coordinator.async_request_refresh()
 
-        hass.async_create_background_task(run(), "home_stock resync_off")
+        runtime.resync_task = entry.async_create_background_task(
+            hass, run(), "home_stock resync_off")
 
     hass.services.async_register(DOMAIN, "add_stock", add_stock, schema=ADD_STOCK_SCHEMA)
     hass.services.async_register(DOMAIN, "consume", consume, schema=CONSUME_SCHEMA)

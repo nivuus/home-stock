@@ -20,13 +20,8 @@ from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
 from .domain.units import UnitError
-from .off.mapping import (
-    MAX_NET_QUANTITY,
-    MIN_NET_QUANTITY,
-    map_article,
-    nutrition_per_base_unit,
-    to_article_columns,
-)
+from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
+from .off.mapping import map_article
 from .off.open_prices import latest_price
 from .shopping import ShoppingError
 from .storage import repositories as repo
@@ -97,7 +92,6 @@ def _strict_boolean(value: Any) -> bool:
     raise vol.Invalid(f"expected a boolean, got {_preview(value)}")
 
 
-_GRADE: Final = vol.In(("a", "b", "c", "d", "e"))
 _BASE_UNIT: Final = vol.In(BASE_UNITS)
 _TEXT: Final = _bounded_text                                         # free, nullable text, capped
 # A quantity cannot be negative: a person never means "-5 g" or "-5 kcal".
@@ -106,40 +100,14 @@ _NON_NEGATIVE_INT: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=0)), None
 # category_id/aisle_id/default_location_id reference an INTEGER PRIMARY KEY,
 # which SQLite starts at 1: 0 or a negative id can never be a real row.
 _POSITIVE_ID: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=1)), None)
-# The four Nutri-Score/NOVA classification groups OFF actually uses.
-_NOVA: Final = vol.Any(vol.All(_bounded_int, vol.In((1, 2, 3, 4))), None)
-# Same plausibility window OFF's own mapping uses for a net weight
-# (off/mapping.py's MIN_NET_QUANTITY/MAX_NET_QUANTITY): a manually typed
-# net_quantity is the same kind of value and deserves the same guard.
-_NET_QUANTITY: Final = vol.Any(
-    vol.All(_finite_float, vol.Range(min=MIN_NET_QUANTITY, max=MAX_NET_QUANTITY)), None)
 
+# ARTICLE_EDITABLE (imported above from off/ingest.py as ARTICLE_OFF_SCHEMA)
+# is the twin of PRODUCT_EDITABLE below, for `article`'s own columns: the
+# same dict off/ingest.py's build_article_values validates an OFF-derived
+# write against, so a person's correction and Open Food Facts' own answer
+# land on the same set of columns, checked the same way, by one definition
+# rather than two that could drift apart.
 
-# A real Open Food Facts record is a few kilobytes; 256 kB is generous
-# headroom without letting one scan grow the database without bound.
-MAX_OFF_RAW_BYTES: Final = 256 * 1024
-
-# Columns a human may edit from the panel, mapped to the shape a value must
-# have to be written. Every value is validated against its schema before any
-# write is attempted — see the module docstring above this section.
-ARTICLE_EDITABLE: Final[dict[str, Callable[[Any], Any]]] = {
-    "label": _TEXT,
-    "brand": _TEXT,
-    "net_quantity": _NET_QUANTITY,
-    "image": _TEXT,
-    "kcal_per_base_unit": _NON_NEGATIVE_FLOAT,
-    "proteins": _NON_NEGATIVE_FLOAT,
-    "carbohydrates": _NON_NEGATIVE_FLOAT,
-    "sugars": _NON_NEGATIVE_FLOAT,
-    "added_sugars": _NON_NEGATIVE_FLOAT,
-    "fat": _NON_NEGATIVE_FLOAT,
-    "saturated_fat": _NON_NEGATIVE_FLOAT,
-    "fiber": _NON_NEGATIVE_FLOAT,
-    "salt": _NON_NEGATIVE_FLOAT,
-    "nutriscore": vol.Any(_GRADE, None),
-    "nova": _NOVA,
-    "ecoscore": _TEXT,
-}
 # base_unit is deliberately absent: a plain field edit that changed a unit
 # would rewrite the meaning of every stored quantity (batches, prices,
 # nutrition) with nothing converted. The only path to a unit change is
@@ -252,37 +220,6 @@ def _validate_new_product(new_product: dict[str, Any],
     return _validate_fields(NEW_PRODUCT_SCHEMA, new_product, connection, msg_id)
 
 
-def _drop_invalid_off_values(schema: dict[str, Callable[[Any], Any]],
-                             values: dict[str, Any]) -> list[str]:
-    """Validate OFF-derived entries of `values` against `schema`, IN PLACE,
-    dropping whichever fail instead of refusing the whole write.
-
-    Deliberately not the same policy `_validate_fields` applies to what a
-    person typed: a client-supplied field is refused because the person can
-    fix what they typed, but an Open Food Facts contributor's typo is not
-    something the person scanning a barcode can fix, and refusing the whole
-    scan over one bad field (a Nova group of 99, a Nutri-Score of "zzz")
-    would make the scanner useless exactly when it is most needed. Off/
-    mapping.py already guards the two fields most likely to be implausible
-    (nova, nutriscore) at the source; this is the general backstop for
-    whatever it does not — today, chiefly free text with no length bound of
-    its own (label, brand, image).
-
-    Returns the column names dropped, so the caller can tell the panel what
-    happened instead of leaving a silently missing value to explain itself.
-    """
-    dropped: list[str] = []
-    for column in list(values):
-        if column not in schema:
-            continue
-        try:
-            values[column] = schema[column](values[column])
-        except vol.Invalid:
-            del values[column]
-            dropped.append(column)
-    return dropped
-
-
 def _send_domain_error(connection: websocket_api.ActiveConnection, msg_id: int,
                        err: Exception) -> None:
     """Translate a LookupError/UnitError/ValueError from the domain or
@@ -318,7 +255,7 @@ def _send_integrity_error(connection: websocket_api.ActiveConnection, msg_id: in
     if "FOREIGN KEY constraint failed" in text:
         connection.send_error(
             msg_id, "invalid_field",
-            "Référence invalide (rayon, catégorie ou emplacement inconnu).")
+            "Référence invalide (article, rayon, catégorie ou emplacement inconnu).")
         return
     connection.send_error(msg_id, "invalid_field", "Écriture refusée : donnée invalide.")
 
@@ -532,14 +469,13 @@ async def article_create(hass, connection, msg) -> None:
             return
 
     raw = msg.get("off") or {}
-    # Serialised once, up front: work() reuses this string verbatim rather
-    # than re-encoding raw a second time inside the executor job.
-    off_raw_json = json.dumps(raw, ensure_ascii=False) if raw else None
-    if off_raw_json is not None and len(off_raw_json.encode("utf-8")) > MAX_OFF_RAW_BYTES:
-        # A real OFF record is a few kilobytes; refusing outright here (not
-        # dropping, as _drop_invalid_off_values does for a single bad field)
-        # is the only sane response to a blob this size — there is no
-        # meaningful way to store "most of" a JSON document.
+    if raw and len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > MAX_OFF_RAW_BYTES:
+        # A real OFF record is a few kilobytes; refusing outright here
+        # (rather than dropping off_raw the way build_article_values does
+        # for a background resync — off/ingest.py) is the only sane
+        # response to a blob this size for someone waiting on a live scan:
+        # there is no meaningful way to store "most of" a JSON document,
+        # and they can simply retry.
         connection.send_error(
             msg["id"], "invalid_field", "Réponse Open Food Facts trop volumineuse.")
         return
@@ -554,12 +490,11 @@ async def article_create(hass, connection, msg) -> None:
                         "off_dropped_fields": []}
 
             source = msg.get("off_source")
-            mapped = map_article(raw, source) if raw and source else None
+            aisle = map_article(raw, source).aisle if raw and source else None
 
             product_id = msg.get("product_id")
             if product_id is None:
                 wanted = dict(new_product)
-                aisle = mapped.aisle if mapped else None
                 if aisle:
                     row = conn.execute(
                         "SELECT id FROM aisle WHERE name = ?", (aisle,)).fetchone()
@@ -572,43 +507,18 @@ async def article_create(hass, connection, msg) -> None:
                 raise LookupError(f"no product {product_id}")
             values: dict[str, Any] = {"is_generic": 0}
             dropped_off_fields: list[str] = []
-            if mapped is not None:
-                values.update({
-                    "label": mapped.label, "brand": mapped.brand,
-                    "net_quantity": mapped.net_quantity, "image": mapped.image,
-                    "nutriscore": mapped.nutriscore, "nova": mapped.nova,
-                    "ecoscore": mapped.ecoscore, "allergens": mapped.allergens,
-                    "traces": mapped.traces, "additives": mapped.additives,
-                    "off_labels": mapped.off_labels, "off_source": mapped.off_source,
-                    "off_synced_at": dt_util.utcnow().replace(
-                        microsecond=0, tzinfo=None).isoformat(),
-                    "off_raw": off_raw_json,
-                })
-                per_base = nutrition_per_base_unit(
-                    mapped.nutrition_per_100, product["base_unit"], mapped.net_quantity)
-                # to_article_columns renames `kcal` to the article's own
-                # `kcal_per_base_unit`. Passing the raw dict would lose the
-                # calories silently, because insert_article drops keys it does
-                # not recognise without raising.
-                values.update(to_article_columns(per_base))
-                # OFF is a stranger's database entry, not something the
-                # person scanning can fix: an implausible value (a Nova
-                # group off/mapping.py did not already catch, a label with
-                # no length bound of its own) is dropped, not refused — the
-                # article is still created with everything else. Run before
-                # `fields` is merged in, so a client-supplied correction is
-                # never subject to this policy; it already went through
-                # _validate_fields, which refuses instead.
-                dropped_off_fields = _drop_invalid_off_values(ARTICLE_EDITABLE, values)
-                # off/mapping.py neutralises an implausible nova/nutriscore
-                # before this function ever sees it, so the drop above never
-                # has a bad value left to catch for those two columns —
-                # merge in what map_article already recorded in its own
-                # `rejections`, so the panel finds out about those too, not
-                # just the ones caught here.
-                for name in mapped.rejections:
-                    if name in ARTICLE_EDITABLE and name not in dropped_off_fields:
-                        dropped_off_fields.append(name)
+            if raw and source:
+                # build_article_values (off/ingest.py) is the single place
+                # that turns an OFF record into article columns — the same
+                # one services._write_resync calls for the background
+                # catalogue refresh, so a fresh scan and a resync can never
+                # drift into applying different rules.
+                ingest = build_article_values(
+                    raw, source, product["base_unit"],
+                    synced_at=dt_util.utcnow().replace(
+                        microsecond=0, tzinfo=None).isoformat())
+                values.update(ingest.values)
+                dropped_off_fields = ingest.dropped_fields
             values.update(fields)
             if fields:
                 # A correction typed on the creation screen must survive the
@@ -931,6 +841,18 @@ async def session_add_line(hass, connection, msg) -> None:
     except ShoppingError as err:
         _shopping_error(connection, msg, err)
         return
+    except (LookupError, UnitError, ValueError, OverflowError) as err:
+        # Backstop: _bounded_int already bounds article_id at the schema
+        # level, so this should be unreachable — caught anyway so a gap
+        # there answers a French refusal instead of "Unknown error".
+        _send_domain_error(connection, msg["id"], err)
+        return
+    except sqlite3.IntegrityError as err:
+        # ShoppingService.add_line does not pre-check article_id the way
+        # manager.add_stock does: an unknown article_id reaches SQLite as a
+        # FOREIGN KEY violation, exactly like home_stock/stock/add's own.
+        _send_integrity_error(connection, msg["id"], err)
+        return
     await runtime.coordinator.async_request_refresh()
     connection.send_result(msg["id"], line)
 
@@ -1012,6 +934,19 @@ async def session_store_line(hass, connection, msg) -> None:
             location_id=msg["location_id"], best_before=msg.get("best_before")))
     except ShoppingError as err:
         _shopping_error(connection, msg, err)
+        return
+    except (LookupError, UnitError, ValueError, OverflowError) as err:
+        # Backstop: _bounded_int already bounds line_id/location_id at the
+        # schema level, so this should be unreachable — caught anyway so a
+        # gap there answers a French refusal instead of "Unknown error".
+        _send_domain_error(connection, msg["id"], err)
+        return
+    except sqlite3.IntegrityError as err:
+        # store_line calls the very same manager.add_stock as
+        # home_stock/stock/add: an unknown location_id reaches SQLite as a
+        # FOREIGN KEY violation the same way there, and deserves the same
+        # translation here.
+        _send_integrity_error(connection, msg["id"], err)
         return
     await runtime.coordinator.async_request_refresh()
     connection.send_result(msg["id"], result)

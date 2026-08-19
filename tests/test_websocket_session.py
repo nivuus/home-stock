@@ -112,6 +112,13 @@ async def test_the_cart_sensors_follow_the_session(hass: HomeAssistant, setup_en
     cart = hass.states.get("sensor.home_stock_cart_total")
     assert float(cart.state) == 1.0
     assert cart.attributes["store"] == "Leclerc"
+    # Still in the aisle (session/checkout not called yet): nothing is
+    # "awaiting put-away" yet, even though the line has no batch either —
+    # to_store only starts counting once the session has left `shopping`.
+    assert hass.states.get("sensor.home_stock_to_store").state == "0"
+
+    await _send(client, 3, "home_stock/session/checkout")
+    await entry.runtime_data.coordinator.async_refresh()
     assert hass.states.get("sensor.home_stock_to_store").state == "1"
 
 
@@ -121,3 +128,39 @@ async def test_the_cart_sensors_are_zero_with_no_session(hass: HomeAssistant, se
 
     assert hass.states.get("sensor.home_stock_cart_total").state == "0.0"
     assert hass.states.get("sensor.home_stock_to_store").state == "0"
+
+
+async def test_an_unknown_article_on_add_line_is_a_readable_error(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """ShoppingService.add_line does not pre-check article_id the way
+    manager.add_stock does — an unknown id reaches SQLite as a bare
+    FOREIGN KEY violation. Without the integrity-error guard this used to
+    surface to the panel as "Unknown error"."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+    await _send(client, 1, "home_stock/session/start", store=None)
+
+    answer = await _send(client, 2, "home_stock/session/add_line", article_id=999,
+                         quantity=500, unit_price=None, idempotency_key=None)
+
+    assert answer["success"] is False
+    assert answer["error"]["message"] != "Unknown error"
+
+
+async def test_an_unknown_location_on_store_line_is_a_readable_error(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """store_line calls the very same manager.add_stock as
+    home_stock/stock/add: an unknown location_id must be translated the
+    same way there, not left to surface as "Unknown error"."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+    await _send(client, 1, "home_stock/session/start", store=None)
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=None, idempotency_key="scan-1")
+    line_id = added["result"]["id"]
+
+    answer = await _send(client, 3, "home_stock/session/store_line", line_id=line_id,
+                         location_id=999, best_before=None)
+
+    assert answer["success"] is False
+    assert answer["error"]["message"] != "Unknown error"

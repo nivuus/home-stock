@@ -103,7 +103,13 @@ class CartTotalSensor(HomeStockEntity, SensorEntity):
 
 
 class ToStoreSensor(HomeStockEntity, SensorEntity):
-    """How many bought lines are still waiting to be put away."""
+    """How many bought lines are still waiting to be put away.
+
+    Zero while the session is still `shopping`: a line just scanned in the
+    aisle has no batch yet either, but it is not "awaiting put-away" until
+    the trolley has actually left the shop (`session/checkout`) — reading 1
+    while still walking the aisles would make this sensor's own name a lie.
+    """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -112,7 +118,7 @@ class ToStoreSensor(HomeStockEntity, SensorEntity):
 
     @property
     def native_value(self) -> int:
-        return self.coordinator.data["cart_pending"]
+        return self.coordinator.data["cart_to_store"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
