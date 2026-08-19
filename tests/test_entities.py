@@ -23,6 +23,8 @@ async def test_entities_are_created_empty(hass, loaded):
     assert hass.states.get("sensor.home_stock_batches").state == "0"
     assert hass.states.get("binary_sensor.home_stock_expirations").state == "off"
     assert hass.states.get("binary_sensor.home_stock_shortages").state == "off"
+    assert hass.states.get("sensor.home_stock_cart_total").state == "0.0"
+    assert hass.states.get("sensor.home_stock_to_store").state == "0"
 
 
 async def test_entities_reflect_the_stock(hass, loaded):

@@ -506,6 +506,13 @@ class StockManager:
             for row in repo.shortage_rows(conn)
         ]
         totals = repo.counted_totals(conn)
+
+        # The cart: read on this same connection, like the rest of the
+        # summary — a second, separate read here could race a concurrent
+        # write and show a session that no longer matches its own totals.
+        session = repo.current_session(conn)
+        cart_totals = repo.session_totals(conn, session["id"]) if session else None
+
         return {
             "stock_value": round(value, 2),
             "stock_value_by_location": {
@@ -518,6 +525,10 @@ class StockManager:
             "shortages": shortages,
             "kcal_total": round(totals["kcal"], 1),
             "cost_total": round(totals["cost"], 2),
+            "cart_total": cart_totals["total"] if cart_totals else 0.0,
+            "cart_lines": cart_totals["lines"] if cart_totals else 0,
+            "cart_pending": cart_totals["pending"] if cart_totals else 0,
+            "cart_store": session["store"] if session else None,
         }
 
     def export_journal(self) -> list[dict[str, Any]]:

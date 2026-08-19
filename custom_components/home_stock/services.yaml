@@ -135,3 +135,24 @@ import_grocy_catalog:
       description: Sans cela, rien n'est écrit — seul le rapport est produit.
       default: false
       selector: { boolean: }
+
+resync_off:
+  name: Resynchroniser Open Food Facts
+  description: >-
+    Relit un article, tout un produit ou tout le catalogue depuis Open Food Facts.
+    S'exécute en tâche de fond (environ 40 minutes pour tout le catalogue) : les
+    champs corrigés à la main ne sont jamais écrasés.
+  fields:
+    article_id:
+      name: Article
+      description: Ne resynchronise que cet article.
+      selector: { number: { min: 1, mode: box } }
+    product_id:
+      name: Produit
+      description: Resynchronise tous les articles de ce produit.
+      selector: { number: { min: 1, mode: box } }
+    all:
+      name: Tout le catalogue
+      description: Resynchronise tous les articles ayant un code-barres.
+      default: false
+      selector: { boolean: }

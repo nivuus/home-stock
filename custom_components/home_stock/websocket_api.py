@@ -28,6 +28,7 @@ from .off.mapping import (
     to_article_columns,
 )
 from .off.open_prices import latest_price
+from .shopping import ShoppingError
 from .storage import repositories as repo
 from .validators import MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date, preview
 
@@ -868,6 +869,170 @@ async def aisles_reorder(hass, connection, msg) -> None:
     connection.send_result(msg["id"], {"aisles": len(msg["aisle_ids"])})
 
 
+def _shopping_error(connection: websocket_api.ActiveConnection, msg: dict[str, Any],
+                    err: ShoppingError) -> None:
+    """ShoppingError's own message is already the French sentence to show —
+    unlike _send_domain_error's targets, nothing here needs translating: the
+    application layer raises it directly for a person to read (see
+    shopping.py). Sent through the same `connection.send_error` seam as
+    _send_domain_error/_send_integrity_error so a ShoppingError reaches the
+    panel exactly like every other refusal, never as "Unknown error"."""
+    connection.send_error(msg["id"], "shopping_refused", str(err))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/start",
+    vol.Optional("store"): _bounded_text,
+})
+@websocket_api.async_response
+async def session_start(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        session = await hass.async_add_executor_job(partial(
+            runtime.shopping.start, store=msg.get("store")))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], session)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "home_stock/session/current"})
+@websocket_api.async_response
+async def session_current(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    connection.send_result(msg["id"], await _read(hass, runtime.shopping.current))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/add_line",
+    vol.Required("article_id"): _bounded_int,
+    vol.Required("quantity"): _finite_float,
+    vol.Optional("unit_price"): vol.Any(_finite_float, None),
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def session_add_line(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        line = await hass.async_add_executor_job(partial(
+            runtime.shopping.add_line, article_id=msg["article_id"],
+            quantity=msg["quantity"], unit_price=msg.get("unit_price"),
+            idempotency_key=msg.get("idempotency_key")))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], line)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/update_line",
+    vol.Required("line_id"): _bounded_int,
+    vol.Optional("quantity"): vol.Any(_finite_float, None),
+    vol.Optional("unit_price"): vol.Any(_finite_float, None),
+})
+@websocket_api.async_response
+async def session_update_line(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        line = await hass.async_add_executor_job(partial(
+            runtime.shopping.update_line, msg["line_id"],
+            quantity=msg.get("quantity"), unit_price=msg.get("unit_price")))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], line)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/remove_line",
+    vol.Required("line_id"): _bounded_int,
+})
+@websocket_api.async_response
+async def session_remove_line(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        await hass.async_add_executor_job(partial(
+            runtime.shopping.remove_line, msg["line_id"]))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"line_id": msg["line_id"]})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "home_stock/session/checkout"})
+@websocket_api.async_response
+async def session_checkout(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        session = await hass.async_add_executor_job(runtime.shopping.checkout)
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], session)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/store_line",
+    vol.Required("line_id"): _bounded_int,
+    vol.Required("location_id"): _bounded_int,
+    vol.Optional("best_before"): _iso_date,
+})
+@websocket_api.async_response
+async def session_store_line(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        result = await hass.async_add_executor_job(partial(
+            runtime.shopping.store_line, msg["line_id"],
+            location_id=msg["location_id"], best_before=msg.get("best_before")))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "home_stock/session/close"})
+@websocket_api.async_response
+async def session_close(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        session = await hass.async_add_executor_job(runtime.shopping.close)
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], session)
+
+
 def _conversion_offer(product: dict[str, Any] | None,
                       article: dict[str, Any] | None) -> dict[str, Any] | None:
     """Offer a piece -> gram move, but only when the weight is trustworthy."""
@@ -935,5 +1100,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     for command in (products_list, product_get, locations_list, aisles_list,
                     batches_list, movements_list, subscribe, lookup,
                     article_create, article_update, product_update,
-                    product_convert_unit, stock_add, aisles_reorder):
+                    product_convert_unit, stock_add, aisles_reorder,
+                    session_start, session_current, session_add_line,
+                    session_update_line, session_remove_line, session_checkout,
+                    session_store_line, session_close):
         websocket_api.async_register_command(hass, command)

@@ -1,6 +1,8 @@
 """Home Assistant services. Every write refreshes the coordinator on success."""
 from __future__ import annotations
 
+import asyncio
+import json
 from functools import partial
 from typing import Any, Final
 
@@ -8,11 +10,14 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, REASON_CONSUMPTION, REASON_EXPIRED, REASON_WASTE
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
+from .off.client import BULK_INTERVAL, OffRecord
+from .off.mapping import map_article, nutrition_per_base_unit, to_article_columns
 from .storage import repositories as repo
 from .validators import bounded_int, bounded_text, finite_float, iso_date
 
@@ -63,6 +68,14 @@ INVENTORY_SCHEMA = vol.Schema({
     vol.Required("counted_quantity"): finite_float,
 })
 QUERY_SCHEMA = vol.Schema({vol.Optional("name"): cv.string})
+RESYNC_SCHEMA = vol.Schema(vol.All(
+    {
+        vol.Optional("article_id"): _id,
+        vol.Optional("product_id"): _id,
+        vol.Optional("all", default=False): cv.boolean,
+    },
+    cv.has_at_least_one_key("article_id", "product_id", "all"),
+))
 
 
 def _entry(hass: HomeAssistant):
@@ -90,6 +103,56 @@ async def _run(hass: HomeAssistant, work) -> Any:
         # gap in that validation answers a French refusal instead of
         # "Unknown error".
         raise HomeAssistantError("Valeur numérique hors limites.") from error
+
+
+def _write_resync(runtime, article_id: int, record: OffRecord) -> None:
+    """Refresh one article from a freshly fetched OFF record.
+
+    Every column a human corrected (`article.manual_fields`) is left
+    untouched — that is the entire reason that column exists: a resync must
+    never silently overwrite what a person already fixed by hand, even when
+    OFF now disagrees with them.
+    """
+    with runtime.manager.db.write() as conn:
+        article = repo.get_article(conn, article_id)
+        if article is None:
+            # The article was deleted (or never existed) between the
+            # barcode list being read and this card's turn coming up in the
+            # BULK_INTERVAL-spaced walk — nothing left to refresh.
+            return
+        product = repo.get_product(conn, article["product_id"])
+        if product is None:
+            return
+
+        mapped = map_article(record.product, record.off_source)
+        values: dict[str, Any] = {
+            "label": mapped.label, "brand": mapped.brand,
+            "net_quantity": mapped.net_quantity, "image": mapped.image,
+            "nutriscore": mapped.nutriscore, "nova": mapped.nova,
+            "ecoscore": mapped.ecoscore, "allergens": mapped.allergens,
+            "traces": mapped.traces, "additives": mapped.additives,
+            "off_labels": mapped.off_labels, "off_source": mapped.off_source,
+        }
+        per_base = nutrition_per_base_unit(
+            mapped.nutrition_per_100, product["base_unit"], mapped.net_quantity)
+        # to_article_columns renames `kcal` to the article's own
+        # `kcal_per_base_unit` — see off/mapping.py's own docstring for why
+        # skipping this renaming would silently drop the calories.
+        values.update(to_article_columns(per_base))
+
+        protected = set(json.loads(article["manual_fields"] or "[]"))
+        for column in protected:
+            values.pop(column, None)
+
+        # off_synced_at/off_raw record that a sync happened at all, and with
+        # what OFF actually answered: written unconditionally, never subject
+        # to manual_fields — a human can protect a nutrition or label value,
+        # never the fact that a resync ran.
+        values["off_synced_at"] = dt_util.utcnow().replace(
+            microsecond=0, tzinfo=None).isoformat()
+        values["off_raw"] = json.dumps(record.product, ensure_ascii=False)
+
+        repo.update_article_fields(conn, article_id, values)
 
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -182,6 +245,36 @@ def async_register_services(hass: HomeAssistant) -> None:
             await entry.runtime_data.coordinator.async_request_refresh()
         return report.as_dict()
 
+    async def resync_off(call: ServiceCall) -> None:
+        """Refresh articles from OFF, one every BULK_INTERVAL seconds.
+
+        Runs as a background task: a full catalogue pass is roughly forty
+        minutes at the rate OFF tolerates (BULK_INTERVAL between cards), and
+        no service call should hold that long — the call itself only reads
+        which barcodes are concerned and returns.
+        """
+        entry = _entry(hass)
+        runtime = entry.runtime_data
+        codes = await hass.async_add_executor_job(partial(
+            repo.barcodes_to_resync, runtime.manager.db.read(),
+            article_id=call.data.get("article_id"),
+            product_id=call.data.get("product_id"),
+            everything=call.data["all"],
+        ))
+
+        async def run() -> None:
+            for index, (code, article_id) in enumerate(codes):
+                if index:
+                    await asyncio.sleep(BULK_INTERVAL)
+                result = await runtime.off_client.lookup_with_retry(code)
+                if result.record is None:
+                    continue
+                await hass.async_add_executor_job(partial(
+                    _write_resync, runtime, article_id, result.record))
+            await runtime.coordinator.async_request_refresh()
+
+        hass.async_create_background_task(run(), "home_stock resync_off")
+
     hass.services.async_register(DOMAIN, "add_stock", add_stock, schema=ADD_STOCK_SCHEMA)
     hass.services.async_register(DOMAIN, "consume", consume, schema=CONSUME_SCHEMA)
     hass.services.async_register(DOMAIN, "open_batch", open_batch, schema=BATCH_SCHEMA)
@@ -202,3 +295,4 @@ def async_register_services(hass: HomeAssistant) -> None:
         }),
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(DOMAIN, "resync_off", resync_off, schema=RESYNC_SCHEMA)

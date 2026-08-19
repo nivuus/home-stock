@@ -122,3 +122,65 @@ def test_resolve_kcal_rate_falls_back_to_the_product_reference(conn):
     with_own_rate = repo.insert_article(conn, product_id=product_id,
                                         kcal_per_base_unit=1.1)
     assert repo.resolve_kcal_rate(conn, repo.get_article(conn, with_own_rate)) == 1.1
+
+
+def test_barcodes_to_resync_everything_lists_every_barcoded_article(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    with_code = repo.insert_article(conn, product_id=product_id)
+    without_code = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", with_code)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=None, everything=True)
+
+    # without_code never scanned, so it has nothing to resync from: silently
+    # left out rather than reported as an error.
+    assert found == [("111", with_code)]
+
+
+def test_barcodes_to_resync_narrows_to_one_article(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    first = repo.insert_article(conn, product_id=product_id)
+    second = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", first)
+    repo.link_barcode(conn, "222", second)
+
+    found = repo.barcodes_to_resync(conn, article_id=second, product_id=None,
+                                    everything=False)
+
+    assert found == [("222", second)]
+
+
+def test_barcodes_to_resync_narrows_to_one_product(conn):
+    wanted_product = repo.insert_product(conn, name="Muesli", base_unit="g")
+    other_product = repo.insert_product(conn, name="Riz", base_unit="g")
+    wanted_article = repo.insert_article(conn, product_id=wanted_product)
+    other_article = repo.insert_article(conn, product_id=other_product)
+    repo.link_barcode(conn, "111", wanted_article)
+    repo.link_barcode(conn, "222", other_article)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=wanted_product,
+                                    everything=False)
+
+    assert found == [("111", wanted_article)]
+
+
+def test_barcodes_to_resync_picks_the_lowest_code_of_several(conn):
+    """An article scanned under more than one code (a relabelled pack, a
+    duplicate scan) still resyncs once, not once per code."""
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "222", article_id)
+    repo.link_barcode(conn, "111", article_id)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=None, everything=True)
+
+    assert found == [("111", article_id)]
+
+
+def test_barcodes_to_resync_with_nothing_selected_returns_nothing(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", article_id)
+
+    assert repo.barcodes_to_resync(conn, article_id=None, product_id=None,
+                                   everything=False) == []

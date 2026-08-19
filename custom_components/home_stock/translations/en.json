@@ -25,7 +25,9 @@
       "stock_value": { "name": "Stock value" },
       "batches": { "name": "Batches in stock" },
       "kcal_total": { "name": "Kilocalories out of stock" },
-      "cost_total": { "name": "Cost of stock consumed" }
+      "cost_total": { "name": "Cost of stock consumed" },
+      "cart_total": { "name": "Current cart" },
+      "to_store": { "name": "To put away" }
     },
     "binary_sensor": {
       "expirations": { "name": "Expiring soon" },

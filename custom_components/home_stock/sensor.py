@@ -80,6 +80,41 @@ class CostTotalSensor(HomeStockEntity, SensorEntity):
         return self.coordinator.data["cost_total"]
 
 
+class CartTotalSensor(HomeStockEntity, SensorEntity):
+    """What the open (or not-yet-put-away) shopping session is worth."""
+
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "cart_total", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.data["cart_total"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "store": self.coordinator.data["cart_store"],
+            "lines": self.coordinator.data["cart_lines"],
+            "pending": self.coordinator.data["cart_pending"],
+        }
+
+
+class ToStoreSensor(HomeStockEntity, SensorEntity):
+    """How many bought lines are still waiting to be put away."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "to_store", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.data["cart_pending"]
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -88,4 +123,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
         BatchesSensor(coordinator),
         KcalTotalSensor(coordinator),
         CostTotalSensor(coordinator),
+        CartTotalSensor(coordinator),
+        ToStoreSensor(coordinator),
     ])

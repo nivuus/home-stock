@@ -135,6 +135,39 @@ def link_barcode(conn, code: str, article_id: int) -> None:
     conn.execute("INSERT INTO barcode (code, article_id) VALUES (?, ?)", (code, article_id))
 
 
+def barcodes_to_resync(conn, *, article_id: int | None, product_id: int | None,
+                       everything: bool) -> list[tuple[str, int]]:
+    """One (code, article_id) pair per article that has a barcode, for the
+    `home_stock.resync_off` service: the whole catalogue (`everything`), one
+    article, or every article of one product.
+
+    An article linked to more than one code contributes only its lowest one
+    — Open Food Facts only needs a single code to answer for an article, and
+    a barcode-less article (never scanned, hand-entered) has nothing to
+    resync from in the first place, so it is silently left out rather than
+    reported as an error.
+    """
+    if everything:
+        where, params = "", ()
+    elif article_id is not None:
+        where, params = "WHERE a.id = ?", (article_id,)
+    elif product_id is not None:
+        where, params = "WHERE a.product_id = ?", (product_id,)
+    else:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT a.id AS article_id, MIN(b.code) AS code
+        FROM article a JOIN barcode b ON b.article_id = a.id
+        {where}
+        GROUP BY a.id
+        ORDER BY a.id
+        """,
+        params,
+    ).fetchall()
+    return [(row["code"], row["article_id"]) for row in rows]
+
+
 # --- packagings and prices --------------------------------------------------
 
 def insert_packaging(conn, *, scope: str, target_id: int, name: str,

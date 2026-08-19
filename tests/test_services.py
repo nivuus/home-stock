@@ -341,5 +341,6 @@ async def test_services_yaml_parses_for_every_service(hass, seeded):
     for service in (
         "add_stock", "consume", "open_batch", "transfer_batch",
         "adjust_inventory", "query_stock", "export_journal", "import_grocy_catalog",
+        "resync_off",
     ):
         assert descriptions[DOMAIN][service]["name"], service

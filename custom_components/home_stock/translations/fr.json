@@ -25,7 +25,9 @@
       "stock_value": { "name": "Valeur du stock" },
       "batches": { "name": "Lots en stock" },
       "kcal_total": { "name": "Kilocalories sorties du stock" },
-      "cost_total": { "name": "Coût des sorties de stock" }
+      "cost_total": { "name": "Coût des sorties de stock" },
+      "cart_total": { "name": "Panier en cours" },
+      "to_store": { "name": "À ranger" }
     },
     "binary_sensor": {
       "expirations": { "name": "Péremptions proches" },
