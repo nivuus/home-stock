@@ -19,6 +19,12 @@ DROP TRIGGER movement_no_update;
 ALTER TABLE product ADD COLUMN default_shelf_life_days INTEGER;
 ALTER TABLE movement ADD COLUMN base_unit TEXT;
 
+-- A movement whose product_id no longer resolves to a product keeps
+-- base_unit = NULL. This is deliberate: when the product is gone we
+-- genuinely do not know the unit, and inventing one would be worse than
+-- admitting ignorance. In production this case is unreachable: movement
+-- carries a foreign key on product_id, and PRAGMA foreign_keys=ON forbids
+-- inserting a movement whose product does not exist in the first place.
 UPDATE movement SET base_unit = (
   SELECT p.base_unit FROM product p WHERE p.id = movement.product_id
 ) WHERE base_unit IS NULL;

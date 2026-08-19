@@ -216,3 +216,28 @@ def test_m002_accepts_several_closed_sessions():
             "INSERT INTO shopping_session (started_at, state) VALUES (?, 'done')", (started,)
         )
     assert conn.execute("SELECT COUNT(*) AS n FROM shopping_session").fetchone()["n"] == 2
+
+
+def test_a_movement_whose_product_vanished_keeps_an_unknown_unit():
+    """The m002 backfill cannot know the unit of a movement whose product_id
+    no longer resolves to a product: it leaves base_unit at NULL rather than
+    guessing. This case is unreachable in production (movement.product_id is
+    a foreign key, and Database.connect() runs PRAGMA foreign_keys=ON), so
+    this test forces it by disabling foreign keys on the fixture connection
+    — the only way to get such a row into the table at all."""
+    conn = _lot0_database()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        "INSERT INTO movement (id, occurred_at, product_id, article_id, quantity, reason) "
+        "VALUES (2, '2026-08-02T10:00:00', 999, 1, 1.0, 'purchase')"
+    )
+    conn.commit()
+
+    apply_migrations(conn)
+
+    rows = {
+        row["id"]: row["base_unit"]
+        for row in conn.execute("SELECT id, base_unit FROM movement")
+    }
+    assert rows[1] == "piece"  # normal row: still correctly filled
+    assert rows[2] is None  # product 999 does not exist: honestly unknown
