@@ -284,15 +284,15 @@ async def test_an_implausible_off_nova_is_neutralized_and_still_reported(
 
 async def test_a_dropped_nutriscore_is_reported_in_off_dropped_fields(
         hass: HomeAssistant, setup_entry, hass_ws_client):
-    """Half of the round-3 fix: off/mapping.py neutralises "unknown" before
-    the handler ever sees a bad nutriscore value, so _drop_invalid_off_
-    values has nothing to catch — map_article's own `rejections` is what
-    now surfaces it in off_dropped_fields, so the panel can say something
-    was ignored instead of a value going silently missing."""
+    """off/mapping.py neutralises a genuinely implausible grade before the
+    handler ever sees a bad nutriscore value, so _drop_invalid_off_values
+    has nothing to catch — map_article's own `rejections` is what surfaces
+    it in off_dropped_fields, so the panel can say something was ignored
+    instead of a value going silently missing."""
     entry = await setup_entry()
     client = await hass_ws_client(hass)
 
-    off_payload = {**MUESLI.product, "nutriscore_grade": "unknown"}
+    off_payload = {**MUESLI.product, "nutriscore_grade": "zzz"}
     await client.send_json({
         "id": 1, "type": "home_stock/article/create", "code": "1",
         "new_product": {"name": "Muesli douteux", "base_unit": "g"},
@@ -309,6 +309,26 @@ async def test_a_dropped_nutriscore_is_reported_in_off_dropped_fields(
             (created["article_id"],)).fetchone()[0]
 
     assert await hass.async_add_executor_job(nutriscore) is None
+
+
+async def test_an_off_no_grade_sentinel_reports_nothing_dropped(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """"unknown" is OFF's own way of saying "no grade" — 14 of 51 real
+    catalogue records carry it. article/create must not tell the user a
+    value was rejected when the record simply never had one."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    off_payload = {**MUESLI.product, "nutriscore_grade": "unknown"}
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli sans note", "base_unit": "g"},
+        "off": off_payload, "off_source": "food",
+    })
+    created = (await client.receive_json())["result"]
+
+    assert created["created"] is True
+    assert created["off_dropped_fields"] == []
 
 
 async def test_creating_an_article_refuses_an_oversized_off_payload(

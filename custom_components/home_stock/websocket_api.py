@@ -7,7 +7,6 @@ import json
 import re
 import sqlite3
 from dataclasses import asdict
-from datetime import date
 from functools import partial
 from typing import Any, Callable, Final
 
@@ -30,7 +29,7 @@ from .off.mapping import (
 )
 from .off.open_prices import latest_price
 from .storage import repositories as repo
-from .validators import bounded_int, finite_float
+from .validators import MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date, preview
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
 NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
@@ -44,36 +43,17 @@ NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
 # min_quantity, which used to reach the shortage sensor as a silently
 # uncomparable string.
 #
-# finite_float/bounded_int live in .validators, not here: services.py needs
-# the exact same guarantee (a service call is just as capable of writing Inf
-# into the append-only journal as a websocket command is), and the older
-# surface must not be the weaker one.
+# finite_float/bounded_int/bounded_text/iso_date/preview all live in
+# .validators, not here: services.py needs the exact same guarantees (a
+# service call is just as capable of writing Inf, an out-of-range id, or an
+# unparseable best_before into the database as a websocket command is), and
+# the older surface must not be the weaker one. Aliased under their old
+# private names so none of this module's call sites needed to change.
 _finite_float = finite_float
 _bounded_int = bounded_int
-
-MAX_TEXT_LENGTH: Final = 200  # generous for a product name; not for a novel
-
-
-def _preview(value: Any, limit: int = 80) -> str:
-    """A short, safe-to-echo representation of a value for an error message.
-    repr() of a 500 000-character string would repeat the whole thing back
-    to whoever just sent it."""
-    text = repr(value)
-    return text if len(text) <= limit else f"{text[:limit]}…"
-
-
-def _bounded_text(value: Any) -> str | None:
-    """Free text, capped. A 500 000-character label is not something a
-    person typed, nor something an edit should have to echo back in full to
-    refuse."""
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise vol.Invalid(f"expected a string, got {_preview(value)}")
-    if len(value) > MAX_TEXT_LENGTH:
-        raise vol.Invalid(
-            f"text too long: {len(value)} characters (max {MAX_TEXT_LENGTH})")
-    return value
+_bounded_text = bounded_text
+_iso_date = iso_date
+_preview = preview
 
 
 def _non_empty_text(value: Any) -> str:
@@ -132,23 +112,6 @@ _NOVA: Final = vol.Any(vol.All(_bounded_int, vol.In((1, 2, 3, 4))), None)
 # net_quantity is the same kind of value and deserves the same guard.
 _NET_QUANTITY: Final = vol.Any(
     vol.All(_finite_float, vol.Range(min=MIN_NET_QUANTITY, max=MAX_NET_QUANTITY)), None)
-
-
-def _iso_date(value: Any) -> str | None:
-    """A calendar date, ISO 8601 (AAAA-MM-JJ), or nothing. "pas une date"
-    used to be accepted and stored verbatim — it would not fail loudly, it
-    would just quietly stop matching every later comparison against it (the
-    expiry alert window, the todo list of what to eat soon, ...)."""
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise vol.Invalid(f"date attendue au format AAAA-MM-JJ, reçu : {_preview(value)}")
-    try:
-        date.fromisoformat(value)
-    except ValueError as err:
-        raise vol.Invalid(
-            f"date attendue au format AAAA-MM-JJ, reçu : {_preview(value)}") from err
-    return value
 
 
 # A real Open Food Facts record is a few kilobytes; 256 kB is generous

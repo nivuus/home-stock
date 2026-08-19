@@ -68,6 +68,13 @@ MAX_MACRO_SUM: Final = 105.0         # 100 plus a rounding allowance
 NOVA_GROUPS: Final = (1, 2, 3, 4)
 NUTRISCORE_GRADES: Final = ("a", "b", "c", "d", "e")
 
+# OFF's own way of saying "there is no grade for this product" — not a
+# contributor's typo. 14 of 51 real fixture records carry "unknown" here:
+# reporting that as a dropped/rejected value would tell the user something
+# was ignored on more than a quarter of ordinary scans, when nothing usable
+# was ever offered in the first place.
+_OFF_NO_VALUE: Final = frozenset({"unknown", "not-applicable"})
+
 # A number, optionally with a decimal part. "1,kg" must NOT parse: a lenient
 # comma-to-dot replacement turns it into 1.0 and invents a one-kilogram pack.
 _NUMBER = re.compile(r"^\d+(?:[.,]\d+)?$")
@@ -188,6 +195,18 @@ def _nutrition_per_100(product: dict[str, Any]) -> tuple[dict[str, float] | None
     return values, []
 
 
+def _off_offered(value: Any) -> bool:
+    """True when OFF actually offered something for this field, as opposed
+    to nothing at all (`None`) or one of its own "no grade" sentinels
+    ("unknown", "not-applicable") — both mean "OFF has no answer", not "OFF
+    answered something implausible", so neither counts as a rejection."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in _OFF_NO_VALUE:
+        return False
+    return True
+
+
 def _plausible_nova(value: Any) -> int | None:
     """OFF's nova_group, kept only if it is a whole number among the four
     real groups. A value like 1e30 would otherwise reach `int()` here and
@@ -237,12 +256,12 @@ def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
     # present is an absence, not a rejection.
     nutriscore_raw = product.get("nutriscore_grade")
     nutriscore = _plausible_nutriscore(nutriscore_raw)
-    if nutriscore_raw is not None and nutriscore is None:
+    if _off_offered(nutriscore_raw) and nutriscore is None:
         rejections.append("nutriscore")
 
     nova_raw = product.get("nova_group")
     nova = _plausible_nova(nova_raw)
-    if nova_raw is not None and nova is None:
+    if _off_offered(nova_raw) and nova is None:
         rejections.append("nova")
 
     return MappedArticle(

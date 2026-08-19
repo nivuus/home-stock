@@ -1,17 +1,31 @@
 """Value validators shared by the websocket commands and the Home Assistant
 services. SQLite is dynamically typed and both surfaces write straight into
-it, so both need the same guarantee about what a "number" actually is
-before it reaches a column: neither is allowed to be the weaker one.
+it, so both need the same guarantee about what a "number", a "date" and a
+"string" actually are before either one reaches a column: neither surface
+is allowed to be the weaker one.
 """
 from __future__ import annotations
 
 import math
+import re
+from datetime import date
 from typing import Any, Final
 
 import voluptuous as vol
 
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
+
+MAX_TEXT_LENGTH: Final = 200  # generous for a product name; not for a novel
+
+# The extended ISO 8601 calendar-date form, and only that form:
+# date.fromisoformat() has accepted the compact form ("20261201") and the
+# week form ("2026-W01-1") since Python 3.11, both of which then make
+# SQLite's julianday() return NULL — silently dropping the batch from
+# shelf-life learning and from the first-expiring-first ordering. Checked
+# before fromisoformat() is even called, so the shape promised by the error
+# message ("AAAA-MM-JJ") is the only shape actually accepted.
+_ISO_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def finite_float(value: Any) -> float:
@@ -65,3 +79,48 @@ def bounded_int(value: Any) -> int:
     if not _SQLITE_INT_MIN <= number <= _SQLITE_INT_MAX:
         raise vol.Invalid(f"out of range for a 64-bit integer: {value!r}")
     return number
+
+
+def preview(value: Any, limit: int = 80) -> str:
+    """A short, safe-to-echo representation of a value for an error message.
+    repr() of a 500 000-character string would repeat the whole thing back
+    to whoever just sent it."""
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def bounded_text(value: Any) -> str | None:
+    """Free text, capped. A 500 000-character label is not something a
+    person typed, nor something an edit should have to echo back in full to
+    refuse."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise vol.Invalid(f"expected a string, got {preview(value)}")
+    if len(value) > MAX_TEXT_LENGTH:
+        raise vol.Invalid(
+            f"text too long: {len(value)} characters (max {MAX_TEXT_LENGTH})")
+    return value
+
+
+def iso_date(value: Any) -> str | None:
+    """A calendar date, ISO 8601 extended form (AAAA-MM-JJ), or nothing.
+
+    Both surfaces need this, and the household drives them both: a bad
+    value here is not just refused input, it is `application.py`'s
+    `summary()` raising `ValueError` on every coordinator refresh from the
+    moment it is stored — every sensor and the todo entity go `unavailable`
+    and stay there, in a table an append-only design cannot repair short of
+    hand-editing the database. "pas une date" (a voice command, a template
+    that rendered wrong) must never reach a batch row.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _ISO_DATE_RE.match(value):
+        raise vol.Invalid(f"date attendue au format AAAA-MM-JJ, reçu : {preview(value)}")
+    try:
+        date.fromisoformat(value)
+    except ValueError as err:
+        raise vol.Invalid(
+            f"date attendue au format AAAA-MM-JJ, reçu : {preview(value)}") from err
+    return value

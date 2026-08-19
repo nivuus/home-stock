@@ -14,7 +14,7 @@ from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
 from .storage import repositories as repo
-from .validators import bounded_int, finite_float
+from .validators import bounded_int, bounded_text, finite_float, iso_date
 
 # Reasons a "consume" call may legitimately carry — the same three the
 # services.yaml selector offers. The other three reasons (purchase, inventory,
@@ -39,10 +39,10 @@ ADD_STOCK_SCHEMA = vol.All(
         vol.Exclusive("barcode", "article"): cv.string,
         vol.Required("quantity"): finite_float,
         vol.Required("location_id"): _id,
-        vol.Optional("best_before"): cv.string,
+        vol.Optional("best_before"): iso_date,
         vol.Optional("price_per_base_unit"): finite_float,
         vol.Optional("packaging_base_quantity"): finite_float,
-        vol.Optional("idempotency_key"): cv.string,
+        vol.Optional("idempotency_key"): bounded_text,
     }),
     # vol.Exclusive above only forbids giving both; without at least one, the
     # service reaches services.add_stock() with neither, tries to resolve
@@ -53,7 +53,7 @@ CONSUME_SCHEMA = vol.Schema({
     vol.Required("product_id"): _id,
     vol.Required("quantity"): finite_float,
     vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
-    vol.Optional("idempotency_key"): cv.string,
+    vol.Optional("idempotency_key"): bounded_text,
 })
 BATCH_SCHEMA = vol.Schema({vol.Required("batch_id"): _id})
 TRANSFER_SCHEMA = BATCH_SCHEMA.extend({vol.Required("location_id"): _id})
