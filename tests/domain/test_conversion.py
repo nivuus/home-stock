@@ -95,3 +95,41 @@ def test_an_implausible_article_weight_is_treated_as_missing():
 
     assert plan.articles[0].factor == 500.0
     assert plan.articles[0].used_reference is True
+
+
+def test_a_batch_referring_to_an_unknown_article_is_refused_not_crashed():
+    """The journal can go stale — a batch may outlive its article row. The
+    caller only catches ConversionError, so a bare KeyError would crash
+    unhandled instead of showing an error on the confirmation screen."""
+    stale_batches = [{"id": 101, "article_id": 42, "remaining": 1.0, "initial": 1.0}]
+    with pytest.raises(ConversionError, match="batch 101"):
+        plan_conversion(product=PRODUCT, articles=ARTICLES, batches=stale_batches,
+                        to_unit="g", reference_quantity=500.0)
+
+
+def test_a_product_already_in_millilitres_has_nothing_to_convert():
+    with pytest.raises(ConversionError, match="already"):
+        plan_conversion(product={"id": 1, "name": "Huile", "base_unit": "ml"},
+                        articles=ARTICLES, batches=BATCHES,
+                        to_unit="g", reference_quantity=500.0)
+
+
+def test_a_missing_reference_weight_is_refused():
+    with pytest.raises(ConversionError, match="reference"):
+        plan_conversion(product=PRODUCT, articles=ARTICLES, batches=BATCHES,
+                        to_unit="g", reference_quantity=None)
+
+
+def test_a_reference_weight_given_as_a_string_is_refused():
+    with pytest.raises(ConversionError, match="reference"):
+        plan_conversion(product=PRODUCT, articles=ARTICLES, batches=BATCHES,
+                        to_unit="g", reference_quantity="500")
+
+
+@pytest.mark.parametrize("reference", [True, False])
+def test_a_boolean_reference_weight_is_refused(reference):
+    """bool is an int subclass in Python: without an explicit exclusion,
+    True/False would silently pass the range check as 1.0/0.0."""
+    with pytest.raises(ConversionError, match="reference"):
+        plan_conversion(product=PRODUCT, articles=ARTICLES, batches=BATCHES,
+                        to_unit="g", reference_quantity=reference)

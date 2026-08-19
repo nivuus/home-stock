@@ -50,6 +50,9 @@ class ConversionPlan:
 
 
 def _plausible(quantity: Any) -> bool:
+    # bool is an int subclass in Python, so it is excluded explicitly — the
+    # same convention off/mapping.py's _number() uses — otherwise True/False
+    # would silently pass through the range check as 1.0/0.0.
     return (isinstance(quantity, (int, float)) and not isinstance(quantity, bool)
             and MIN_REFERENCE <= quantity <= MAX_REFERENCE)
 
@@ -82,17 +85,30 @@ def plan_conversion(*, product: dict[str, Any], articles: Sequence[dict[str, Any
         factors[article["id"]] = factor
         planned_articles.append(ArticleConversion(article["id"], factor, uses_reference))
 
-    planned_batches = tuple(
-        BatchConversion(
-            batch_id=batch["id"],
-            article_id=batch["article_id"],
-            old_remaining=batch["remaining"],
-            new_remaining=batch["remaining"] * factors[batch["article_id"]],
-            old_initial=batch["initial"],
-            new_initial=batch["initial"] * factors[batch["article_id"]],
+    planned_batch_list: list[BatchConversion] = []
+    for batch in batches:
+        article_id = batch["article_id"]
+        if article_id not in factors:
+            # A plan that cannot be computed must fail through the module's
+            # own error type, because the caller catches ConversionError and
+            # nothing else — a bare KeyError would escape unhandled and crash
+            # instead of showing the confirmation screen an error message.
+            raise ConversionError(
+                f"batch {batch['id']} refers to article {article_id}, "
+                "which is not among this product's articles"
+            )
+        factor = factors[article_id]
+        planned_batch_list.append(
+            BatchConversion(
+                batch_id=batch["id"],
+                article_id=article_id,
+                old_remaining=batch["remaining"],
+                new_remaining=batch["remaining"] * factor,
+                old_initial=batch["initial"],
+                new_initial=batch["initial"] * factor,
+            )
         )
-        for batch in batches
-    )
+    planned_batches = tuple(planned_batch_list)
 
     return ConversionPlan(
         product_id=product["id"],
