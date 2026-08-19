@@ -5,22 +5,25 @@ import { FileAttente } from './file-attente';
 import './ecrans/scanner';
 import './ecrans/fiche';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
-import type { ResultatLookup } from './ecrans/fiche';
+import type { ArticlePret, ResultatLookup } from './ecrans/fiche';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'catalogue' | 'reglages';
 
 type SessionCourante = { store: string | null } | null;
 
-type ArticlePret = { articleId: number; quantite: number; prixUnitaire: number | null; mode: 'panier' | 'rangement' };
+/** Ce qu'on retient d'un article créé « à ranger » : rien n'est perdu, même
+ *  si l'écran rangement (lot suivant) n'existe pas encore pour s'en servir. */
+type EnAttenteRangement = { articleId: number; quantite: number; prixUnitaire: number | null };
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
-function resumeDe(resultat: ResultatLookup | null, statut: string): ResumeDerniereFiche | null {
+function resumeDe(resultat: ResultatLookup | null, statut: string,
+                  ignores: string[] = []): ResumeDerniereFiche | null {
   if (!resultat) return null;
   const nom = resultat.off?.label ?? resultat.article?.label ?? resultat.product?.name ?? resultat.code;
   const marque = resultat.off?.brand ?? resultat.article?.brand ?? null;
   const image = resultat.off?.image ?? resultat.article?.image ?? null;
-  return { nom, marque, image, statut };
+  return { nom, marque, image, statut, ignores };
 }
 
 @customElement('home-stock-panel')
@@ -32,6 +35,7 @@ export class PanneauGardeManger extends LitElement {
   @state() private session: SessionCourante = null;
   @state() private resultatCourant: ResultatLookup | null = null;
   @state() private derniereFiche: ResumeDerniereFiche | null = null;
+  @state() private enAttenteRangement: EnAttenteRangement | null = null;
 
   private connexion?: Connexion;
   private file?: FileAttente;
@@ -108,25 +112,29 @@ export class PanneauGardeManger extends LitElement {
 
   /** La fiche a résolu l'article (créé au besoin) et dit ce qu'elle veut en
    *  faire. En session, ajouter au panier ne demande rien de plus (pas
-   *  d'emplacement à choisir) : c'est fait ici. Hors session, choisir
+   *  d'emplacement à choisir) : c'est la file hors-ligne qui l'envoie —
+   *  c'est tout le sens de son existence, le rayon d'un magasin est
+   *  précisément l'endroit où le réseau lâche. Hors session, choisir
    *  l'emplacement et la DLC revient à l'écran « rangement » — pas encore
    *  construit (lot suivant, avec `raccourcisDlc`) : en attendant, l'article
-   *  existe déjà dans le catalogue (c'est le principal), et on revient au
-   *  scanner pour ne pas bloquer la suite des scans. */
-  private surArticlePret = async (evenement: CustomEvent<ArticlePret>): Promise<void> => {
-    const { articleId, quantite, prixUnitaire, mode } = evenement.detail;
+   *  existe déjà dans le catalogue (c'est le principal), et on garde la
+   *  quantité et le prix déjà saisis plutôt que de les jeter — l'écran
+   *  rangement les lira dans `enAttenteRangement`. */
+  private surArticlePret = (evenement: CustomEvent<ArticlePret>): void => {
+    const { articleId, quantite, prixUnitaire, mode, offDroppedFields } = evenement.detail;
     if (mode === 'panier') {
-      try {
-        await this.connexion!.appeler('home_stock/session/add_line', {
-          article_id: articleId, quantity: quantite,
-          unit_price: prixUnitaire ?? undefined, idempotency_key: crypto.randomUUID(),
-        });
-        this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.');
-      } catch {
-        this.derniereFiche = resumeDe(this.resultatCourant, 'Non envoyé — hors ligne.');
-      }
+      this.file!.ajouter('home_stock/session/add_line', {
+        article_id: articleId, quantity: quantite, unit_price: prixUnitaire,
+      });
+      this.enAttente = this.file!.taille();
+      void this.file!.rejouer().then(() => { this.enAttente = this.file!.taille(); });
+      this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.', offDroppedFields);
     } else {
-      this.derniereFiche = resumeDe(this.resultatCourant, 'Article créé — reste à ranger.');
+      this.enAttenteRangement = { articleId, quantite, prixUnitaire };
+      this.derniereFiche = resumeDe(
+        this.resultatCourant,
+        'Article créé — quantité et prix retenus, reste à choisir l’emplacement.',
+        offDroppedFields);
     }
     this.resultatCourant = null;
     this.ecran = 'scanner';
@@ -140,7 +148,7 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'scanner') {
       return html`
         <home-stock-scanner .session=${this.session} .derniereFiche=${this.derniereFiche}
-          @code-lu=${this.surCodeLu}>
+          .enAttente=${this.enAttente} @code-lu=${this.surCodeLu}>
         </home-stock-scanner>`;
     }
     if (this.ecran === 'fiche' && this.resultatCourant) {
@@ -149,6 +157,18 @@ export class PanneauGardeManger extends LitElement {
           .mode=${this.session ? 'panier' : 'rangement'} .connexion=${this.connexion}
           @article-pret=${this.surArticlePret}>
         </home-stock-fiche>`;
+    }
+    if (this.ecran === 'rangement' && this.enAttenteRangement) {
+      // Pas encore l'écran rangement (lot suivant, avec `raccourcisDlc`) :
+      // ce data-* n'est là que pour que la quantité et le prix déjà saisis
+      // restent lisibles — pour l'écran qui viendra les lire, et pour
+      // prouver ici qu'ils n'ont pas été jetés en route.
+      return html`
+        <div class="ecran" data-article-id=${this.enAttenteRangement.articleId}
+          data-quantite=${this.enAttenteRangement.quantite}
+          data-prix-unitaire=${this.enAttenteRangement.prixUnitaire ?? ''}>
+          ${this.ecran}
+        </div>`;
     }
     return html`<div class="ecran">${this.ecran}</div>`;
   }

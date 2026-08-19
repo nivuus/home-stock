@@ -7,6 +7,10 @@
  */
 import type { Scanner } from './index';
 
+/** Si l'application ne répond jamais (fermée en tâche de fond, bus perdu),
+ *  le bouton de scan ne doit pas rester mort pour le reste de la session. */
+export const DELAI_REPONSE_MS = 60_000;
+
 export class ScannerCompanion implements Scanner {
   constructor(private fenetre: any) {}
 
@@ -18,16 +22,23 @@ export class ScannerCompanion implements Scanner {
   lire(): Promise<string | null> {
     return new Promise((resoudre) => {
       const precedent = this.fenetre.externalBus;
+      let repondu = false;
+      const finir = (valeur: string | null): void => {
+        if (repondu) return;
+        repondu = true;
+        clearTimeout(delai);
+        this.fenetre.externalBus = precedent;
+        resoudre(valeur);
+      };
+      const delai = setTimeout(() => finir(null), DELAI_REPONSE_MS);
       this.fenetre.externalBus = (message: any) => {
         const evenement = typeof message === 'string' ? JSON.parse(message) : message;
         if (evenement.command === 'bar_code/scan_result') {
           this.envoyer({ type: 'bar_code/close' });
-          this.fenetre.externalBus = precedent;
-          resoudre(String(evenement.payload.rawValue));
+          finir(String(evenement.payload.rawValue));
         } else if (evenement.command === 'bar_code/aborted'
                    || evenement.command === 'bar_code/close') {
-          this.fenetre.externalBus = precedent;
-          resoudre(null);
+          finir(null);
         }
         return true;
       };

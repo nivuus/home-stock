@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { choisirScanner } from '../src/scan';
-import { ScannerCompanion } from '../src/scan/companion';
+import { ScannerCompanion, DELAI_REPONSE_MS } from '../src/scan/companion';
 
 function fenetreAvecCompanion(): any {
   return {
@@ -26,6 +26,15 @@ describe('choix du scanner', () => {
 
   it('retombe sur le clavier quand ni l’un ni l’autre n’existe', () => {
     expect(choisirScanner({} as any).constructor.name).toBe('ScannerClavier');
+  });
+
+  it('choisit l’application HA même quand BarcodeDetector est AUSSI disponible : la '
+     + 'priorité n’est vraie que si elle tient face à un choix, pas seulement en son absence', () => {
+    const fenetre: any = {
+      externalApp: { externalBus: vi.fn() }, BarcodeDetector: class {},
+      navigator: { mediaDevices: {} },
+    };
+    expect(choisirScanner(fenetre).constructor.name).toBe('ScannerCompanion');
   });
 });
 
@@ -61,5 +70,25 @@ describe('scanner de l’application Home Assistant', () => {
     await promesse;
 
     expect(envoyes.map((m) => m.type)).toContain('bar_code/close');
+  });
+
+  it('rend null si l’application ne répond jamais, plutôt que de bloquer le bouton pour toujours', async () => {
+    vi.useFakeTimers();
+    try {
+      const fenetre: any = { externalApp: { externalBus: vi.fn() } };
+      const scanner = new ScannerCompanion(fenetre);
+
+      const promesse = scanner.lire();
+      expect(fenetre.externalBus).toBeTypeOf('function'); // le scan a bien pris la main sur le bus
+
+      await vi.advanceTimersByTimeAsync(DELAI_REPONSE_MS);
+
+      expect(await promesse).toBeNull();
+      // Le bus doit être rendu — sinon il reste accroché à une lecture qui
+      // n'aboutira jamais, et le prochain scan ne recevrait plus rien.
+      expect(fenetre.externalBus).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

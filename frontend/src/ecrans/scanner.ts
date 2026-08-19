@@ -8,12 +8,18 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { choisirScanner, type Scanner } from '../scan';
+import { libellesChamps } from './fiche';
 
 export type ResumeDerniereFiche = {
   nom: string;
   marque: string | null;
   image: string | null;
   statut: string;
+  /** Colonnes qu'Open Food Facts proposait et que la maison a jugées trop
+   *  peu fiables pour les enregistrer. La fiche elle-même disparaît de
+   *  l'écran dans le même geste qui produit cette liste (retour au
+   *  scanner) : c'est ici, sur ce qui reste affiché, qu'elle doit se voir. */
+  ignores?: string[];
 };
 
 @customElement('home-stock-scanner')
@@ -22,6 +28,8 @@ export class EcranScanner extends LitElement {
   @property({ attribute: false }) fenetre: any = window;
   @property({ attribute: false }) derniereFiche: ResumeDerniereFiche | null = null;
   @property({ attribute: false }) session: { store: string | null } | null = null;
+  /** Nombre d'écritures en attente dans la file hors-ligne. */
+  @property({ attribute: false }) enAttente = 0;
 
   @state() private saisieOuverte = false;
   @state() private codeSaisi = '';
@@ -86,7 +94,15 @@ export class EcranScanner extends LitElement {
             ${this.derniereFiche.nom}${this.derniereFiche.marque ? ` — ${this.derniereFiche.marque}` : ''}
           </p>
           <p class="derniere-fiche-statut">${this.derniereFiche.statut}</p>
+          ${this.derniereFiche.ignores?.length ? html`
+            <p class="derniere-fiche-ignores">
+              Ignoré par Open Food Facts : ${libellesChamps(this.derniereFiche.ignores)}
+            </p>` : nothing}
         </section>` : nothing}
+
+      ${this.enAttente > 0 ? html`
+        <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
+      ` : nothing}
 
       <button class="bouton-saisie" @click=${() => { this.saisieOuverte = !this.saisieOuverte; }}>
         Saisir le code
@@ -120,6 +136,10 @@ export class EcranScanner extends LitElement {
       display: flex; flex-direction: column; align-items: center; gap: 4px;
     }
     .derniere-fiche img { max-height: 72px; max-width: 100%; border-radius: 6px; }
+    .derniere-fiche-ignores { color: var(--secondary-text-color); font-size: 0.85rem; text-align: center; }
+    .en-attente {
+      text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 8px 0 0;
+    }
     .bouton-saisie {
       display: block; width: 100%; min-height: 48px; margin-top: 16px; border-radius: 8px;
       border: 1px solid var(--divider-color, #ccc); background: transparent; color: var(--primary-text-color);
