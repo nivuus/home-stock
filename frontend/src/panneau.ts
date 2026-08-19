@@ -23,13 +23,24 @@ export class PanneauGardeManger extends LitElement {
       this.connexion!.appeler(type, charge));
     this.enAttente = this.file.taille();
     void this.file.rejouer().then(() => { this.enAttente = this.file!.taille(); });
-    void this.connexion.abonner(() => this.requestUpdate());
+    void this.connexion.abonner(() => this.requestUpdate()).then((desabonner) => {
+      // L'élément a pu quitter le DOM pendant que l'abonnement était en vol :
+      // disconnectedCallback s'est déjà exécuté et ne sera pas rappelé, donc
+      // stocker la fonction ici la laisserait fuiter pour toujours. On s'en
+      // sert tout de suite à la place de la garder.
+      if (this.isConnected) {
+        this.desabonner = desabonner;
+      } else {
+        desabonner();
+      }
+    });
     window.addEventListener('online', this.auRetourDuReseau);
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this.desabonner?.();
+    this.desabonner = undefined;
     window.removeEventListener('online', this.auRetourDuReseau);
   }
 

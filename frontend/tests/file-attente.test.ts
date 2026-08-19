@@ -73,4 +73,12 @@ describe('file d’attente hors ligne', () => {
     const cle = file.ajouter('t', { idempotency_key: 'imposée' });
     expect(cle).toBe('imposée');
   });
+
+  it('repart vide plutôt que de planter si le stockage est corrompu', () => {
+    const stockage = new StockageFactice();
+    stockage.setItem('home_stock.file', '{ceci n’est pas du JSON valide');
+
+    expect(() => new FileAttente(stockage, async () => {})).not.toThrow();
+    expect(new FileAttente(stockage, async () => {}).taille()).toBe(0);
+  });
 });
