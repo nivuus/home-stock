@@ -453,6 +453,16 @@ def line_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
         (idempotency_key,)).fetchone())
 
 
+def get_line(conn, line_id: int) -> dict[str, Any] | None:
+    """The raw shopping_line row, as the database holds it — no join.
+
+    Used to hand a caller back exactly what it just wrote, whether or not it
+    supplied an idempotency key (line_by_key only works with one).
+    """
+    return _row(conn.execute(
+        "SELECT * FROM shopping_line WHERE id = ?", (line_id,)).fetchone())
+
+
 def count_pending_lines_for_product(conn, product_id: int) -> int:
     """Shopping lines not yet turned into a batch (`stored_at IS NULL`), for
     any article of this product.
@@ -525,6 +535,24 @@ def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
         (article_id, store),
     ).fetchone()
     return row["price_per_base_unit"] if row else None
+
+
+def recent_shelf_lives(conn, product_id: int, limit: int = 3) -> list[int]:
+    """Days between entry and best-before on this product's latest batches.
+
+    Feeds the default the panel offers as a one-tap button. Batches with no
+    best-before say nothing about shelf life and are left out.
+    """
+    rows = conn.execute(
+        """
+        SELECT CAST(julianday(b.best_before) - julianday(date(b.entered_at)) AS INTEGER) AS days
+        FROM batch b JOIN article a ON a.id = b.article_id
+        WHERE a.product_id = ? AND b.best_before IS NOT NULL
+        ORDER BY b.entered_at DESC, b.id DESC LIMIT ?
+        """,
+        (product_id, limit),
+    ).fetchall()
+    return [row["days"] for row in rows if row["days"] is not None and row["days"] >= 0]
 
 
 def list_stores(conn) -> list[str]:
