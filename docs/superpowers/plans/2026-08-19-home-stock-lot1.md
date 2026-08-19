@@ -3730,9 +3730,11 @@ async def article_create(hass, connection, msg) -> None:
                 })
                 per_base = nutrition_per_base_unit(
                     mapped.nutrition_per_100, product["base_unit"], mapped.net_quantity)
-                if per_base:
-                    values["kcal_per_base_unit"] = per_base.pop("kcal", None)
-                    values.update(per_base)
+                # to_article_columns renames `kcal` to the article's own
+                # `kcal_per_base_unit`. Passing the raw dict would lose the
+                # calories silently, because insert_article drops keys it does
+                # not recognise without raising.
+                values.update(to_article_columns(per_base))
             values.update({k: v for k, v in msg["fields"].items() if k in ARTICLE_EDITABLE})
 
             article_id = repo.insert_article(conn, product_id=product_id, **values)
@@ -3939,7 +3941,7 @@ async def _open_prices_only(hass, runtime, code, net_quantity) -> dict[str, Any]
 et les imports nécessaires en tête du module : `json`, `dataclasses.asdict`,
 `typing.Final`, `homeassistant.util.dt as dt_util`,
 `homeassistant.helpers.aiohttp_client.async_get_clientsession`, les fonctions de
-`.off.mapping`, `.off.open_prices`, `.off.client`, `.domain.matching`, `.domain.pricing`,
+`.off.mapping` (dont `to_article_columns`), `.off.open_prices`, `.off.client`, `.domain.matching`, `.domain.pricing`,
 `.domain.conversion`.
 
 Enfin, enregistrer les nouvelles commandes dans `async_register_websocket`.
