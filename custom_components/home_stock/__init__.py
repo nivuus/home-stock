@@ -16,6 +16,7 @@ from .application import StockManager
 from .const import DATABASE_FILENAME, DOMAIN
 from .coordinator import HomeStockCoordinator
 from .off.client import AiohttpTransport, OffClient
+from .panel import async_register_panel, async_remove_panel
 from .services import async_register_services
 from .shopping import ShoppingService
 from .storage.database import Database
@@ -100,6 +101,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     async_register_services(hass)
     async_register_websocket(hass)
+    await async_register_panel(hass)
     return True
 
 
@@ -112,5 +114,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) -
     """Close the database when the entry goes away."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        async_remove_panel(hass)
         await hass.async_add_executor_job(entry.runtime_data.database.close)
     return unloaded

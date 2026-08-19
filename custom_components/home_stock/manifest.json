@@ -3,7 +3,7 @@
   "name": "Garde-manger",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["http", "websocket_api"],
+  "dependencies": ["http", "websocket_api", "panel_custom"],
   "documentation": "https://allanic.me/home-stock",
   "issue_tracker": "https://allanic.me/home-stock",
   "iot_class": "local_push",
