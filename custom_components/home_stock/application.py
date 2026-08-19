@@ -6,20 +6,29 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from .const import (
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
+    REASON_CONVERSION,
     REASON_INVENTORY,
     REASON_PURCHASE,
     REASON_TRANSFER,
 )
+from .domain.conversion import plan_conversion
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
+
+# Nutrition columns of `article`, all stored per base unit, all rescaled when a
+# product changes unit.
+NUTRITION_COLUMNS: Final = (
+    "kcal_per_base_unit", "proteins", "carbohydrates", "sugars", "added_sugars",
+    "fat", "saturated_fat", "fiber", "salt",
+)
 
 
 def _now() -> str:
@@ -298,6 +307,95 @@ class StockManager:
                 article_id=article_id, batch_id=batch_id, quantity=delta,
                 reason=REASON_INVENTORY, base_unit=base_unit,
             )
+
+    def convert_product_unit(self, *, product_id: int, to_unit: str,
+                             reference_quantity: float, packaging_name: str = "unité",
+                             dry_run: bool = False) -> dict[str, Any]:
+        """Move a product from pieces to grams or millilitres.
+
+        Everything happens in one transaction: a product half-converted would
+        report a stock that is partly packets and partly grams, and no reading
+        of the journal could tell them apart afterwards.
+        """
+        with self.db.write() as conn:
+            product = repo.get_product(conn, product_id)
+            if product is None:
+                raise LookupError(f"no product {product_id}")
+            articles = repo.list_articles_for_product(conn, product_id)
+            batches = repo.list_open_batches_for_product(conn, product_id)
+
+            plan = plan_conversion(product=product, articles=articles, batches=batches,
+                                   to_unit=to_unit, reference_quantity=reference_quantity)
+
+            report = {
+                "product_id": plan.product_id,
+                "product_name": product["name"],
+                "from_unit": plan.from_unit,
+                "to_unit": plan.to_unit,
+                "reference_quantity": plan.reference_quantity,
+                "articles": len(plan.articles),
+                "batches": len(plan.batches),
+                "movements": plan.movements,
+                "articles_using_reference": list(plan.articles_using_reference),
+                "applied": False,
+            }
+            if dry_run:
+                return report
+
+            occurred_at = _now()
+            articles_by_id = {a["id"]: a for a in articles}
+
+            for article in plan.articles:
+                # Nutrition is stored per base unit: per packet becomes per gram.
+                # net_quantity is a mass or a volume already, so it does not move.
+                current = articles_by_id[article.article_id]
+                rescaled = {
+                    column: current[column] / article.factor
+                    for column in NUTRITION_COLUMNS
+                    if current[column] is not None
+                }
+                repo.update_article_fields(conn, article.article_id, rescaled)
+                repo.insert_packaging(conn, scope="article", target_id=article.article_id,
+                                      name=packaging_name, base_quantity=article.factor,
+                                      is_purchase_default=True)
+
+            for batch in plan.batches:
+                # The movement recording the old quantity is written before
+                # set_batch_remaining, so the journal captures the number that
+                # was actually true at that moment, not the one it becomes.
+                repo.insert_movement(
+                    conn, occurred_at=occurred_at, product_id=product_id,
+                    article_id=batch.article_id, batch_id=batch.batch_id,
+                    quantity=-batch.old_remaining, reason=REASON_CONVERSION,
+                    base_unit=plan.from_unit, kcal=None, cost=None,
+                    ref_type=None, ref_id=None,
+                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:out",
+                )
+                repo.insert_movement(
+                    conn, occurred_at=occurred_at, product_id=product_id,
+                    article_id=batch.article_id, batch_id=batch.batch_id,
+                    quantity=batch.new_remaining, reason=REASON_CONVERSION,
+                    base_unit=plan.to_unit, kcal=None, cost=None,
+                    ref_type=None, ref_id=None,
+                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:in",
+                )
+                repo.set_batch_remaining(conn, batch.batch_id, batch.new_remaining)
+                conn.execute("UPDATE batch SET initial = ? WHERE id = ?",
+                             (batch.new_initial, batch.batch_id))
+
+            product_fields: dict[str, Any] = {"base_unit": plan.to_unit}
+            if product["min_quantity"] is not None:
+                product_fields["min_quantity"] = (
+                    product["min_quantity"] * plan.reference_quantity
+                )
+            if product["reference_kcal"] is not None:
+                product_fields["reference_kcal"] = (
+                    product["reference_kcal"] / plan.reference_quantity
+                )
+            repo.update_product_fields(conn, product_id, product_fields)
+
+            report["applied"] = True
+            return report
 
     # --- reads --------------------------------------------------------------
 

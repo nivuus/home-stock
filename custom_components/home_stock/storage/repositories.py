@@ -179,6 +179,20 @@ def insert_batch(conn, *, article_id: int, location_id: int, quantity: float,
     })
 
 
+def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT * FROM article WHERE product_id = ? ORDER BY id", (product_id,)))
+
+
+def list_open_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        """
+        SELECT b.* FROM batch b JOIN article a ON a.id = b.article_id
+        WHERE a.product_id = ? AND b.closed_at IS NULL ORDER BY b.id
+        """,
+        (product_id,)))
+
+
 def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     """Open batches only, with the kcal rate resolved: the article's own rate,
     falling back to the product's reference_kcal when the article has none
@@ -211,6 +225,28 @@ def set_batch_opened(conn, batch_id: int, opened_at: str, best_before: str | Non
 
 def set_batch_location(conn, batch_id: int, location_id: int) -> None:
     conn.execute("UPDATE batch SET location_id = ? WHERE id = ?", (location_id, batch_id))
+
+
+def _update_fields(conn, table: str, row_id: int, fields: dict[str, Any]) -> None:
+    """Write only the columns given. An empty dict is a no-op, not an error.
+
+    Column names are interpolated into the SQL: `fields` keys must never come
+    from raw user input. Callers are expected to filter against a whitelist of
+    columns before calling (see PRODUCT_FIELDS/ARTICLE_FIELDS above).
+    """
+    if not fields:
+        return
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    conn.execute(f"UPDATE {table} SET {assignments} WHERE id = ?",
+                 (*fields.values(), row_id))
+
+
+def update_article_fields(conn, article_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "article", article_id, fields)
+
+
+def update_product_fields(conn, product_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "product", product_id, fields)
 
 
 # --- movements --------------------------------------------------------------
