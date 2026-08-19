@@ -4,6 +4,7 @@ changes."""
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import asdict
@@ -13,52 +14,159 @@ from typing import Any, Callable, Final
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import BASE_UNITS, DOMAIN
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
 from .domain.units import UnitError
-from .off.mapping import map_article, nutrition_per_base_unit, to_article_columns
+from .off.mapping import (
+    MAX_NET_QUANTITY,
+    MIN_NET_QUANTITY,
+    map_article,
+    nutrition_per_base_unit,
+    to_article_columns,
+)
 from .off.open_prices import latest_price
 from .storage import repositories as repo
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
 NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
 
+# --- value validators ------------------------------------------------------
+#
+# SQLite is dynamically typed: repositories._update_fields interpolates a
+# column name and binds whatever value it is given, so both the column NAME
+# and its VALUE must be checked before anything reaches SQL. A whitelist of
+# names alone is not enough — see test_product_update_refuses_a_non_numeric_
+# min_quantity, which used to reach the shortage sensor as a silently
+# uncomparable string.
+
+_SQLITE_INT_MIN: Final = -(2**63)
+_SQLITE_INT_MAX: Final = 2**63 - 1
+
+
+def _finite_float(value: Any) -> float:
+    """A real, finite number. `vol.Coerce(float)` alone accepts "inf",
+    "-inf" and "nan": an infinite min_quantity would flip the shortage
+    sensor on permanently, an infinite kcal_per_base_unit would reach the
+    append-only movement journal as Inf — which Home Assistant's JSON
+    encoder then renders as `null`, so the panel shows nothing amiss — and
+    NaN would land as SQL NULL just as silently. All three are refused here
+    instead of ever reaching a column.
+    """
+    if isinstance(value, bool):
+        raise vol.Invalid(f"expected a number, got bool {value!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid(f"expected a number, got {value!r}") from err
+    if not math.isfinite(number):
+        raise vol.Invalid(f"expected a finite number, got {value!r}")
+    return number
+
+
+def _bounded_int(value: Any) -> int:
+    """A whole number SQLite can actually store as an INTEGER (signed
+    64-bit). `vol.Coerce(int)` alone truncates a float silently — `aisle_id:
+    3.7` would quietly file the product in aisle 3, a different aisle than
+    the one asked for — and never bounds the result, so a JSON number like
+    `1e308` sails through as a 309-digit int and only fails later, uncaught,
+    when sqlite3 raises OverflowError at bind time. Both are refused here.
+    """
+    if isinstance(value, bool):
+        raise vol.Invalid(f"expected a whole number, got bool {value!r}")
+    if isinstance(value, float):
+        if not math.isfinite(value) or value != int(value):
+            raise vol.Invalid(f"expected a whole number, got {value!r}")
+        number = int(value)
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        try:
+            number = int(value.strip())
+        except ValueError as err:
+            # A numeric-looking string like "3.7" is refused the same way,
+            # rather than accepted via a float round-trip nobody asked for.
+            raise vol.Invalid(f"expected a whole number, got {value!r}") from err
+    else:
+        raise vol.Invalid(f"expected a whole number, got {value!r}")
+    if not _SQLITE_INT_MIN <= number <= _SQLITE_INT_MAX:
+        raise vol.Invalid(f"out of range for a 64-bit integer: {value!r}")
+    return number
+
+
+def _non_empty_text(value: Any) -> str:
+    """A product name: trimmed, and refused if that leaves nothing — `name:
+    ""` (or all-whitespace) satisfies the `NOT NULL` column but names
+    nothing a person could find again."""
+    if not isinstance(value, str):
+        raise vol.Invalid(f"expected a string, got {value!r}")
+    trimmed = value.strip()
+    if not trimmed:
+        raise vol.Invalid("expected a non-empty name")
+    return trimmed
+
+
+_TRUE_STRINGS: Final = frozenset({"1", "true", "yes", "on"})
+_FALSE_STRINGS: Final = frozenset({"0", "false", "no", "off"})
+
+
+def _strict_boolean(value: Any) -> bool:
+    """Stricter than `cv.boolean`, which treats any non-zero number as true
+    — `edible: 5` must not be silently accepted as "yes". Only an actual
+    bool, one of the usual French/English-neutral strings, or exactly 0/1
+    are recognised; everything else is refused."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_STRINGS:
+            return True
+        if lowered in _FALSE_STRINGS:
+            return False
+    elif isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise vol.Invalid(f"expected a boolean, got {value!r}")
+
+
 _GRADE: Final = vol.In(("a", "b", "c", "d", "e"))
-_TEXT: Final = vol.Any(str, None)
-_REQUIRED_TEXT: Final = vol.Schema(str)
-_FLOAT: Final = vol.Any(vol.Coerce(float), None)
-_INT: Final = vol.Any(vol.Coerce(int), None)
+_BASE_UNIT: Final = vol.In(BASE_UNITS)
+_TEXT: Final = vol.Any(str, None)                                    # free, nullable text
+# A quantity cannot be negative: a person never means "-5 g" or "-5 kcal".
+_NON_NEGATIVE_FLOAT: Final = vol.Any(vol.All(_finite_float, vol.Range(min=0)), None)
+_NON_NEGATIVE_INT: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=0)), None)
+# category_id/aisle_id/default_location_id reference an INTEGER PRIMARY KEY,
+# which SQLite starts at 1: 0 or a negative id can never be a real row.
+_POSITIVE_ID: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=1)), None)
+# The four Nutri-Score/NOVA classification groups OFF actually uses.
+_NOVA: Final = vol.Any(vol.All(_bounded_int, vol.In((1, 2, 3, 4))), None)
+# Same plausibility window OFF's own mapping uses for a net weight
+# (off/mapping.py's MIN_NET_QUANTITY/MAX_NET_QUANTITY): a manually typed
+# net_quantity is the same kind of value and deserves the same guard.
+_NET_QUANTITY: Final = vol.Any(
+    vol.All(_finite_float, vol.Range(min=MIN_NET_QUANTITY, max=MAX_NET_QUANTITY)), None)
 
 # Columns a human may edit from the panel, mapped to the shape a value must
-# have to be written. Both the column names AND the values reach SQL through
-# repositories._update_fields, which interpolates the column name and binds
-# the value as-is: SQLite is dynamically typed, so an unvalidated value lands
-# in any column and rots there silently (a string in a REAL column disables
-# whatever compares against it, with no error anywhere — see
-# test_product_update_refuses_a_non_numeric_min_quantity for the shortage
-# sensor this breaks). Every value below is validated against its schema
-# before any write is attempted.
+# have to be written. Every value is validated against its schema before any
+# write is attempted — see the module docstring above this section.
 ARTICLE_EDITABLE: Final[dict[str, Callable[[Any], Any]]] = {
     "label": _TEXT,
     "brand": _TEXT,
-    "net_quantity": _FLOAT,
+    "net_quantity": _NET_QUANTITY,
     "image": _TEXT,
-    "kcal_per_base_unit": _FLOAT,
-    "proteins": _FLOAT,
-    "carbohydrates": _FLOAT,
-    "sugars": _FLOAT,
-    "added_sugars": _FLOAT,
-    "fat": _FLOAT,
-    "saturated_fat": _FLOAT,
-    "fiber": _FLOAT,
-    "salt": _FLOAT,
+    "kcal_per_base_unit": _NON_NEGATIVE_FLOAT,
+    "proteins": _NON_NEGATIVE_FLOAT,
+    "carbohydrates": _NON_NEGATIVE_FLOAT,
+    "sugars": _NON_NEGATIVE_FLOAT,
+    "added_sugars": _NON_NEGATIVE_FLOAT,
+    "fat": _NON_NEGATIVE_FLOAT,
+    "saturated_fat": _NON_NEGATIVE_FLOAT,
+    "fiber": _NON_NEGATIVE_FLOAT,
+    "salt": _NON_NEGATIVE_FLOAT,
     "nutriscore": vol.Any(_GRADE, None),
-    "nova": _INT,
+    "nova": _NOVA,
     "ecoscore": _TEXT,
 }
 # base_unit is deliberately absent: a plain field edit that changed a unit
@@ -66,17 +174,27 @@ ARTICLE_EDITABLE: Final[dict[str, Callable[[Any], Any]]] = {
 # nutrition) with nothing converted. The only path to a unit change is
 # home_stock/product/convert_unit, which rescales everything atomically.
 PRODUCT_EDITABLE: Final[dict[str, Callable[[Any], Any]]] = {
-    "name": _REQUIRED_TEXT,
-    "category_id": _INT,
-    "aisle_id": _INT,
-    "edible": cv.boolean,
-    "default_location_id": _INT,
-    "min_quantity": _FLOAT,
-    "days_after_opening": _INT,
-    "default_shelf_life_days": _INT,
-    "reference_kcal": _FLOAT,
-    "active": cv.boolean,
+    "name": _non_empty_text,
+    "category_id": _POSITIVE_ID,
+    "aisle_id": _POSITIVE_ID,
+    "edible": _strict_boolean,
+    "default_location_id": _POSITIVE_ID,
+    "min_quantity": _NON_NEGATIVE_FLOAT,
+    "days_after_opening": _NON_NEGATIVE_INT,
+    "default_shelf_life_days": _NON_NEGATIVE_INT,
+    "reference_kcal": _NON_NEGATIVE_FLOAT,
+    "active": _strict_boolean,
 }
+# The schema a brand-new product must satisfy: everything PRODUCT_EDITABLE
+# already validates, plus base_unit — which an *edit* deliberately excludes
+# (see the comment above) but a *creation* has to supply, since a product
+# cannot exist without one. A new product must not be creatable in a state
+# an edit of that same product would refuse.
+NEW_PRODUCT_SCHEMA: Final[dict[str, Callable[[Any], Any]]] = {
+    **PRODUCT_EDITABLE,
+    "base_unit": _BASE_UNIT,
+}
+NEW_PRODUCT_REQUIRED: Final = ("name", "base_unit")
 
 # English message the domain/application layer raised, matched and turned
 # into the French sentence the panel actually shows. The domain is right to
@@ -141,6 +259,26 @@ def _validate_fields(schema: dict[str, Callable[[Any], Any]], fields: dict[str, 
                 f"Valeur invalide pour « {column} » : {value!r}")
             return None
     return validated
+
+
+def _validate_new_product(new_product: dict[str, Any],
+                          connection: websocket_api.ActiveConnection,
+                          msg_id: int) -> dict[str, Any] | None:
+    """A brand-new product must not be creatable in a state an edit of that
+    same product would refuse: reuses NEW_PRODUCT_SCHEMA's validators (the
+    same ones PRODUCT_EDITABLE uses, plus base_unit), then on top of that
+    requires the columns a creation cannot default (name, base_unit) —
+    `insert_product`'s keyword-only signature raises a bare TypeError
+    without them, which article_create also now catches as a backstop, but
+    refusing here first is what turns that into a proper French error.
+    """
+    missing = [key for key in NEW_PRODUCT_REQUIRED if key not in new_product]
+    if missing:
+        connection.send_error(
+            msg_id, "invalid_field",
+            f"Champs requis pour un nouveau produit : {sorted(missing)}")
+        return None
+    return _validate_fields(NEW_PRODUCT_SCHEMA, new_product, connection, msg_id)
 
 
 def _send_domain_error(connection: websocket_api.ActiveConnection, msg_id: int,
@@ -385,6 +523,12 @@ async def article_create(hass, connection, msg) -> None:
     if fields is None:
         return
 
+    new_product = None
+    if msg.get("product_id") is None:
+        new_product = _validate_new_product(msg["new_product"], connection, msg["id"])
+        if new_product is None:
+            return
+
     def work() -> dict[str, Any]:
         with runtime.manager.db.write() as conn:
             existing = repo.find_article_by_barcode(conn, msg["code"])
@@ -399,7 +543,7 @@ async def article_create(hass, connection, msg) -> None:
 
             product_id = msg.get("product_id")
             if product_id is None:
-                wanted = dict(msg["new_product"])
+                wanted = dict(new_product)
                 aisle = mapped.aisle if mapped else None
                 if aisle:
                     row = conn.execute(
@@ -450,7 +594,12 @@ async def article_create(hass, connection, msg) -> None:
         name = (msg.get("new_product") or {}).get("name")
         _send_integrity_error(connection, msg["id"], err, name=name)
         return
-    except (LookupError, UnitError, ValueError) as err:
+    except (LookupError, UnitError, ValueError, TypeError) as err:
+        # TypeError is a backstop, not the primary defence: _validate_new_
+        # product already requires name/base_unit before work() ever runs,
+        # so insert_product's keyword-only signature should never actually
+        # raise one here. Caught anyway so a gap in that validation answers
+        # a French (if generic) refusal instead of "Unknown error".
         _send_domain_error(connection, msg["id"], err)
         return
 

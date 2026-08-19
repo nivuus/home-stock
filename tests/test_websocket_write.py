@@ -344,6 +344,220 @@ async def test_creating_a_second_article_under_an_existing_product_name_is_refus
     assert "Muesli" in answer["error"]["message"]
 
 
+async def test_creating_a_product_refuses_a_value_an_edit_would_refuse(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A brand-new product must not be creatable in a state an edit of that
+    same product would refuse. Reproduces the round-2 report verbatim:
+    `new_product: {..., "active": "oui"}` used to succeed and the product
+    then vanished from products/list (active = 1 required there), while the
+    identical value on product/update was already refused."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Fantôme", "base_unit": "g", "active": "oui"},
+    })
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def product_count() -> int:
+        return entry.runtime_data.database.read().execute(
+            "SELECT COUNT(*) FROM product").fetchone()[0]
+
+    assert await hass.async_add_executor_job(product_count) == 0
+
+
+@pytest.mark.parametrize("new_product", [{}, {"name": "Truc"}, {"base_unit": "g"}])
+async def test_creating_a_product_with_a_missing_required_field_is_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client, new_product):
+    """{}, a name with no base_unit, and a base_unit with no name each used
+    to raise an unhandled TypeError out of insert_product's keyword-only
+    signature — "Unknown error" plus a traceback, not a refusal."""
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/create", "code": "1",
+                            "new_product": new_product})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_creating_a_product_refuses_an_unknown_field(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry()
+    client = await hass_ws_client(hass)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Truc", "base_unit": "g", "not_a_column": 1},
+    })
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+@pytest.mark.parametrize("bad", ["inf", "-inf", "nan"])
+async def test_product_update_refuses_a_non_finite_min_quantity(
+        hass: HomeAssistant, setup_entry, hass_ws_client, bad):
+    """vol.Coerce(float) alone accepts "inf"/"-inf"/"nan": an infinite
+    min_quantity would flip the shortage sensor on permanently."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"min_quantity": bad}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def min_quantity():
+        return entry.runtime_data.database.read().execute(
+            "SELECT min_quantity FROM product WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(min_quantity) is None
+
+
+@pytest.mark.parametrize("bad", ["inf", "-inf", "nan"])
+async def test_article_update_refuses_a_non_finite_kcal(
+        hass: HomeAssistant, setup_entry, hass_ws_client, bad):
+    """An infinite kcal_per_base_unit would reach the append-only movement
+    journal as Inf on the next stock/add — rendered as `null` by Home
+    Assistant's own JSON encoder, hiding the corruption from the panel."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/update",
+                            "article_id": 1, "fields": {"kcal_per_base_unit": bad}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def kcal():
+        return entry.runtime_data.database.read().execute(
+            "SELECT kcal_per_base_unit FROM article WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(kcal) is None
+
+
+async def test_product_update_refuses_an_out_of_range_category_id(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """1e308 coerces to a 309-digit int; sqlite3 raises an uncaught
+    OverflowError at bind time if this is not refused first."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"category_id": 1e308}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def category_id():
+        return entry.runtime_data.database.read().execute(
+            "SELECT category_id FROM product WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(category_id) is None
+
+
+async def test_product_update_refuses_a_fractional_aisle_id(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """aisle_id: 3.7 must not be truncated and silently filed in aisle 3 —
+    a different aisle than the one asked for."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"aisle_id": 3.7}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+    def aisle_id():
+        return entry.runtime_data.database.read().execute(
+            "SELECT aisle_id FROM product WHERE id = ?", (1,)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(aisle_id) is None
+
+
+async def test_article_update_refuses_a_negative_nova(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/update",
+                            "article_id": 1, "fields": {"nova": -5}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_a_negative_days_after_opening(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"days_after_opening": -30}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_a_negative_min_quantity(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"min_quantity": -5}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_an_empty_name(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A whitespace-only name satisfies the NOT NULL column but names
+    nothing a person could find again."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"name": "   "}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
+async def test_product_update_refuses_a_non_zero_number_for_edible(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """cv.boolean would silently accept 5 as "true"; the stricter validator
+    must not."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"edible": 5}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+
+
 async def test_a_dry_run_conversion_reports_without_touching_anything(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     entry = await setup_entry(with_piece_product=True)

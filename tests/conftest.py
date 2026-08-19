@@ -41,7 +41,18 @@ class _LandmineSession:
     """
 
     def get(self, *args, **kwargs):
-        pytest.fail(
+        # pytest.fail() raises `Failed`, a BaseException — Home Assistant's
+        # async_response wrapper only catches `Exception`, so a `Failed`
+        # raised this deep escapes it uncaught, the websocket connection
+        # handler task dies without ever calling send_result/send_error, and
+        # the test's `receive_json()` hangs forever waiting for an answer
+        # that will never come (confirmed: reproducing the regression with
+        # `pytest.fail` here needed pytest-timeout to even notice, 20s
+        # later, instead of failing on its own). `AssertionError` is a
+        # plain `Exception`: the wrapper catches it, answers a normal error
+        # frame, and the test's own assertions fail fast against that
+        # frame instead of hanging.
+        raise AssertionError(
             "a test reached the real aiohttp session: off_client/transport "
             "was not replaced with a fake before use"
         )
