@@ -152,8 +152,13 @@ Quatre bases, même API, même code-barres, interrogées dans cet ordre jusqu'à
 OFF bloque les clients anonymes.
 
 Timeout de 10 s par base, budget total de 20 s pour la cascade : au-delà, on rend ce qu'on a.
-Un scan interactif part immédiatement. Une resynchronisation en masse respecte **un intervalle
-de 6 s entre deux fiches** — c'est le rythme qu'OFF impose sur les fiches inconnues.
+
+**Le débit d'OFF a été mesuré, pas supposé.** En capturant les fixtures le 2026-08-19, un
+rythme d'une requête toutes les 1,5 s a déclenché un `HTTP 429` au bout d'une vingtaine
+d'appels. Les règles qui en découlent : un scan interactif part immédiatement (c'est un appel
+isolé) ; une resynchronisation en masse respecte **8 s entre deux fiches** ; un `429` déclenche
+une attente de 45 s et jusqu'à cinq tentatives, après quoi la fiche est laissée pour la fois
+suivante plutôt que d'échouer bruyamment.
 
 ### 7.2 Champs demandés
 
@@ -415,9 +420,23 @@ main.
 
 ## 16. Tests
 
-**En `pytest` pur, sans Home Assistant ni réseau** — c'est le gros du lot :
-le mapping OFF sur les 38 fiches réelles de `data/tools/grocy-off/cache_off.json` ; les gardes
-de vraisemblance ; le rattachement article → produit sur le catalogue réel des 299 produits ;
+**En `pytest` pur, sans Home Assistant ni réseau** — c'est le gros du lot.
+
+Les fixtures sont déjà capturées et versionnées dans `tests/fixtures/off/` :
+
+- `catalogue.json` — **34 des 35 codes-barres réels du garde-manger**, tels qu'OFF les rend au
+  2026-08-19. Le cache historique `data/tools/grocy-off/cache_off.json` ne servait pas : il a
+  été tronqué à la capture et ne contient ni `categories_tags` ni `generic_name_fr`.
+  Couverture mesurée sur ces 34 fiches : `nutriscore_grade` 34, `nutriments` 31,
+  `categories_tags` 29, `product_quantity` 26, `generic_name_fr` 22, `serving_quantity` 13 ;
+- `soeurs.json` — six fiches des trois bases sœurs (dégraissant, crème pour les mains,
+  biscuits pour chien), pour que la cascade soit testée sur du vrai ;
+- `anomalies.json` — dix fiches écrites à la main pour les cas qu'OFF produit et que le
+  catalogue ne contient pas : « 1,kg », poids nul, palette de 80 kg, 5 000 kcal, somme de
+  macros à 150 g, valeurs par portion seulement, valeurs « préparé » seulement, absence totale
+  de nutrition, volume en centilitres, `categories_tags` purement génériques.
+
+Ces fixtures alimentent : le mapping OFF ; les gardes de vraisemblance ; le rattachement article → produit sur le catalogue réel des 299 produits ;
 le classement par rayon ; la cascade de prix ; le plan de conversion d'unité.
 
 **Dans le conteneur Home Assistant** : les commandes websocket, le cycle de vie de la session,
