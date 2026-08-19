@@ -193,6 +193,34 @@ def test_a_consumption_after_conversion_charges_the_same_money(manager):
     assert row["cost"] == pytest.approx(0.24)
 
 
+def test_price_history_keeps_the_next_purchase_suggesting_the_same_money(manager):
+    """price rows (not just the batch's own price_per_base_unit) feed the
+    purchase-suggestion cascade (repo.latest_price / latest_price_in_store):
+    left in the old unit, the next scan would suggest 500x the real price.
+    Each article rescales by its OWN factor, not a single product-wide one —
+    pinned here with two articles whose factors differ."""
+    with manager.db.write() as conn:
+        repo.insert_price(conn, article_id=10, observed_on="2026-08-01",
+                          price_per_base_unit=1.20, source="manual")
+        repo.insert_price(conn, article_id=11, observed_on="2026-08-01",
+                          price_per_base_unit=2.00, source="manual")
+
+    # reference_quantity (400) differs from article 10's own net weight
+    # (500): article 10 rescales by 500 (its own weight), article 11 by 400
+    # (the reference it falls back to, having no weight of its own).
+    manager.convert_product_unit(product_id=1, to_unit="g", reference_quantity=400)
+
+    with manager.db.write() as conn:
+        price_10 = conn.execute(
+            "SELECT price_per_base_unit FROM price WHERE article_id = 10").fetchone()[0]
+        price_11 = conn.execute(
+            "SELECT price_per_base_unit FROM price WHERE article_id = 11").fetchone()[0]
+
+    assert price_10 == pytest.approx(0.0024)       # 1.20 / 500, article 10's own weight
+    assert price_10 != pytest.approx(1.20 / 400)   # not a single product-wide factor
+    assert price_11 == pytest.approx(0.005)        # 2.00 / 400, the reference fallback
+
+
 def test_converting_twice_is_refused_rather_than_doubling_the_stock(manager):
     _add(manager, 10, 2)
     manager.convert_product_unit(product_id=1, to_unit="g", reference_quantity=500)

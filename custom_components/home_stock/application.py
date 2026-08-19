@@ -323,12 +323,14 @@ class StockManager:
                 raise LookupError(f"no product {product_id}")
             articles = repo.list_articles_for_product(conn, product_id)
             # Closed batches are deliberately left out and stay in their
-            # pre-conversion unit. Safe only because every read today filters
-            # on open batches and `batch.initial` is written but never read
-            # back — this stops being safe the day something reads a closed
-            # batch's remaining/initial (e.g. a future "how much of each pack
-            # did we finish" report), which would then silently average
-            # pieces with grams.
+            # pre-conversion unit: their `remaining`, `initial` AND
+            # `price_per_base_unit` all stay expressed in the old unit. Safe
+            # only because every read today filters on open batches and none
+            # of those three columns is ever read back off a closed batch —
+            # this stops being safe the day something does (e.g. a future
+            # "how much of each pack did we finish" or "what did this pack
+            # cost us" report), which would then silently average pieces
+            # with grams, or euros per piece with euros per gram.
             batches = repo.list_open_batches_for_product(conn, product_id)
 
             plan = plan_conversion(product=product, articles=articles, batches=batches,
