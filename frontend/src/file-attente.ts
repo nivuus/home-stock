@@ -116,11 +116,24 @@ export class FileAttente {
   /** Le sort d'une action posée par `ajouter`, une fois `rejouer` retombé —
    *  `undefined` tant qu'elle est toujours en file (panne de transport, ou
    *  simplement pas encore essayée). Consommé au premier appel : un appelant
-   *  ne lit le sort de SA propre action qu'une fois, ce n'est pas un journal. */
+   *  ne lit le sort de SA propre action qu'une fois, ce n'est pas un journal —
+   *  l'entrée est retirée dès sa lecture, elle ne traîne pas derrière. */
   resultatDe(cle: string): ResultatAction | undefined {
     const resultat = this.resultats.get(cle);
     this.resultats.delete(cle);
     return resultat;
+  }
+
+  /** Purge tout ce qui n'a jamais été réclamé. Pour les rejeux qui ne
+   *  connaissent aucune clé précise à réclamer — au démarrage du panneau et
+   *  au retour réseau, `rejouer()` vide alors la file entière plutôt qu'une
+   *  action qu'on vient d'ajouter soi-même — et dont l'appelant d'origine
+   *  (un écran déjà démonté, une page précédente) ne lira donc jamais le
+   *  sort. Sans ce nettoyage explicite ces entrées-là resteraient pour
+   *  toujours : `resultatDe` ne les retire que si quelqu'un les demande, et
+   *  ici personne ne le fera jamais. */
+  viderResultats(): void {
+    this.resultats.clear();
   }
 
   private ecrire(): void {

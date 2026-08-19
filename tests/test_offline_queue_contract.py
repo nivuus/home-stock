@@ -28,12 +28,19 @@ FRONTEND_SRC = Path(__file__).resolve().parent.parent / "frontend" / "src"
 # has no string literal to match here, which is exactly why it's invisible
 # to this scan and doesn't need to be: it carries whatever literal a CALL
 # SITE of `ecrire(...)` passed, and every such call site is a real match.
-_QUEUED_COMMAND_RE = re.compile(r"\.(?:ajouter|ecrire)\(\s*'(home_stock/[a-z_/]+)'")
+#
+# The opening quote is `['"`` ]` — single, double, or backtick — on purpose:
+# nothing in the TypeScript config or lint rules pins one quote style, and a
+# scanner that only understands single quotes is a guard that depends on a
+# coding habit, not a guard. It doesn't bother matching the CLOSING quote:
+# `home_stock/[a-z_/]+` already stops at the first character that isn't part
+# of a command name, so there is nothing a closing-quote check would add.
+_QUEUED_COMMAND_RE = re.compile(r"""\.(?:ajouter|ecrire)\(\s*['"`](home_stock/[a-z_/]+)""")
 
 
-def discover_queued_command_types() -> set[str]:
+def discover_queued_command_types(root: Path = FRONTEND_SRC) -> set[str]:
     types: set[str] = set()
-    for path in FRONTEND_SRC.rglob("*.ts"):
+    for path in root.rglob("*.ts"):
         types.update(_QUEUED_COMMAND_RE.findall(path.read_text(encoding="utf-8")))
     return types
 
@@ -60,6 +67,30 @@ def test_the_scanner_finds_exactly_the_commands_the_front_end_can_queue():
     so that kind of drift fails loudly instead of just checking less.
     """
     assert discover_queued_command_types() == EXPECTED_QUEUED_COMMAND_TYPES
+
+
+def test_the_scanner_catches_a_queued_command_regardless_of_quote_style(tmp_path):
+    """The blind spot that defeated this test once already: the regex used
+    to require a single quote, so a queued command written with double
+    quotes (or a template literal) was invisible to it — a strict-schema
+    command shipped that way would pass both tests here while still being
+    able to silence a whole trip in production. Proven against a scratch
+    directory, not the real frontend source: changing `frontend/src/*.ts` to
+    a different quote style just to exercise this would be editing
+    production code to flatter a test.
+    """
+    (tmp_path / "exemple.ts").write_text(
+        'this.file.ajouter("home_stock/session/scratch_double", {});\n'
+        "this.ecrire(`home_stock/session/scratch_backtick`, {});\n"
+        "this.ecrire('home_stock/session/scratch_single', {});\n",
+        encoding="utf-8",
+    )
+
+    assert discover_queued_command_types(tmp_path) == {
+        "home_stock/session/scratch_double",
+        "home_stock/session/scratch_backtick",
+        "home_stock/session/scratch_single",
+    }
 
 
 async def _send(client, id_, type_, **payload):

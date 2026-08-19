@@ -82,7 +82,15 @@ export class PanneauGardeManger extends LitElement {
       (_action, message) => { this.erreurFile = message; },
     );
     this.enAttente = this.file.taille();
-    void this.file.rejouer().then(() => { this.enAttente = this.file!.taille(); });
+    // Rejeu générique de ce qui traînait déjà dans le stockage local (une
+    // page précédente, une reconnexion) : aucun appelant précis n'attend le
+    // sort d'une action en particulier ici, donc rien ne les réclamera
+    // jamais via `resultatDe` — sans ce nettoyage explicite, elles
+    // resteraient en mémoire pour toute la session du panneau.
+    void this.file.rejouer().then(() => {
+      this.enAttente = this.file!.taille();
+      this.file!.viderResultats();
+    });
     void this.actualiserSession();
     void this.connexion.abonner(() => {
       // Le panier peut se vider (checkout) ou s'ouvrir depuis un autre
@@ -111,7 +119,13 @@ export class PanneauGardeManger extends LitElement {
   }
 
   private auRetourDuReseau = (): void => {
-    void this.file?.rejouer().then(() => { this.enAttente = this.file!.taille(); });
+    // Même rejeu générique qu'au démarrage (voir connectedCallback) : ce
+    // retour réseau peut faire partir des actions posées par un écran
+    // depuis longtemps démonté, personne ne réclamera leur sort.
+    void this.file?.rejouer().then(() => {
+      this.enAttente = this.file!.taille();
+      this.file!.viderResultats();
+    });
   };
 
   /** `session/current` répond `null`, ou l'enveloppe complète
@@ -153,11 +167,19 @@ export class PanneauGardeManger extends LitElement {
   private surArticlePret = (evenement: CustomEvent<ArticlePret>): void => {
     const { articleId, quantite, prixUnitaire, mode, offDroppedFields } = evenement.detail;
     if (mode === 'panier') {
-      this.file!.ajouter('home_stock/session/add_line', {
+      const cle = this.file!.ajouter('home_stock/session/add_line', {
         article_id: articleId, quantity: quantite, unit_price: prixUnitaire,
       });
       this.enAttente = this.file!.taille();
-      void this.file!.rejouer().then(() => { this.enAttente = this.file!.taille(); });
+      // Le refus (s'il y en a un) est déjà annoncé par la bannière French
+      // via `surRefus` — `resultatDe` n'est appelé ici que pour réclamer
+      // (et donc libérer) l'entrée : cette action a un appelant précis,
+      // contrairement aux rejeux génériques ci-dessus, et sans ce réclamer
+      // explicite son entrée resterait en mémoire pour rien.
+      void this.file!.rejouer().then(() => {
+        this.enAttente = this.file!.taille();
+        this.file!.resultatDe(cle);
+      });
       this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.', offDroppedFields);
       this.resultatCourant = null;
       this.ecran = 'scanner';

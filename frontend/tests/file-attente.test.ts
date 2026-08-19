@@ -164,3 +164,38 @@ describe('file d’attente hors ligne : refus du serveur contre panne réseau', 
     );
   });
 });
+
+describe('file d’attente hors ligne : le sort d’une action ne s’accumule pas indéfiniment', () => {
+  it('retire une entrée dès qu’elle est lue : un deuxième appel ne retrouve plus rien', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => {});
+    const cle = file.ajouter('t', { n: 1 });
+
+    await file.rejouer();
+
+    expect(file.resultatDe(cle)).toBe('envoyee');
+    expect(file.resultatDe(cle)).toBeUndefined();
+  });
+
+  it('purge les sorts jamais réclamés (viderResultats) — le rejeu générique du panneau, au démarrage '
+     + 'ou au retour réseau, ne connaît aucune clé précise à réclamer lui-même', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => {});
+    const cle = file.ajouter('t', { n: 1 });
+    await file.rejouer(); // personne ne lit `cle` — exactement ce que fait un rejeu générique
+
+    file.viderResultats();
+
+    expect(file.resultatDe(cle)).toBeUndefined();
+  });
+
+  it('un refus jamais réclamé est purgé de la même façon qu’un envoi réussi', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'invalid_field', message: 'Écriture refusée : donnée invalide.' };
+    });
+    const cle = file.ajouter('t', { n: 1 });
+    await file.rejouer();
+
+    file.viderResultats();
+
+    expect(file.resultatDe(cle)).toBeUndefined();
+  });
+});
