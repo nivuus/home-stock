@@ -61,6 +61,13 @@ MAX_KCAL_PER_100: Final = 900.0      # pure fat tops out at 884
 MAX_MACRO_PER_100: Final = 100.0
 MAX_MACRO_SUM: Final = 105.0         # 100 plus a rounding allowance
 
+# The only four NOVA groups OFF's classification uses, and the only five
+# Nutri-Score letter grades. A contributor typo (a Nova group of 99, a
+# Nutri-Score of "zzz") is exactly the kind of thing this module already
+# refuses for nutrition — the same policy, extended to these two fields.
+NOVA_GROUPS: Final = (1, 2, 3, 4)
+NUTRISCORE_GRADES: Final = ("a", "b", "c", "d", "e")
+
 # A number, optionally with a decimal part. "1,kg" must NOT parse: a lenient
 # comma-to-dot replacement turns it into 1.0 and invents a one-kilogram pack.
 _NUMBER = re.compile(r"^\d+(?:[.,]\d+)?$")
@@ -181,6 +188,30 @@ def _nutrition_per_100(product: dict[str, Any]) -> tuple[dict[str, float] | None
     return values, []
 
 
+def _plausible_nova(value: Any) -> int | None:
+    """OFF's nova_group, kept only if it is a whole number among the four
+    real groups. A value like 1e30 would otherwise reach `int()` here and
+    only fail later, uncaught, when it is eventually bound as a SQLite
+    parameter — refused at the source instead."""
+    number = _number(value)
+    if number is None:
+        return None
+    whole = int(number)
+    if whole != number or whole not in NOVA_GROUPS:
+        return None
+    return whole
+
+
+def _plausible_nutriscore(value: Any) -> str | None:
+    """OFF's nutriscore_grade, kept only if it is one of the five real
+    grades (case-folded: real records are lowercase, but nothing guarantees
+    it)."""
+    if not isinstance(value, str):
+        return None
+    grade = value.strip().lower()
+    return grade if grade in NUTRISCORE_GRADES else None
+
+
 def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
     """Read one OFF record.
 
@@ -196,7 +227,6 @@ def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
 
     net = parse_net_quantity(product)
     nutrition, rejections = _nutrition_per_100(product)
-    nova = _number(product.get("nova_group"))
 
     return MappedArticle(
         off_source=off_source,
@@ -207,8 +237,8 @@ def map_article(product: dict[str, Any], off_source: str) -> MappedArticle:
         net_quantity=net[0] if net else None,
         net_unit=net[1] if net else None,
         image=product.get("image_front_url") or None,
-        nutriscore=(product.get("nutriscore_grade") or None),
-        nova=int(nova) if nova is not None else None,
+        nutriscore=_plausible_nutriscore(product.get("nutriscore_grade")),
+        nova=_plausible_nova(product.get("nova_group")),
         ecoscore=(product.get("ecoscore_grade") or None),
         allergens=_tags(product, "allergens_tags"),
         traces=_tags(product, "traces_tags"),

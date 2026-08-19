@@ -202,6 +202,37 @@ def test_a_tag_field_stored_as_a_bare_string_is_not_corrupted():
     assert mapped.allergens == "en:milk"
 
 
+# --- Fix round 3: a Nova group or Nutri-Score a contributor mistyped -------
+
+def test_an_absurd_nova_group_is_dropped_instead_of_kept():
+    """A value like 1e30 must not reach int() and only fail later, uncaught,
+    when it is bound as a SQLite parameter — refused here, at the source."""
+    mapped = map_article({"nova_group": 1e30}, "food")
+    assert mapped.nova is None
+
+
+def test_a_nova_group_outside_the_four_real_groups_is_dropped():
+    mapped = map_article({"nova_group": 99}, "food")
+    assert mapped.nova is None
+
+
+def test_a_real_nova_group_passes_through():
+    mapped = map_article({"nova_group": 4}, "food")
+    assert mapped.nova == 4
+
+
+def test_an_implausible_nutriscore_grade_is_dropped_instead_of_kept():
+    """"zzz" is exactly what article/update already refuses one line away —
+    an OFF-sourced value gets the same bound, at the source that owns it."""
+    mapped = map_article({"nutriscore_grade": "zzz"}, "food")
+    assert mapped.nutriscore is None
+
+
+def test_a_real_nutriscore_grade_passes_through_case_folded():
+    mapped = map_article({"nutriscore_grade": "A"}, "food")
+    assert mapped.nutriscore == "a"
+
+
 # --- per base unit ----------------------------------------------------------
 
 def test_a_gram_product_divides_by_a_hundred():

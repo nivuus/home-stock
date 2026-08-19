@@ -215,6 +215,61 @@ async def test_a_correction_typed_at_creation_is_also_protected_from_a_resync(
     assert "kcal_per_base_unit" in (await hass.async_add_executor_job(manual))
 
 
+async def test_an_implausible_off_label_is_dropped_not_refused(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The person cannot fix a stranger's Open Food Facts entry: an
+    implausible OFF-derived value is dropped and the article is still
+    created with everything else, instead of refusing the whole scan."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    off_payload = {**MUESLI.product, "product_name_fr": "x" * 1000}
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli douteux", "base_unit": "g"},
+        "off": off_payload, "off_source": "food",
+    })
+    created = (await client.receive_json())["result"]
+
+    assert created["created"] is True
+    assert created["off_dropped_fields"] == ["label"]
+
+    def label():
+        return entry.runtime_data.database.read().execute(
+            "SELECT label FROM article WHERE id = ?",
+            (created["article_id"],)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(label) is None
+
+
+async def test_an_implausible_off_nova_is_neutralized_before_it_reaches_the_write(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """off/mapping.py already refuses an out-of-range nova at the source: the
+    article is created normally and nova lands NULL — not reported as
+    "dropped" by the websocket layer, since it was never handed a bad value
+    in the first place."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    off_payload = {**MUESLI.product, "nova_group": 1e30}
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "1",
+        "new_product": {"name": "Muesli douteux", "base_unit": "g"},
+        "off": off_payload, "off_source": "food",
+    })
+    created = (await client.receive_json())["result"]
+
+    assert created["created"] is True
+    assert created["off_dropped_fields"] == []
+
+    def nova():
+        return entry.runtime_data.database.read().execute(
+            "SELECT nova FROM article WHERE id = ?",
+            (created["article_id"],)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(nova) is None
+
+
 async def test_an_unknown_column_is_refused_rather_than_written(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     """The update path interpolates column names into SQL. The whitelist is
@@ -558,6 +613,36 @@ async def test_product_update_refuses_a_non_zero_number_for_edible(
     assert answer["error"]["code"] == "invalid_field"
 
 
+async def test_article_update_refuses_an_overlong_label(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A 500 000-character label is not something a person typed, and the
+    refusal message must not echo it back in full."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/update",
+                            "article_id": 1, "fields": {"label": "x" * 500_000}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+    assert len(answer["error"]["message"]) < 500
+
+
+async def test_product_update_refuses_an_overlong_name(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"name": "x" * 500_000}})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+    assert answer["error"]["code"] == "invalid_field"
+    assert len(answer["error"]["message"]) < 500
+
+
 async def test_a_dry_run_conversion_reports_without_touching_anything(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     entry = await setup_entry(with_piece_product=True)
@@ -633,6 +718,23 @@ async def test_converting_between_two_non_piece_units_is_still_refused(
     assert answer["error"]["code"] == "conversion_refused"
     # The domain's own English wording must never reach the panel verbatim.
     assert "already stocked in" not in answer["error"]["message"]
+
+
+async def test_converting_refuses_an_infinite_reference_quantity(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """reference_quantity used to be a bare vol.Coerce(float): "inf" would
+    otherwise be echoed straight back in a "success" reply (already_
+    converted's shortcut never even reaches plan_conversion's own plausible-
+    weight check)."""
+    await setup_entry(with_piece_product=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/convert_unit",
+                            "product_id": 1, "to_unit": "g",
+                            "reference_quantity": "inf"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
 
 
 async def test_reordering_aisles_writes_the_new_walking_order(hass: HomeAssistant,
@@ -718,6 +820,53 @@ async def test_storing_a_negative_quantity_is_refused(
 
     assert answer["success"] is False
     assert answer["error"]["code"] == "invalid_value"
+
+
+async def test_storing_stock_refuses_an_infinite_quantity(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """quantity used to be a bare vol.Coerce(float): "inf" answered success
+    and landed Inf in batch.remaining/initial and movement.quantity, in a
+    table triggers forbid UPDATE/DELETE on — irreparable, not just wrong."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": "inf", "location_id": 1})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+    def counts():
+        conn = entry.runtime_data.database.read()
+        return (conn.execute("SELECT COUNT(*) FROM batch").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM movement").fetchone()[0])
+
+    assert await hass.async_add_executor_job(counts) == (0, 0)
+
+
+async def test_storing_stock_refuses_an_infinite_price(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """price_per_base_unit used to be vol.Any(vol.Coerce(float), None): "inf"
+    answered success and landed Inf in batch.price_per_base_unit,
+    movement.cost, and a price row — all rendered as `null` by Home
+    Assistant's JSON encoder, hiding the corruption from the panel."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "price_per_base_unit": "inf"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+    def counts():
+        conn = entry.runtime_data.database.read()
+        return (conn.execute("SELECT COUNT(*) FROM batch").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM movement").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM price").fetchone()[0])
+
+    assert await hass.async_add_executor_job(counts) == (0, 0, 0)
 
 
 async def test_storing_stock_at_an_unknown_location_is_refused(

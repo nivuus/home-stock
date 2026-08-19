@@ -97,15 +97,43 @@ def _bounded_int(value: Any) -> int:
     return number
 
 
-def _non_empty_text(value: Any) -> str:
-    """A product name: trimmed, and refused if that leaves nothing — `name:
-    ""` (or all-whitespace) satisfies the `NOT NULL` column but names
-    nothing a person could find again."""
+MAX_TEXT_LENGTH: Final = 200  # generous for a product name; not for a novel
+
+
+def _preview(value: Any, limit: int = 80) -> str:
+    """A short, safe-to-echo representation of a value for an error message.
+    repr() of a 500 000-character string would repeat the whole thing back
+    to whoever just sent it."""
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def _bounded_text(value: Any) -> str | None:
+    """Free text, capped. A 500 000-character label is not something a
+    person typed, nor something an edit should have to echo back in full to
+    refuse."""
+    if value is None:
+        return None
     if not isinstance(value, str):
-        raise vol.Invalid(f"expected a string, got {value!r}")
+        raise vol.Invalid(f"expected a string, got {_preview(value)}")
+    if len(value) > MAX_TEXT_LENGTH:
+        raise vol.Invalid(
+            f"text too long: {len(value)} characters (max {MAX_TEXT_LENGTH})")
+    return value
+
+
+def _non_empty_text(value: Any) -> str:
+    """A product name: trimmed, capped, and refused if that leaves nothing
+    — `name: ""` (or all-whitespace) satisfies the `NOT NULL` column but
+    names nothing a person could find again."""
+    if not isinstance(value, str):
+        raise vol.Invalid(f"expected a string, got {_preview(value)}")
     trimmed = value.strip()
     if not trimmed:
         raise vol.Invalid("expected a non-empty name")
+    if len(trimmed) > MAX_TEXT_LENGTH:
+        raise vol.Invalid(
+            f"text too long: {len(trimmed)} characters (max {MAX_TEXT_LENGTH})")
     return trimmed
 
 
@@ -115,9 +143,12 @@ _FALSE_STRINGS: Final = frozenset({"0", "false", "no", "off"})
 
 def _strict_boolean(value: Any) -> bool:
     """Stricter than `cv.boolean`, which treats any non-zero number as true
-    — `edible: 5` must not be silently accepted as "yes". Only an actual
-    bool, one of the usual French/English-neutral strings, or exactly 0/1
-    are recognised; everything else is refused."""
+    — `edible: 5` must not be silently accepted as "yes". The panel always
+    sends a real JSON boolean; the string forms below exist only as English
+    tolerance for a hand-typed call (a service, a test, curl against the
+    websocket), not because the panel ever sends one. Only an actual bool,
+    one of those strings, or exactly 0/1 are recognised; everything else is
+    refused."""
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -128,12 +159,12 @@ def _strict_boolean(value: Any) -> bool:
             return False
     elif isinstance(value, (int, float)) and value in (0, 1):
         return bool(value)
-    raise vol.Invalid(f"expected a boolean, got {value!r}")
+    raise vol.Invalid(f"expected a boolean, got {_preview(value)}")
 
 
 _GRADE: Final = vol.In(("a", "b", "c", "d", "e"))
 _BASE_UNIT: Final = vol.In(BASE_UNITS)
-_TEXT: Final = vol.Any(str, None)                                    # free, nullable text
+_TEXT: Final = _bounded_text                                         # free, nullable text, capped
 # A quantity cannot be negative: a person never means "-5 g" or "-5 kcal".
 _NON_NEGATIVE_FLOAT: Final = vol.Any(vol.All(_finite_float, vol.Range(min=0)), None)
 _NON_NEGATIVE_INT: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=0)), None)
@@ -256,7 +287,7 @@ def _validate_fields(schema: dict[str, Callable[[Any], Any]], fields: dict[str, 
         except vol.Invalid:
             connection.send_error(
                 msg_id, "invalid_field",
-                f"Valeur invalide pour « {column} » : {value!r}")
+                f"Valeur invalide pour « {column} » : {_preview(value)}")
             return None
     return validated
 
@@ -279,6 +310,37 @@ def _validate_new_product(new_product: dict[str, Any],
             f"Champs requis pour un nouveau produit : {sorted(missing)}")
         return None
     return _validate_fields(NEW_PRODUCT_SCHEMA, new_product, connection, msg_id)
+
+
+def _drop_invalid_off_values(schema: dict[str, Callable[[Any], Any]],
+                             values: dict[str, Any]) -> list[str]:
+    """Validate OFF-derived entries of `values` against `schema`, IN PLACE,
+    dropping whichever fail instead of refusing the whole write.
+
+    Deliberately not the same policy `_validate_fields` applies to what a
+    person typed: a client-supplied field is refused because the person can
+    fix what they typed, but an Open Food Facts contributor's typo is not
+    something the person scanning a barcode can fix, and refusing the whole
+    scan over one bad field (a Nova group of 99, a Nutri-Score of "zzz")
+    would make the scanner useless exactly when it is most needed. Off/
+    mapping.py already guards the two fields most likely to be implausible
+    (nova, nutriscore) at the source; this is the general backstop for
+    whatever it does not — today, chiefly free text with no length bound of
+    its own (label, brand, image).
+
+    Returns the column names dropped, so the caller can tell the panel what
+    happened instead of leaving a silently missing value to explain itself.
+    """
+    dropped: list[str] = []
+    for column in list(values):
+        if column not in schema:
+            continue
+        try:
+            values[column] = schema[column](values[column])
+        except vol.Invalid:
+            del values[column]
+            dropped.append(column)
+    return dropped
 
 
 def _send_domain_error(connection: websocket_api.ActiveConnection, msg_id: int,
@@ -535,7 +597,8 @@ async def article_create(hass, connection, msg) -> None:
             if existing is not None:
                 # A replayed creation, or two phones scanning the same pack.
                 return {"article_id": existing["id"],
-                        "product_id": existing["product_id"], "created": False}
+                        "product_id": existing["product_id"], "created": False,
+                        "off_dropped_fields": []}
 
             raw = msg.get("off") or {}
             source = msg.get("off_source")
@@ -556,6 +619,7 @@ async def article_create(hass, connection, msg) -> None:
             if product is None:
                 raise LookupError(f"no product {product_id}")
             values: dict[str, Any] = {"is_generic": 0}
+            dropped_off_fields: list[str] = []
             if mapped is not None:
                 values.update({
                     "label": mapped.label, "brand": mapped.brand,
@@ -575,6 +639,15 @@ async def article_create(hass, connection, msg) -> None:
                 # calories silently, because insert_article drops keys it does
                 # not recognise without raising.
                 values.update(to_article_columns(per_base))
+                # OFF is a stranger's database entry, not something the
+                # person scanning can fix: an implausible value (a Nova
+                # group off/mapping.py did not already catch, a label with
+                # no length bound of its own) is dropped, not refused — the
+                # article is still created with everything else. Run before
+                # `fields` is merged in, so a client-supplied correction is
+                # never subject to this policy; it already went through
+                # _validate_fields, which refuses instead.
+                dropped_off_fields = _drop_invalid_off_values(ARTICLE_EDITABLE, values)
             values.update(fields)
             if fields:
                 # A correction typed on the creation screen must survive the
@@ -586,7 +659,8 @@ async def article_create(hass, connection, msg) -> None:
 
             article_id = repo.insert_article(conn, product_id=product_id, **values)
             repo.link_barcode(conn, msg["code"], article_id)
-            return {"article_id": article_id, "product_id": product_id, "created": True}
+            return {"article_id": article_id, "product_id": product_id, "created": True,
+                    "off_dropped_fields": dropped_off_fields}
 
     try:
         result = await hass.async_add_executor_job(work)
@@ -594,12 +668,15 @@ async def article_create(hass, connection, msg) -> None:
         name = (msg.get("new_product") or {}).get("name")
         _send_integrity_error(connection, msg["id"], err, name=name)
         return
-    except (LookupError, UnitError, ValueError, TypeError) as err:
+    except (LookupError, UnitError, ValueError, TypeError, OverflowError) as err:
         # TypeError is a backstop, not the primary defence: _validate_new_
         # product already requires name/base_unit before work() ever runs,
         # so insert_product's keyword-only signature should never actually
-        # raise one here. Caught anyway so a gap in that validation answers
-        # a French (if generic) refusal instead of "Unknown error".
+        # raise one here. OverflowError is the same kind of backstop for a
+        # number sqlite3 refuses to bind — _bounded_int/_finite_float and
+        # off/mapping.py's own nova/nutriscore bounds should already have
+        # caught it upstream. Caught anyway so a gap in either answers a
+        # French (if generic) refusal instead of "Unknown error".
         _send_domain_error(connection, msg["id"], err)
         return
 
@@ -684,7 +761,7 @@ async def product_update(hass, connection, msg) -> None:
     vol.Required("type"): "home_stock/product/convert_unit",
     vol.Required("product_id"): int,
     vol.Required("to_unit"): vol.In(("g", "ml")),
-    vol.Required("reference_quantity"): vol.Coerce(float),
+    vol.Required("reference_quantity"): _finite_float,
     vol.Optional("packaging_name", default="unité"): str,
     vol.Optional("dry_run", default=False): bool,
 })
@@ -744,10 +821,10 @@ async def product_convert_unit(hass, connection, msg) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/stock/add",
     vol.Required("article_id"): int,
-    vol.Required("quantity"): vol.Coerce(float),
+    vol.Required("quantity"): _finite_float,
     vol.Required("location_id"): int,
     vol.Optional("best_before"): vol.Any(str, None),
-    vol.Optional("price_per_base_unit"): vol.Any(vol.Coerce(float), None),
+    vol.Optional("price_per_base_unit"): vol.Any(_finite_float, None),
     vol.Optional("idempotency_key"): vol.Any(str, None),
 })
 @websocket_api.async_response
