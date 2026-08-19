@@ -71,3 +71,69 @@ async def test_an_empty_answer_yields_nothing():
 
     assert await latest_price(transport, "123", net_quantity=500,
                               user_agent="home_stock/1.0") is None
+
+
+@pytest.mark.parametrize("payload", [
+    "not a dict",
+    ["not", "a", "dict"],
+    {"items": "not a list"},
+    {"items": {"not": "a list"}},
+    {"items": ["not a dict"]},
+])
+async def test_a_malformed_shape_yields_nothing_instead_of_raising(payload):
+    """Open Prices is a moving target: a shape change must never crash a scan."""
+    transport = FakeTransport(payload=payload)
+
+    assert await latest_price(transport, "123", net_quantity=500,
+                              user_agent="home_stock/1.0") is None
+
+
+async def test_a_string_product_quantity_is_not_compared_and_does_not_raise():
+    transport = FakeTransport(payload=_items(
+        {"price": 3.0, "currency": "EUR", "date": "2026-08-10",
+         "product": {"product_quantity": "500"}}))
+
+    assert await latest_price(transport, "123", net_quantity=None,
+                              user_agent="home_stock/1.0") is None
+
+
+async def test_a_negative_price_is_rejected_as_a_data_entry_error():
+    transport = FakeTransport(payload=_items(
+        {"price": -1.0, "currency": "EUR", "date": "2026-08-10",
+         "product": {"product_quantity": 500}}))
+
+    assert await latest_price(transport, "123", net_quantity=500,
+                              user_agent="home_stock/1.0") is None
+
+
+async def test_a_discounted_item_uses_the_undiscounted_price():
+    transport = FakeTransport(payload=_items(
+        {"price": 1.0, "price_is_discounted": True, "price_without_discount": 2.5,
+         "currency": "EUR", "date": "2026-08-10", "product": {"product_quantity": 500}}))
+
+    price = await latest_price(transport, "123", net_quantity=500,
+                               user_agent="home_stock/1.0")
+
+    assert price == pytest.approx(0.005)
+
+
+async def test_a_discounted_item_without_the_undiscounted_price_falls_back_to_price():
+    transport = FakeTransport(payload=_items(
+        {"price": 1.0, "price_is_discounted": True,
+         "currency": "EUR", "date": "2026-08-10", "product": {"product_quantity": 500}}))
+
+    price = await latest_price(transport, "123", net_quantity=500,
+                               user_agent="home_stock/1.0")
+
+    assert price == pytest.approx(0.002)
+
+
+async def test_an_undiscounted_item_is_unaffected_by_the_discount_logic():
+    transport = FakeTransport(payload=_items(
+        {"price": 2.0, "price_is_discounted": False,
+         "currency": "EUR", "date": "2026-08-10", "product": {"product_quantity": 500}}))
+
+    price = await latest_price(transport, "123", net_quantity=500,
+                               user_agent="home_stock/1.0")
+
+    assert price == pytest.approx(0.004)

@@ -34,3 +34,17 @@ def test_a_zero_price_is_a_real_price_and_is_kept():
     result = suggest_price(in_store=0.0, open_prices=0.002, last_known=None, store="Leclerc")
     assert result.price_per_base_unit == 0.0
     assert result.source == "store"
+
+
+def test_a_zero_open_prices_price_is_not_treated_as_absent():
+    """A truthiness check here would fall through to last_known instead."""
+    result = suggest_price(in_store=None, open_prices=0.0, last_known=0.003, store="Lidl")
+    assert result.price_per_base_unit == 0.0
+    assert result.source == "open_prices"
+
+
+def test_a_zero_last_known_price_is_not_treated_as_absent():
+    """A truthiness check here would fall through to no suggestion at all."""
+    result = suggest_price(in_store=None, open_prices=None, last_known=0.0, store=None)
+    assert result.price_per_base_unit == 0.0
+    assert result.source == "last_known"
