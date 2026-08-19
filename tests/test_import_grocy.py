@@ -253,6 +253,24 @@ def test_a_non_convertible_price_is_an_anomaly(db, grocy):
     assert repo.latest_price(db.read(), article["id"]) is None
 
 
+def test_a_product_without_a_category_is_an_anomaly_but_still_imports(db, grocy):
+    # category_id is nullable and the product still lands: this is a visibility
+    # check, not a data integrity gate (design §10's control gate lists it
+    # among the counts that must reach zero).
+    conn = sqlite3.connect(grocy)
+    conn.execute("UPDATE products SET product_group_id = NULL WHERE id = 1")  # Pâtes
+    conn.commit()
+    conn.close()
+
+    report = import_catalog(db, grocy, apply=True)
+
+    assert report.ok is False
+    assert any("Pâtes" in a and "catégorie" in a for a in report.anomalies)
+    product = repo.find_product_by_name(db.read(), "Pâtes")
+    assert product is not None
+    assert product["category_id"] is None
+
+
 def test_a_barcode_added_after_the_first_import_is_picked_up_by_a_replay(db, grocy):
     import_catalog(db, grocy, apply=True)
 

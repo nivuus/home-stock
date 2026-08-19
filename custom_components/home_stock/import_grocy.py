@@ -28,7 +28,10 @@ CONTAINER_UNITS = {
 }
 DOSAGE_UNITS = {"cs", "cc"}
 MAX_KCAL_PER_GRAM = 9.5   # pure fat is 9; above that the value is wrong
-MAX_KCAL_PER_ML = 8.1     # olive oil, the densest common liquid, tops out there
+MAX_KCAL_PER_ML = 8.1     # olive oil, the densest common liquid, tops out there —
+                          # this is the household's actual highest value (81
+                          # kcal/cl), so it only passes because the comparison
+                          # below is strict (">", not ">=")
 
 
 @dataclass
@@ -96,8 +99,11 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
         with db.write() as conn:
             # Resolve every already-imported product's generic article and base unit
             # by external_ref, not just its existence: a replay needs both to pick
-            # up a barcode or price added in Grocy after the first import, without
-            # re-creating the product itself.
+            # up a barcode added in Grocy after the first import, without
+            # re-creating the product itself. A price is only picked up alongside
+            # a barcode that is new to this run — once a barcode is already
+            # linked, the loop below `continue`s before reaching the price block,
+            # so a price added later on an already-imported barcode is missed.
             article_ids: dict[int, int] = {}
             base_units: dict[int, str] = {}
             for row in conn.execute(
@@ -180,6 +186,12 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                     report.anomalies.append(
                         f"{row['name']} : nom déjà utilisé par un produit existant")
                     continue
+                # Reported, not skipped: category_id is nullable and the product
+                # still imports, but design §10's control gate requires this
+                # count to be visible so an uncategorised product does not go
+                # unnoticed.
+                if row["product_group_id"] is None:
+                    report.anomalies.append(f"{row['name']} : sans catégorie")
 
                 report.products += 1
                 report.articles += 1
