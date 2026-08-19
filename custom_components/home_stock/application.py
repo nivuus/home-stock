@@ -112,10 +112,12 @@ class StockManager:
             )
             kcal_rate = repo.resolve_kcal_rate(conn, article)
             values = movement_values(amount, kcal_rate, price_per_base_unit)
+            base_unit = repo.product_base_unit(conn, article["product_id"])
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
-                reason=REASON_PURCHASE, kcal=values.kcal, cost=values.cost,
+                reason=REASON_PURCHASE, base_unit=base_unit,
+                kcal=values.kcal, cost=values.cost,
                 idempotency_key=stored_key,
             )
             if price_per_base_unit is not None:
@@ -142,6 +144,9 @@ class StockManager:
                     (stored_key, f"{_escape_like(stored_key)}#%"),
                 ).fetchall()
                 return [int(row["id"]) for row in rows]
+            # Every batch of one product necessarily shares that product's unit:
+            # read it once here rather than once per batch in the loop below.
+            base_unit = repo.product_base_unit(conn, product_id)
             batches = [_as_batch_view(row)
                        for row in repo.list_batches_for_product(conn, product_id)]
             allocations = allocate(batches, quantity)   # raises InsufficientStock
@@ -161,8 +166,8 @@ class StockManager:
                 movement_ids.append(repo.insert_movement(
                     conn, occurred_at=moment, product_id=product_id,
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
-                    quantity=-allocation.quantity, reason=reason, kcal=values.kcal,
-                    cost=values.cost, idempotency_key=key,
+                    quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
+                    kcal=values.kcal, cost=values.cost, idempotency_key=key,
                 ))
                 repo.set_batch_remaining(
                     conn, allocation.batch_id, allocation.remaining_after,
@@ -197,10 +202,11 @@ class StockManager:
             closes = is_empty(remaining_after)
             values = movement_values(taken, row["kcal_per_base_unit"],
                                      row["price_per_base_unit"])
+            base_unit = repo.product_base_unit(conn, row["product_id"])
             movement_id = repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
-                reason=reason, kcal=values.kcal, cost=values.cost,
+                reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
             )
             repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
                                      closed_at=moment if closes else None)
@@ -241,10 +247,12 @@ class StockManager:
             if row is None:
                 raise ValueError(f"unknown batch {batch_id}")
             repo.set_batch_location(conn, batch_id, location_id)
+            base_unit = repo.product_base_unit(conn, row["product_id"])
             return repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=0,
-                reason=REASON_TRANSFER, ref_type="location", ref_id=location_id,
+                reason=REASON_TRANSFER, base_unit=base_unit,
+                ref_type="location", ref_id=location_id,
             )
 
     def adjust_inventory(self, *, article_id: int, location_id: int,
@@ -284,10 +292,11 @@ class StockManager:
                     quantity=delta, entered_at=moment,
                 )
             # kcal and cost stay NULL: a correction is not a consumption (spec 7.5).
+            base_unit = repo.product_base_unit(conn, article["product_id"])
             return repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=delta,
-                reason=REASON_INVENTORY,
+                reason=REASON_INVENTORY, base_unit=base_unit,
             )
 
     # --- reads --------------------------------------------------------------

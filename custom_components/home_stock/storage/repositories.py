@@ -216,16 +216,28 @@ def set_batch_location(conn, batch_id: int, location_id: int) -> None:
 # --- movements --------------------------------------------------------------
 
 def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
-                    quantity: float, reason: str, batch_id: int | None = None,
+                    quantity: float, reason: str, base_unit: str,
+                    batch_id: int | None = None,
                     kcal: float | None = None, cost: float | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
     return _insert(conn, "movement", {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
-        "batch_id": batch_id, "quantity": quantity, "reason": reason, "kcal": kcal,
+        "batch_id": batch_id, "quantity": quantity, "reason": reason,
+        "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
         "idempotency_key": idempotency_key,
     })
+
+
+def product_base_unit(conn, product_id: int) -> str:
+    """The base unit a movement on this product must be recorded in."""
+    row = conn.execute(
+        "SELECT base_unit FROM product WHERE id = ?", (product_id,)
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no product {product_id}")
+    return row["base_unit"]
 
 
 def movement_exists(conn, idempotency_key: str) -> bool:

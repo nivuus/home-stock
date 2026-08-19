@@ -78,7 +78,7 @@ def test_movement_idempotency(conn):
     article_id = repo.insert_article(conn, product_id=product_id)
     repo.insert_movement(conn, occurred_at="2026-08-18T10:00:00", product_id=product_id,
                          article_id=article_id, quantity=-200, reason="consumption",
-                         kcal=700.0, cost=0.6, idempotency_key="k1")
+                         base_unit="g", kcal=700.0, cost=0.6, idempotency_key="k1")
     assert repo.movement_exists(conn, "k1") is True
     assert repo.movement_exists(conn, "k2") is False
 
