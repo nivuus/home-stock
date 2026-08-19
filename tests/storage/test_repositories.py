@@ -95,3 +95,30 @@ def test_stock_rows_join_names(conn):
     assert row["location_name"] == "Frigo"
     assert row["base_unit"] == "ml"
     assert row["remaining"] == 1000
+
+
+def test_stock_rows_kcal_falls_back_to_the_product_reference(conn):
+    """home_stock/batches/list (the future panel) is served straight from this
+    query: without the same COALESCE as list_batches_for_product (spec 7.4),
+    it would show no calories for exactly the generic/produce articles the
+    fallback exists for."""
+    location_id = repo.insert_location(conn, name="Frigo", kind="fridge")
+    product_id = repo.insert_product(conn, name="Pomme", base_unit="g",
+                                     reference_kcal=0.52)
+    article_id = repo.insert_article(conn, product_id=product_id, label="Générique")
+    repo.insert_batch(conn, article_id=article_id, location_id=location_id,
+                      quantity=200, entered_at="2026-08-01T10:00:00")
+    row = repo.stock_rows(conn)[0]
+    assert row["kcal_per_base_unit"] == pytest.approx(0.52)
+
+
+def test_resolve_kcal_rate_falls_back_to_the_product_reference(conn):
+    product_id = repo.insert_product(conn, name="Pomme", base_unit="g",
+                                     reference_kcal=0.52)
+    article_id = repo.insert_article(conn, product_id=product_id, label="Générique")
+    article = repo.get_article(conn, article_id)
+    assert repo.resolve_kcal_rate(conn, article) == pytest.approx(0.52)
+
+    with_own_rate = repo.insert_article(conn, product_id=product_id,
+                                        kcal_per_base_unit=1.1)
+    assert repo.resolve_kcal_rate(conn, repo.get_article(conn, with_own_rate)) == 1.1

@@ -85,3 +85,29 @@ def test_product_base_unit_is_constrained(tmp_path):
         with db.write() as conn:
             conn.execute("INSERT INTO product (name, base_unit) VALUES ('X', 'Paquet')")
     db.close()
+
+
+def test_movement_is_append_only(tmp_path):
+    """The journal must be structural, not just a comment: an UPDATE (and a
+    DELETE) on `movement` must raise, never silently rewrite history."""
+    db = _fresh(tmp_path)
+    with db.write() as conn:
+        apply_migrations(conn)
+        conn.execute("INSERT INTO location (id, name, kind) VALUES (1, 'Placard', 'pantry')")
+        conn.execute(
+            "INSERT INTO product (id, name, base_unit) VALUES (1, 'Moutarde', 'g')"
+        )
+        conn.execute(
+            "INSERT INTO article (id, product_id, is_generic) VALUES (1, 1, 1)"
+        )
+        conn.execute(
+            "INSERT INTO movement (occurred_at, product_id, article_id, quantity,"
+            " reason) VALUES ('2026-08-18T10:00:00', 1, 1, 5, 'purchase')"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with db.write() as conn:
+            conn.execute("UPDATE movement SET quantity = 99 WHERE id = 1")
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with db.write() as conn:
+            conn.execute("DELETE FROM movement WHERE id = 1")
+    db.close()

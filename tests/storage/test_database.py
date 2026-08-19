@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 
 import pytest
 
@@ -44,3 +45,40 @@ def test_rows_are_dict_like(db):
         conn.execute("INSERT INTO t VALUES (7)")
     row = db.read().execute("SELECT v FROM t").fetchone()
     assert row["v"] == 7
+
+
+def test_read_uses_a_dedicated_connection(db):
+    # Not the writer's connection: a coordinator refresh must never share a
+    # transaction context with a write in progress (see the next test).
+    assert db.read() is not db._conn
+
+
+def test_read_does_not_block_on_a_write_in_progress_and_sees_no_dirty_data(db):
+    """A long write (import_catalog holds the lock across hundreds of
+    products) must never make a concurrent read wait, and a read must never
+    observe a write's uncommitted rows — exactly what sharing one connection
+    across threads without the lock used to allow."""
+    with db.write() as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+
+    write_is_open = threading.Event()
+    release_write = threading.Event()
+
+    def _slow_write() -> None:
+        with db.write() as conn:
+            conn.execute("INSERT INTO t VALUES (2)")
+            write_is_open.set()
+            release_write.wait(timeout=5)
+
+    writer = threading.Thread(target=_slow_write)
+    writer.start()
+    assert write_is_open.wait(timeout=5)
+    try:
+        # Must return promptly (no wait on Database._lock) and must not see
+        # row 2: the write holding the lock has not committed it yet.
+        count = db.read().execute("SELECT COUNT(*) AS n FROM t").fetchone()["n"]
+    finally:
+        release_write.set()
+        writer.join(timeout=5)
+    assert count == 1

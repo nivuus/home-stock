@@ -22,6 +22,14 @@ ARTICLE_FIELDS = (
     "is_generic", "external_ref",
 )
 
+# The kcal rate to price a movement with: the article's own kcal_per_base_unit,
+# or lacking that, its product's reference_kcal (spec 7.4) — generic and
+# fresh-produce articles usually carry no rate of their own. Named once here so
+# the SQL call sites (list_batches_for_product, stock_rows) and the Python call
+# sites (resolve_kcal_rate, used by application.add_stock/consume_batch) cannot
+# drift apart.
+KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
+
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
@@ -60,6 +68,7 @@ def insert_category(conn, name: str) -> int:
 
 
 def insert_aisle(conn, *, name: str, position: int = 0) -> int:
+    # Unused in lot 0; lot 1 seeds aisles from Open Food Facts categories.
     return _insert(conn, "aisle", {"name": name, "position": position})
 
 
@@ -76,6 +85,8 @@ def get_product(conn, product_id: int) -> dict[str, Any] | None:
 
 
 def find_product_by_name(conn, name: str) -> dict[str, Any] | None:
+    # Unused in lot 0; lot 1 needs it to match a scanned article to an
+    # existing product before offering to create a duplicate.
     return _row(conn.execute("SELECT * FROM product WHERE name = ?", (name,)).fetchone())
 
 
@@ -98,6 +109,18 @@ def get_article(conn, article_id: int) -> dict[str, Any] | None:
     return _row(conn.execute("SELECT * FROM article WHERE id = ?", (article_id,)).fetchone())
 
 
+def resolve_kcal_rate(conn, article: dict[str, Any]) -> float | None:
+    """The kcal rate to price a movement with (spec 7.4): the article's own
+    kcal_per_base_unit, or lacking that, its product's reference_kcal. Python-side
+    twin of KCAL_RATE_SQL, for call sites that already hold the article row in
+    hand instead of joining kcal in SQL (application.add_stock/consume_batch)."""
+    rate = article["kcal_per_base_unit"]
+    if rate is not None:
+        return rate
+    product = get_product(conn, article["product_id"])
+    return product["reference_kcal"] if product else None
+
+
 def find_article_by_barcode(conn, code: str) -> dict[str, Any] | None:
     return _row(
         conn.execute(
@@ -116,6 +139,9 @@ def link_barcode(conn, code: str, article_id: int) -> None:
 
 def insert_packaging(conn, *, scope: str, target_id: int, name: str,
                      base_quantity: float, is_purchase_default: bool = False) -> int:
+    # Deliberately unused until lot 1 (design §10, amended 2026-08-18): net
+    # weights come from Open Food Facts' product_quantity, a measurement, not
+    # from a guess parsed out of a product name. Do not delete as dead code.
     return _insert(conn, "packaging", {
         "scope": scope, "target_id": target_id, "name": name,
         "base_quantity": base_quantity,
@@ -132,6 +158,7 @@ def insert_price(conn, *, article_id: int, observed_on: str,
 
 
 def latest_price(conn, article_id: int) -> float | None:
+    # Unused in lot 0; lot 1 needs it to pre-fill the price field at scan time.
     row = conn.execute(
         "SELECT price_per_base_unit FROM price WHERE article_id = ?"
         " ORDER BY observed_on DESC, id DESC LIMIT 1",
@@ -158,7 +185,7 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     (spec 7.4 — generic/produce articles usually carry no rate of their own).
     """
     return _rows(conn.execute(
-        "SELECT b.*, COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_unit,"
+        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit,"
         "       a.product_id FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
@@ -220,12 +247,19 @@ def list_movements(conn, since: str | None = None) -> list[dict[str, Any]]:
 # --- read models ------------------------------------------------------------
 
 def stock_rows(conn) -> list[dict[str, Any]]:
-    """One row per open batch, with the names needed for display."""
+    """One row per open batch, with the names needed for display.
+
+    kcal_per_base_unit is resolved with the same fallback as
+    list_batches_for_product (spec 7.4): this is what home_stock/batches/list
+    hands the future panel, and without the fallback it would show no calories
+    for exactly the generic and fresh-produce articles the fallback exists for.
+    """
     return _rows(conn.execute(
         "SELECT b.id, b.remaining, b.best_before, b.entered_at, b.opened_at,"
         "       b.price_per_base_unit, p.id AS product_id, p.name AS product_name,"
         "       p.base_unit, p.min_quantity, a.id AS article_id, a.label AS article_label,"
-        "       a.kcal_per_base_unit, l.id AS location_id, l.name AS location_name"
+        f"       {KCAL_RATE_SQL} AS kcal_per_base_unit,"
+        "       l.id AS location_id, l.name AS location_name"
         " FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"

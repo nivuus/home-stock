@@ -112,4 +112,19 @@ CREATE TABLE movement (
 
 CREATE INDEX idx_batch_pick ON batch(article_id, closed_at, best_before, entered_at);
 CREATE INDEX idx_movement_day ON movement(occurred_at);
+
+-- The append-only comment above is not enough on its own: enforce it in the
+-- schema so a stray UPDATE or DELETE fails loudly instead of quietly
+-- rewriting history.
+CREATE TRIGGER movement_no_update
+BEFORE UPDATE ON movement
+BEGIN
+  SELECT RAISE(ABORT, 'movement is append-only: insert a new row instead of UPDATE');
+END;
+
+CREATE TRIGGER movement_no_delete
+BEFORE DELETE ON movement
+BEGIN
+  SELECT RAISE(ABORT, 'movement is append-only: insert a new row instead of DELETE');
+END;
 """

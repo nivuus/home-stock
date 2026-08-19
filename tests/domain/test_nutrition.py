@@ -1,10 +1,6 @@
 import pytest
 
-from custom_components.home_stock.domain.nutrition import (
-    MovementValues,
-    counts_in_daily_totals,
-    movement_values,
-)
+from custom_components.home_stock.domain.nutrition import MovementValues, movement_values
 
 
 def test_values_are_the_quantity_times_the_rates():
@@ -39,12 +35,3 @@ def test_values_are_not_rounded():
     # Rounding happens at display time only; summing rounded values drifts.
     values = movement_values(3, 1 / 3, None)
     assert values.kcal == pytest.approx(1.0, abs=1e-12)
-
-
-def test_which_reasons_count_in_the_daily_totals():
-    assert counts_in_daily_totals("consumption") is True
-    assert counts_in_daily_totals("waste") is True
-    assert counts_in_daily_totals("expired") is True
-    assert counts_in_daily_totals("purchase") is False
-    assert counts_in_daily_totals("inventory") is False
-    assert counts_in_daily_totals("transfer") is False

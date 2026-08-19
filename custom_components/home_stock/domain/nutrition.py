@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..const import COUNTED_REASONS
-
 
 @dataclass(frozen=True)
 class MovementValues:
@@ -29,8 +27,3 @@ def movement_values(
         kcal=None if kcal_per_base_unit is None else magnitude * kcal_per_base_unit,
         cost=None if price_per_base_unit is None else magnitude * price_per_base_unit,
     )
-
-
-def counts_in_daily_totals(reason: str) -> bool:
-    """Whether a movement counts towards the daily kcal and cost (spec 7.5)."""
-    return reason in COUNTED_REASONS
