@@ -325,13 +325,20 @@ def open_session(conn, *, started_at: str, store: str | None) -> int:
 
 
 def current_session(conn) -> dict[str, Any] | None:
-    """The session the panel should show: the open one, else the last one still
-    waiting to be put away."""
+    """The session the panel should show: the open one, else the oldest one
+    still waiting to be put away.
+
+    Among several `to_store` sessions, the earliest started (not the most
+    recently started, and not the most recently closed) is the one to surface:
+    when two shops are queued unstored, the older one is the one whose
+    chilled items have been sitting out of a fridge the longest, so it is the
+    backlog to clear first.
+    """
     return _row(conn.execute(
         """
         SELECT * FROM shopping_session
         WHERE state IN ('shopping', 'to_store')
-        ORDER BY CASE state WHEN 'shopping' THEN 0 ELSE 1 END, started_at DESC
+        ORDER BY CASE state WHEN 'shopping' THEN 0 ELSE 1 END, started_at ASC
         LIMIT 1
         """
     ).fetchone())
@@ -344,8 +351,19 @@ def get_session(conn, session_id: int) -> dict[str, Any] | None:
 
 def set_session_state(conn, session_id: int, state: str, *,
                       closed_at: str | None = None) -> None:
-    conn.execute("UPDATE shopping_session SET state = ?, closed_at = ? WHERE id = ?",
-                 (state, closed_at, session_id))
+    """Move the session to a new state.
+
+    `closed_at` is written only when actually passed: it records when the
+    session was checked out, and a timestamp like that must never be cleared
+    as a side effect of an unrelated later state change (there is no way to
+    recover it once gone — the journal keeps no other copy).
+    """
+    if closed_at is not None:
+        conn.execute("UPDATE shopping_session SET state = ?, closed_at = ? WHERE id = ?",
+                     (state, closed_at, session_id))
+    else:
+        conn.execute("UPDATE shopping_session SET state = ? WHERE id = ?",
+                     (state, session_id))
 
 
 def add_line(conn, *, session_id: int, article_id: int, quantity: float,
@@ -382,7 +400,7 @@ def line_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
         (idempotency_key,)).fetchone())
 
 
-LINE_SELECT_SQL = """
+_LINE_SELECT_SQL = """
 SELECT l.*, p.id AS product_id, p.name AS product_name, p.base_unit,
        p.default_location_id, p.default_shelf_life_days, p.days_after_opening,
        a.label AS article_label, a.brand, a.image, a.net_quantity,
@@ -397,7 +415,7 @@ WHERE l.session_id = ?
 
 def list_lines(conn, session_id: int, *, pending_only: bool = False) -> list[dict[str, Any]]:
     """The cart, in walking order. Scan order is never what a shopper wants."""
-    sql = LINE_SELECT_SQL
+    sql = _LINE_SELECT_SQL
     if pending_only:
         sql += " AND l.stored_at IS NULL"
     sql += " ORDER BY aisle_position, p.name, l.id"

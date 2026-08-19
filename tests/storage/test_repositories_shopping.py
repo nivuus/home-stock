@@ -35,14 +35,125 @@ def test_a_session_opens_and_is_found_again(conn):
     assert current["state"] == "shopping"
 
 
+def test_current_session_prefers_the_oldest_queued_trip(conn):
+    """Among sessions waiting to be put away, the older one is the backlog to
+    clear first — its chilled items have been out of a fridge the longest —
+    even if a quicker, later trip was already checked out. An open shopping
+    session still always wins over any of them."""
+    older_id = repo.open_session(conn, started_at="2026-08-19T09:00:00", store=None)
+    repo.set_session_state(conn, older_id, "to_store", closed_at="2026-08-19T09:30:00")
+
+    newer_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+    repo.set_session_state(conn, newer_id, "to_store", closed_at="2026-08-19T10:15:00")
+
+    current = repo.current_session(conn)
+    assert current["id"] == older_id
+
+    shopping_id = repo.open_session(conn, started_at="2026-08-19T11:00:00", store=None)
+
+    current = repo.current_session(conn)
+    assert current["id"] == shopping_id
+
+
+def test_get_session_returns_none_for_an_unknown_id(conn):
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+
+    assert repo.get_session(conn, session_id)["id"] == session_id
+    assert repo.get_session(conn, session_id + 999) is None
+
+
+def test_set_session_state_never_wipes_closed_at_as_a_side_effect(conn):
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+
+    repo.set_session_state(conn, session_id, "to_store")
+    assert repo.get_session(conn, session_id)["closed_at"] is None
+
+    repo.set_session_state(conn, session_id, "done", closed_at="2026-08-19T12:00:00")
+    assert repo.get_session(conn, session_id)["closed_at"] == "2026-08-19T12:00:00"
+
+    # Regression test: a later state write with no closed_at must not erase
+    # the timestamp already recorded above.
+    repo.set_session_state(conn, session_id, "done")
+    assert repo.get_session(conn, session_id)["closed_at"] == "2026-08-19T12:00:00"
+
+
+def test_update_line_only_writes_the_field_actually_passed(conn):
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+    line_id = repo.add_line(conn, session_id=session_id, article_id=1, quantity=500,
+                            unit_price=0.002, scanned_at="2026-08-19T10:05:00",
+                            idempotency_key="a")
+
+    repo.update_line(conn, line_id, quantity=600)
+    line = repo.list_lines(conn, session_id)[0]
+    assert line["quantity"] == 600
+    assert line["unit_price"] == pytest.approx(0.002)
+
+    repo.update_line(conn, line_id, unit_price=0.0025)
+    line = repo.list_lines(conn, session_id)[0]
+    assert line["quantity"] == 600
+    assert line["unit_price"] == pytest.approx(0.0025)
+
+
+def test_remove_line_drops_only_that_line(conn):
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+    line_id = repo.add_line(conn, session_id=session_id, article_id=1, quantity=500,
+                            unit_price=0.002, scanned_at="2026-08-19T10:05:00",
+                            idempotency_key="a")
+    other_id = repo.add_line(conn, session_id=session_id, article_id=2, quantity=4,
+                             unit_price=0.35, scanned_at="2026-08-19T10:06:00",
+                             idempotency_key="b")
+
+    repo.remove_line(conn, line_id)
+
+    remaining = repo.list_lines(conn, session_id)
+    assert [line["id"] for line in remaining] == [other_id]
+
+
+def test_session_totals_on_an_empty_session(conn):
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
+
+    totals = repo.session_totals(conn, session_id)
+
+    assert totals == {"lines": 0, "pending": 0, "total": 0.0}
+    assert totals["pending"] is not None
+
+
+def test_list_stores_ignores_prices_with_no_store(conn):
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-01",
+                      price_per_base_unit=0.003, store="Carrefour", source="manual")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-02",
+                      price_per_base_unit=0.002, store="Leclerc", source="manual")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-03",
+                      price_per_base_unit=0.0021, store=None, source="manual")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-04",
+                      price_per_base_unit=0.0022, store="", source="manual")
+
+    assert sorted(repo.list_stores(conn)) == ["Carrefour", "Leclerc"]
+
+
+def test_latest_price_in_store_breaks_a_same_day_tie_by_insertion_order(conn):
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-02",
+                      price_per_base_unit=0.002, store="Leclerc", source="manual")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-02",
+                      price_per_base_unit=0.0025, store="Leclerc", source="manual")
+
+    assert repo.latest_price_in_store(conn, 1, "Leclerc") == pytest.approx(0.0025)
+
+
 def test_lines_come_back_in_walking_order_not_scan_order(conn):
     """The cart is read while walking the shop, so the aisle order is the one
-    that matters — not the order things were scanned in."""
+    that matters — not the order things were scanned in.
+
+    The timestamps are deliberately in the opposite order of the expected
+    result (Pâtes scanned first, Yaourt scanned second) so that an
+    implementation that wrongly sorted by scan time would fail this test
+    instead of passing it by accident.
+    """
     session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store=None)
     repo.add_line(conn, session_id=session_id, article_id=1, quantity=500,
-                  unit_price=0.002, scanned_at="2026-08-19T10:05:00", idempotency_key="a")
+                  unit_price=0.002, scanned_at="2026-08-19T10:01:00", idempotency_key="a")
     repo.add_line(conn, session_id=session_id, article_id=2, quantity=4,
-                  unit_price=0.35, scanned_at="2026-08-19T10:01:00", idempotency_key="b")
+                  unit_price=0.35, scanned_at="2026-08-19T10:05:00", idempotency_key="b")
 
     lines = repo.list_lines(conn, session_id)
 
