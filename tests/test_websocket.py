@@ -1,6 +1,7 @@
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.home_stock.aisles import AISLES
 from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.storage import repositories as repo
 
@@ -62,12 +63,12 @@ async def test_locations_list(client):
     assert [l["name"] for l in message["result"]["locations"]] == ["Placard"]
 
 
-async def test_aisles_list_is_empty_until_lot_1(client):
-    # The aisle table exists from lot 0; Grocy has no aisles, and Open Food Facts
-    # categories seed them at lot 1.
+async def test_aisles_list_is_seeded_in_walking_order(client):
+    # The aisle table exists from lot 0, empty; migration m002 (lot 1, task 1)
+    # seeds it from the referential in aisles.py.
     await client.send_json_auto_id({"type": "home_stock/aisles/list"})
     message = await client.receive_json()
-    assert message["result"]["aisles"] == []
+    assert [a["name"] for a in message["result"]["aisles"]] == list(AISLES)
 
 
 async def test_product_get_returns_one_product(hass, client):
