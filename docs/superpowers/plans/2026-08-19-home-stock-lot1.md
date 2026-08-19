@@ -3611,8 +3611,13 @@ ARTICLE_EDITABLE: Final = frozenset({
     "carbohydrates", "sugars", "added_sugars", "fat", "saturated_fat", "fiber",
     "salt", "nutriscore", "nova", "ecoscore",
 })
+# `base_unit` is deliberately absent: changing it through a plain field edit
+# would rewrite the meaning of every stored quantity for that product without
+# converting a single one. The only way to change a unit is
+# `home_stock/product/convert_unit`, which rescales the batches, the nutrition
+# and the prices inside one transaction.
 PRODUCT_EDITABLE: Final = frozenset({
-    "name", "base_unit", "category_id", "aisle_id", "edible", "default_location_id",
+    "name", "category_id", "aisle_id", "edible", "default_location_id",
     "min_quantity", "days_after_opening", "default_shelf_life_days", "reference_kcal",
     "active",
 })
