@@ -96,4 +96,23 @@ describe('écran scanner : choix de la voie de scan au clic', () => {
     await el.updateComplete;
     expect(el.shadowRoot!.querySelector('.session-banniere')).toBeNull();
   });
+
+  it('montre la quantité et le prix retenus pour un article rangé plus tard — rien de '
+     + 'calculé sur la fiche ne doit disparaître sans être montré quelque part', async () => {
+    const element = document.createElement('home-stock-scanner') as HTMLElement & {
+      fenetre: any; derniereFiche: any; updateComplete: Promise<boolean>;
+    };
+    element.fenetre = {};
+    element.derniereFiche = {
+      nom: 'Farine', marque: null, image: null,
+      statut: 'Article créé — reste à choisir l’emplacement.',
+      quantite: 500, prixTotal: 2.5,
+    };
+    document.body.appendChild(element);
+    await element.updateComplete;
+
+    const texte = element.shadowRoot!.querySelector('.derniere-fiche-quantite')!.textContent;
+    expect(texte).toContain('500');
+    expect(texte).toContain('2,50');
+  });
 });

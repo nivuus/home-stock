@@ -238,3 +238,46 @@ describe('panneau : l’ajout au panier passe par la file hors-ligne', () => {
       expect.objectContaining({ type: 'home_stock/session/add_line', article_id: 42 }));
   });
 });
+
+describe('panneau : le rangement garde la quantité et le prix visibles', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('affiche la quantité et le prix retenus sur la bannière, pas dans un état jamais peint', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null); // pas de session : rangement
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+
+    const scanner = element.shadowRoot!.querySelector('home-stock-scanner')!;
+    scanner.dispatchEvent(new CustomEvent('code-lu', {
+      detail: { code: '3229820129488' }, bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const fiche = element.shadowRoot!.querySelector('home-stock-fiche')!;
+    fiche.dispatchEvent(new CustomEvent('article-pret', {
+      detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005, mode: 'rangement', offDroppedFields: [] },
+      bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const nouveauScanner = element.shadowRoot!.querySelector('home-stock-scanner') as any;
+    expect(nouveauScanner.derniereFiche.quantite).toBe(500);
+    expect(nouveauScanner.derniereFiche.prixTotal).toBeCloseTo(2.5); // 0,005 €/g * 500 g
+  });
+});

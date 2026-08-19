@@ -20,6 +20,12 @@ export type ResumeDerniereFiche = {
    *  l'écran dans le même geste qui produit cette liste (retour au
    *  scanner) : c'est ici, sur ce qui reste affiché, qu'elle doit se voir. */
   ignores?: string[];
+  /** Rangement seulement : la quantité (en unité de base) et le prix total
+   *  que la fiche avait déjà calculés avant que l'écran d'emplacement/DLC
+   *  (Task 16) n'existe pour les reprendre — montrés ici pour ne pas les
+   *  perdre en route. */
+  quantite?: number;
+  prixTotal?: number | null;
 };
 
 @customElement('home-stock-scanner')
@@ -94,6 +100,11 @@ export class EcranScanner extends LitElement {
             ${this.derniereFiche.nom}${this.derniereFiche.marque ? ` — ${this.derniereFiche.marque}` : ''}
           </p>
           <p class="derniere-fiche-statut">${this.derniereFiche.statut}</p>
+          ${this.derniereFiche.quantite !== undefined ? html`
+            <p class="derniere-fiche-quantite">
+              Quantité : ${this.derniereFiche.quantite}${this.derniereFiche.prixTotal != null
+                ? ` — ${this.derniereFiche.prixTotal.toFixed(2).replace('.', ',')} €` : ''}
+            </p>` : nothing}
           ${this.derniereFiche.ignores?.length ? html`
             <p class="derniere-fiche-ignores">
               Ignoré par Open Food Facts : ${libellesChamps(this.derniereFiche.ignores)}
@@ -136,7 +147,9 @@ export class EcranScanner extends LitElement {
       display: flex; flex-direction: column; align-items: center; gap: 4px;
     }
     .derniere-fiche img { max-height: 72px; max-width: 100%; border-radius: 6px; }
-    .derniere-fiche-ignores { color: var(--secondary-text-color); font-size: 0.85rem; text-align: center; }
+    .derniere-fiche-ignores, .derniere-fiche-quantite {
+      color: var(--secondary-text-color); font-size: 0.85rem; text-align: center;
+    }
     .en-attente {
       text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 8px 0 0;
     }

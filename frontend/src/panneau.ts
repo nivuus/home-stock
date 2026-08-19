@@ -11,19 +11,19 @@ export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'catalogue' |
 
 type SessionCourante = { store: string | null } | null;
 
-/** Ce qu'on retient d'un article créé « à ranger » : rien n'est perdu, même
- *  si l'écran rangement (lot suivant) n'existe pas encore pour s'en servir. */
-type EnAttenteRangement = { articleId: number; quantite: number; prixUnitaire: number | null };
-
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
- *  réponse brute de `lookup`. */
-function resumeDe(resultat: ResultatLookup | null, statut: string,
-                  ignores: string[] = []): ResumeDerniereFiche | null {
+ *  réponse brute de `lookup`. La quantité et le prix ne sont fournis que
+ *  pour le rangement (pas de panier : la session les affichera elle-même) —
+ *  gardés VISIBLES ici plutôt que dans un état jamais peint, en attendant
+ *  que Task 16 leur donne un vrai écran d'emplacement/DLC. */
+function resumeDe(resultat: ResultatLookup | null, statut: string, ignores: string[] = [],
+                  quantite?: number, prixUnitaire?: number | null): ResumeDerniereFiche | null {
   if (!resultat) return null;
   const nom = resultat.off?.label ?? resultat.article?.label ?? resultat.product?.name ?? resultat.code;
   const marque = resultat.off?.brand ?? resultat.article?.brand ?? null;
   const image = resultat.off?.image ?? resultat.article?.image ?? null;
-  return { nom, marque, image, statut, ignores };
+  const prixTotal = quantite !== undefined && prixUnitaire != null ? prixUnitaire * quantite : null;
+  return { nom, marque, image, statut, ignores, quantite, prixTotal };
 }
 
 @customElement('home-stock-panel')
@@ -35,7 +35,6 @@ export class PanneauGardeManger extends LitElement {
   @state() private session: SessionCourante = null;
   @state() private resultatCourant: ResultatLookup | null = null;
   @state() private derniereFiche: ResumeDerniereFiche | null = null;
-  @state() private enAttenteRangement: EnAttenteRangement | null = null;
 
   private connexion?: Connexion;
   private file?: FileAttente;
@@ -130,11 +129,15 @@ export class PanneauGardeManger extends LitElement {
       void this.file!.rejouer().then(() => { this.enAttente = this.file!.taille(); });
       this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.', offDroppedFields);
     } else {
-      this.enAttenteRangement = { articleId, quantite, prixUnitaire };
+      // Choisir l'emplacement et la DLC est l'écran « rangement » (Task 16,
+      // avec `raccourcisDlc`) : il n'existe pas encore, et `ecran` ne
+      // devient donc jamais 'rangement' ici. La quantité et le prix ne sont
+      // pas pour autant perdus — ils s'affichent tout de suite sur la
+      // bannière de confirmation, chiffrés, plutôt que dans un état gardé
+      // pour un écran qui ne les lirait jamais.
       this.derniereFiche = resumeDe(
-        this.resultatCourant,
-        'Article créé — quantité et prix retenus, reste à choisir l’emplacement.',
-        offDroppedFields);
+        this.resultatCourant, 'Article créé — reste à choisir l’emplacement.',
+        offDroppedFields, quantite, prixUnitaire);
     }
     this.resultatCourant = null;
     this.ecran = 'scanner';
@@ -155,20 +158,8 @@ export class PanneauGardeManger extends LitElement {
       return html`
         <home-stock-fiche .resultat=${this.resultatCourant}
           .mode=${this.session ? 'panier' : 'rangement'} .connexion=${this.connexion}
-          @article-pret=${this.surArticlePret}>
+          .file=${this.file} @article-pret=${this.surArticlePret}>
         </home-stock-fiche>`;
-    }
-    if (this.ecran === 'rangement' && this.enAttenteRangement) {
-      // Pas encore l'écran rangement (lot suivant, avec `raccourcisDlc`) :
-      // ce data-* n'est là que pour que la quantité et le prix déjà saisis
-      // restent lisibles — pour l'écran qui viendra les lire, et pour
-      // prouver ici qu'ils n'ont pas été jetés en route.
-      return html`
-        <div class="ecran" data-article-id=${this.enAttenteRangement.articleId}
-          data-quantite=${this.enAttenteRangement.quantite}
-          data-prix-unitaire=${this.enAttenteRangement.prixUnitaire ?? ''}>
-          ${this.ecran}
-        </div>`;
     }
     return html`<div class="ecran">${this.ecran}</div>`;
   }

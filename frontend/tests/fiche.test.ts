@@ -50,14 +50,17 @@ function resultatConnu(partiel: Partial<ResultatLookup> = {}): ResultatLookup {
   };
 }
 
-function creer(resultat: ResultatLookup, options: { mode?: 'panier' | 'rangement'; connexion?: Connexion } = {}) {
+function creer(resultat: ResultatLookup, options: {
+  mode?: 'panier' | 'rangement'; connexion?: Connexion; file?: { ajouter: ReturnType<typeof vi.fn> };
+} = {}) {
   const element = document.createElement('home-stock-fiche') as HTMLElement & {
-    resultat: ResultatLookup; mode: 'panier' | 'rangement'; connexion?: Connexion;
+    resultat: ResultatLookup; mode: 'panier' | 'rangement'; connexion?: Connexion; file?: unknown;
     updateComplete: Promise<boolean>;
   };
   element.resultat = resultat;
   element.mode = options.mode ?? 'rangement';
   if (options.connexion) element.connexion = options.connexion;
+  if (options.file) element.file = options.file;
   document.body.appendChild(element);
   return element;
 }
@@ -368,6 +371,14 @@ describe('cas n°1 — produit à la pièce : le paquet est l’unité, jamais d
 
     expect(recu.mock.calls[0][0].quantite).toBe(2);
   });
+
+  it('ÉCHEC PINGLÉ : n’affiche aucun détail « €/kg » — le prix par unité EST déjà '
+     + 'la forme lisible, à la pièce', async () => {
+    const el = creer(resultatPiece());
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.prix-detail')).toBeNull();
+    expect(el.shadowRoot!.textContent).not.toContain('€/kg');
+  });
 });
 
 describe('cas n°2 — produit pesé, poids déjà connu : diviseur normal', () => {
@@ -461,21 +472,31 @@ describe('cas n°3 — produit pesé, poids INCONNU : le cas le plus courant du 
   });
 
   it('envoie le poids tapé comme correction (article/update, l’article existe déjà) '
-     + 'AVANT d’émettre article-pret — pour ne plus jamais le redemander', async () => {
-    const appeler = vi.fn().mockResolvedValue({});
+     + 'par la file hors-ligne — comme les ajouts au panier, jamais par un appel direct '
+     + 'qui bloquerait tout en cas de coupure', async () => {
+    const ajouter = vi.fn();
+    // Si la correction passait encore par un appel direct, ce rejet la
+    // ferait échouer et l'événement ne partirait jamais : la connexion ne
+    // doit tout simplement plus être sollicitée pour cet appel-là.
+    const appeler = vi.fn().mockRejectedValue(new Error('ne doit jamais être appelé pour cette correction'));
     const el = creer(resultatPoidsInconnu(), { mode: 'rangement',
-      connexion: { appeler } as unknown as Connexion });
+      connexion: { appeler } as unknown as Connexion, file: { ajouter } });
     await el.updateComplete;
 
     saisir(el.shadowRoot!.querySelector<HTMLInputElement>('.poids-champ')!, '500');
     await el.updateComplete;
 
+    const recu = vi.fn();
+    el.addEventListener('article-pret', (e) => recu((e as CustomEvent).detail));
     el.shadowRoot!.querySelector<HTMLButtonElement>('.action-principale')!.click();
     await laisserPasserLesMicrotaches();
 
-    expect(appeler).toHaveBeenCalledWith('home_stock/article/update', {
+    expect(ajouter).toHaveBeenCalledWith('home_stock/article/update', {
       article_id: 55, fields: { net_quantity: 500 },
     });
+    expect(appeler).not.toHaveBeenCalledWith('home_stock/article/update', expect.anything());
+    // Et l'ajout n'a pas été bloqué : la file ne rejette jamais à l'appel.
+    expect(recu).toHaveBeenCalledTimes(1);
   });
 
   it('préremplit depuis Open Food Facts quand un poids scanné existe (chemin article inconnu)', async () => {
@@ -571,6 +592,49 @@ describe('création d’un article inconnu', () => {
     // Le candidat présélectionné (id 1) est à la pièce d'après products/list :
     // le champ poids ne doit pas apparaître, et le prix se prend tel quel.
     expect(el.shadowRoot!.querySelector('.poids-champ')).toBeNull();
+  });
+
+  it('ÉCHEC PINGLÉ : un products/list qui échoue ne bloque pas la fiche pour toujours — '
+     + 'un message apparaît, et un bouton Réessayer relance le même appel', async () => {
+    const appeler = vi.fn().mockRejectedValueOnce(new Error('hors ligne'))
+      .mockResolvedValueOnce({ products: [{ id: 1, base_unit: 'g' }] });
+    const el = creer(resultatInconnu({ preselected_product_id: 1 }),
+      { connexion: { appeler } as unknown as Connexion });
+    await el.updateComplete;
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+
+    // Premier échec : un message visible, pas un « Chargement… » éternel,
+    // et le bouton principal reste bloqué puisque l'unité est toujours
+    // inconnue pour ce candidat.
+    expect(el.shadowRoot!.querySelector('.erreur-unite')).not.toBeNull();
+    expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.action-principale')!.disabled).toBe(true);
+    const bouton = el.shadowRoot!.querySelector<HTMLButtonElement>('.reessayer-unite');
+    expect(bouton).not.toBeNull();
+
+    bouton!.click();
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+
+    expect(appeler).toHaveBeenCalledTimes(2);
+    expect(el.shadowRoot!.querySelector('.erreur-unite')).toBeNull();
+    expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.action-principale')!.disabled).toBe(false);
+  });
+
+  it('reste utilisable pour ce que products/list ne conditionne pas : choisir '
+     + '« Nouveau produit » ne demande jamais la liste et n’est jamais bloqué par son échec', async () => {
+    const appeler = vi.fn().mockRejectedValue(new Error('hors ligne'));
+    const el = creer(resultatInconnu({ preselected_product_id: 1 }), { mode: 'rangement',
+      connexion: { appeler } as unknown as Connexion });
+    await el.updateComplete;
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+
+    const radioNouveau = el.shadowRoot!.querySelector<HTMLInputElement>('input[name="produit"][value="new"]')!;
+    radioNouveau.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.action-principale')!.disabled).toBe(false);
   });
 });
 

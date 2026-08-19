@@ -21,6 +21,7 @@
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
+import type { FileAttente } from '../file-attente';
 
 export type UniteBase = 'g' | 'ml' | 'piece';
 
@@ -181,6 +182,11 @@ export class FicheArticle extends LitElement {
   @property({ attribute: false }) resultat!: ResultatLookup;
   @property({ attribute: false }) mode: 'panier' | 'rangement' = 'rangement';
   @property({ attribute: false }) connexion?: Connexion;
+  /** La file hors-ligne du panneau. Utilisée pour la correction de poids
+   *  d'un article déjà connu (`article/update`) : comme les ajouts au
+   *  panier, elle ne doit jamais faire échouer tout le geste parce que le
+   *  réseau est mauvais — exactement la situation d'un rayon de magasin. */
+  @property({ attribute: false }) file?: FileAttente;
 
   @state() private productChoisi: number | 'new' | null = null;
   @state() private nomNouveauProduit = '';
@@ -196,6 +202,7 @@ export class FicheArticle extends LitElement {
   @state() private rapportConversion: RapportConversion | null = null;
   @state() private erreurConversion: string | null = null;
   @state() private erreurAction: string | null = null;
+  @state() private erreurUnites: string | null = null;
   @state() private enCours = false;
 
   protected willUpdate(changed: PropertyValues): void {
@@ -210,6 +217,7 @@ export class FicheArticle extends LitElement {
       this.rapportConversion = null;
       this.erreurConversion = null;
       this.erreurAction = null;
+      this.erreurUnites = null;
       this.produitsBaseUnit = {};
     }
   }
@@ -228,6 +236,7 @@ export class FicheArticle extends LitElement {
   }
 
   private async chargerUnitesProduits(): Promise<void> {
+    this.erreurUnites = null;
     try {
       const reponse = await this.connexion!.appeler<{ products: { id: number; base_unit: UniteBase }[] }>(
         'home_stock/products/list');
@@ -235,8 +244,12 @@ export class FicheArticle extends LitElement {
       for (const p of reponse.products) carte[p.id] = p.base_unit;
       this.produitsBaseUnit = carte;
     } catch {
-      // On retentera au prochain changement de résultat ; en attendant, le
-      // bouton reste bloqué avec un motif clair plutôt que de deviner.
+      // Un échec ici ne doit jamais laisser « Chargement… » affiché pour
+      // toujours : c'est le chemin le plus courant (code-barres neuf,
+      // candidat déjà au catalogue) et le réseau y est justement le moins
+      // fiable — un rayon de magasin. Le bouton « Réessayer » du template
+      // relance le même appel.
+      this.erreurUnites = 'Impossible de récupérer les informations du produit. Vérifiez la connexion.';
     }
   }
 
@@ -273,7 +286,7 @@ export class FicheArticle extends LitElement {
       }
     }
     const unite = this.uniteConnue();
-    if (unite === null) return 'Chargement des informations du produit…';
+    if (unite === null) return this.erreurUnites ?? 'Chargement des informations du produit…';
     if ((unite === 'g' || unite === 'ml') && this.poidsEffectif === null) {
       return 'Indiquez le poids du paquet pour calculer le prix.';
     }
@@ -282,6 +295,21 @@ export class FicheArticle extends LitElement {
 
   private get peutValider(): boolean {
     return !this.enCours && this.raisonBlocage === null;
+  }
+
+  /** La correction de poids d'un article déjà connu, envoyée comme les
+   *  ajouts au panier : par la file hors-ligne quand elle existe, pour
+   *  qu'une coupure réseau ne bloque jamais l'ajout lui-même — le poids
+   *  suivra dès que la file rejoue. Sans file (l'élément peut être utilisé
+   *  seul, hors du panneau), on tente quand même l'appel direct, mais sans
+   *  jamais faire échouer la validation à cause de lui. */
+  private enregistrerPoidsCorrige(articleId: number, poids: number): void {
+    const charge = { article_id: articleId, fields: { net_quantity: poids } };
+    if (this.file) {
+      this.file.ajouter('home_stock/article/update', charge);
+    } else if (this.connexion) {
+      void this.connexion.appeler('home_stock/article/update', charge).catch(() => {});
+    }
   }
 
   private async valider(): Promise<void> {
@@ -298,9 +326,7 @@ export class FicheArticle extends LitElement {
       if (this.resultat.known) {
         articleId = this.resultat.article!.id;
         if (poids !== null && poidsEtaitInconnu) {
-          await this.connexion!.appeler('home_stock/article/update', {
-            article_id: articleId, fields: { net_quantity: poids },
-          });
+          this.enregistrerPoidsCorrige(articleId, poids);
         }
       } else {
         const charge: Record<string, unknown> = { code: this.resultat.code };
@@ -398,6 +424,11 @@ export class FicheArticle extends LitElement {
               <option value="piece">à la pièce</option>
             </select>
           </div>` : nothing}
+        ${this.erreurUnites ? html`
+          <p class="erreur-unite">${this.erreurUnites}</p>
+          <button class="reessayer-unite" @click=${() => { void this.chargerUnitesProduits(); }}>
+            Réessayer
+          </button>` : nothing}
       </section>
     `;
   }
@@ -456,7 +487,11 @@ export class FicheArticle extends LitElement {
 
     const unite = this.uniteConnue();
     const poidsEffectif = unite === 'piece' ? null : this.poidsEffectif;
-    const detailPrix = prixBaseDepuisSaisie(this.valeurPrix, unite, poidsEffectif);
+    // Le détail au kilo/litre n'a de sens qu'au poids : à la pièce, le champ
+    // prix EST déjà la forme lisible, un « soit X €/kg » ne ferait
+    // qu'inventer un troisième chiffre à côté d'un « €/unité » déjà clair.
+    const detailPrix = (unite === 'g' || unite === 'ml')
+      ? prixBaseDepuisSaisie(this.valeurPrix, unite, poidsEffectif) : null;
     const detailParMille = detailPrix != null ? detailPrix * 1000 : null;
     const uniteDetail = unite === 'ml' ? 'L' : 'kg';
 
@@ -537,7 +572,13 @@ export class FicheArticle extends LitElement {
     }
     .valeur-quantite { min-width: 32px; text-align: center; font-size: 1.2rem; }
     .conversion-offre { margin: 12px 0; padding: 8px; border-radius: 8px; background: var(--secondary-background-color); }
-    .motif-blocage, .erreur-action, .erreur-conversion { color: var(--error-color, #b3261e); font-size: 0.9rem; }
+    .motif-blocage, .erreur-action, .erreur-conversion, .erreur-unite {
+      color: var(--error-color, #b3261e); font-size: 0.9rem;
+    }
+    .reessayer-unite {
+      min-height: 48px; width: 100%; margin-top: 4px; border-radius: 8px; border: none;
+      background: var(--primary-color); color: var(--text-primary-color, #fff);
+    }
     .action-principale {
       display: block; width: 100%; min-height: 62px; font-size: 1.2rem; border-radius: 12px;
       border: none; background: var(--primary-color); color: var(--text-primary-color, #fff);
