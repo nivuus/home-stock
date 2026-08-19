@@ -1,6 +1,8 @@
 """Summary sensors. There is deliberately no entity per product."""
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.sensor import (
     ENTITY_ID_FORMAT,
     SensorEntity,
@@ -26,9 +28,13 @@ class StockValueSensor(HomeStockEntity, SensorEntity):
         return self.coordinator.data["stock_value"]
 
     @property
-    def extra_state_attributes(self) -> dict[str, int]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         # Batches without a price are excluded from the value: say how many.
-        return {"unpriced_batches": self.coordinator.data["unpriced_batches"]}
+        # by_location breaks the same total down per location (spec 8.1).
+        return {
+            "unpriced_batches": self.coordinator.data["unpriced_batches"],
+            "by_location": self.coordinator.data["stock_value_by_location"],
+        }
 
 
 class BatchesSensor(HomeStockEntity, SensorEntity):

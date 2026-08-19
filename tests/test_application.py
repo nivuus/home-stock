@@ -128,6 +128,29 @@ def test_an_idempotency_key_prevents_a_replayed_consumption(manager, pasta):
         assert conn.execute("SELECT remaining FROM batch").fetchone()["remaining"] == 300
 
 
+def test_the_same_key_used_by_two_services_does_not_cross_match(manager, pasta):
+    """idempotency_key is one UNIQUE column shared by every service: without a
+    namespace per operation, add_stock replaying a key first used by consume
+    would find consume's movement and hand back ITS batch_id."""
+    manager.add_stock(article_id=pasta["article_id"], quantity=500,
+                      location_id=pasta["location_id"], occurred_at="2026-08-18T09:00:00")
+    manager.consume(product_id=pasta["product_id"], quantity=100,
+                    occurred_at="2026-08-18T19:00:00", idempotency_key="shared-key")
+    # Same literal key, different service: must do its own work, not resolve
+    # to whatever consume() wrote under that key.
+    new_batch_id = manager.add_stock(
+        article_id=pasta["article_id"], quantity=50, location_id=pasta["location_id"],
+        occurred_at="2026-08-19T09:00:00", idempotency_key="shared-key",
+    )
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (new_batch_id,)).fetchone()
+        purchase_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM movement WHERE reason = 'purchase'"
+        ).fetchone()["n"]
+    assert batch["initial"] == 50
+    assert purchase_count == 2
+
+
 def test_opening_a_batch_shortens_its_date(manager, pasta):
     with manager.db.write() as conn:
         conn.execute("UPDATE product SET days_after_opening = 3 WHERE id = ?",
@@ -230,6 +253,27 @@ def test_query_stock_aggregates_per_product(manager, pasta):
     assert rows[0]["display"] == "500 g"
 
 
+def test_query_stock_ignores_case_and_accents(manager, pasta):
+    """services.yaml promises matching "sans tenir compte de la casse ni des
+    accents" — this is the voice path ("il reste des pâtes ?")."""
+    manager.add_stock(article_id=pasta["article_id"], quantity=300,
+                      location_id=pasta["location_id"], occurred_at="2026-08-01T10:00:00")
+    assert [e["product_name"] for e in manager.query_stock(name="pates")] == ["Pâtes"]
+    assert [e["product_name"] for e in manager.query_stock(name="PÂTES")] == ["Pâtes"]
+
+
+def test_query_stock_matches_the_oe_ligature(manager):
+    """NFD decomposition alone does not split œ/æ: "il reste des œufs ?" must
+    still match a product literally named "Œufs"."""
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Frigo", kind="fridge")
+        product_id = repo.insert_product(conn, name="Œufs", base_unit="piece")
+        article_id = repo.insert_article(conn, product_id=product_id)
+    manager.add_stock(article_id=article_id, quantity=6, location_id=location_id,
+                      occurred_at="2026-08-01T10:00:00")
+    assert [e["product_name"] for e in manager.query_stock(name="oeufs")] == ["Œufs"]
+
+
 def test_summary_reports_value_expirations_and_shortages(manager, pasta):
     manager.add_stock(article_id=pasta["article_id"], quantity=100,
                       location_id=pasta["location_id"], best_before="2026-08-19",
@@ -240,6 +284,25 @@ def test_summary_reports_value_expirations_and_shortages(manager, pasta):
     assert len(summary["expiring"]) == 1
     # 100 g in stock against a 200 g threshold.
     assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
+
+
+def test_summary_breaks_the_stock_value_down_per_location(manager, pasta):
+    """Design §8.1: sensor.home_stock_stock_value carries the value per
+    location as an attribute, not just the grand total."""
+    freezer_id = None
+    with manager.db.write() as conn:
+        freezer_id = repo.insert_location(conn, name="Congélateur", kind="freezer")
+    manager.add_stock(article_id=pasta["article_id"], quantity=100,
+                      location_id=pasta["location_id"], price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T10:00:00")
+    manager.add_stock(article_id=pasta["article_id"], quantity=50,
+                      location_id=freezer_id, price_per_base_unit=0.004,
+                      occurred_at="2026-08-18T11:00:00")
+    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    assert summary["stock_value"] == pytest.approx(0.6)
+    assert summary["stock_value_by_location"] == {
+        "Placard": pytest.approx(0.4), "Congélateur": pytest.approx(0.2),
+    }
 
 
 # --- fix-review follow-up tests -------------------------------------------

@@ -4,10 +4,12 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 """
 from __future__ import annotations
 
+import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from .const import (
+    QUANTITY_EPSILON,
     REASON_CONSUMPTION,
     REASON_INVENTORY,
     REASON_PURCHASE,
@@ -33,6 +35,34 @@ def _escape_like(value: str) -> str:
     return movement ids belonging to a different consumption.
     """
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# NFD decomposition splits an accented letter into the base letter plus a
+# combining mark, but it does NOT split the œ/æ ligatures — those are single
+# code points, not a letter plus an accent. Expand them by hand first, or
+# "œufs" never matches a product named "Œufs" (services.yaml promises
+# case- and accent-insensitive matching for query_stock, the voice path).
+_LIGATURES = {"œ": "oe", "æ": "ae", "Œ": "OE", "Æ": "AE"}
+
+
+def _fold_for_search(text: str) -> str:
+    """Case- and accent-insensitive form of `text`, for query_stock matching."""
+    for ligature, expanded in _LIGATURES.items():
+        text = text.replace(ligature, expanded)
+    decomposed = unicodedata.normalize("NFD", text)
+    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return without_accents.casefold()
+
+
+def _namespaced_key(operation: str, key: str | None) -> str | None:
+    """Prefix a caller-supplied idempotency key with the operation that owns it.
+
+    idempotency_key is a single UNIQUE column shared by every service: without
+    a namespace, an add_stock call replaying a key first used by consume()
+    would find that unrelated movement and return ITS batch_id instead of
+    doing its own work.
+    """
+    return f"{operation}:{key}" if key else None
 
 
 def _as_batch_view(row: dict[str, Any]) -> BatchView:
@@ -64,11 +94,12 @@ class StockManager:
         """Create a batch and its purchase movement. Returns the batch id."""
         moment = occurred_at or _now()
         amount = to_base_quantity(quantity, packaging_base_quantity)
+        stored_key = _namespaced_key("add_stock", idempotency_key)
         with self.db.write() as conn:
-            if idempotency_key and repo.movement_exists(conn, idempotency_key):
+            if stored_key and repo.movement_exists(conn, stored_key):
                 row = conn.execute(
                     "SELECT batch_id FROM movement WHERE idempotency_key = ?",
-                    (idempotency_key,),
+                    (stored_key,),
                 ).fetchone()
                 return int(row["batch_id"])
             article = repo.get_article(conn, article_id)
@@ -79,19 +110,13 @@ class StockManager:
                 entered_at=moment, best_before=best_before,
                 price_per_base_unit=price_per_base_unit,
             )
-            # kcal rate: the article's own, falling back to the product's
-            # reference_kcal (spec 7.4) — generic/produce articles usually
-            # carry no rate of their own.
-            kcal_rate = article["kcal_per_base_unit"]
-            if kcal_rate is None:
-                product = repo.get_product(conn, article["product_id"])
-                kcal_rate = product["reference_kcal"] if product else None
+            kcal_rate = repo.resolve_kcal_rate(conn, article)
             values = movement_values(amount, kcal_rate, price_per_base_unit)
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
                 reason=REASON_PURCHASE, kcal=values.kcal, cost=values.cost,
-                idempotency_key=idempotency_key,
+                idempotency_key=stored_key,
             )
             if price_per_base_unit is not None:
                 repo.insert_price(
@@ -105,15 +130,16 @@ class StockManager:
                 idempotency_key: str | None = None) -> list[int]:
         """Take a quantity out of stock, across as many batches as needed."""
         moment = occurred_at or _now()
+        stored_key = _namespaced_key("consume", idempotency_key)
         with self.db.write() as conn:
-            if idempotency_key and repo.movement_exists(conn, idempotency_key):
+            if stored_key and repo.movement_exists(conn, stored_key):
                 # Replayed call: return the movements the first call wrote.
                 # The key itself is escaped so '%'/'_' inside it are matched
                 # literally; only the trailing '%' we append is a real wildcard.
                 rows = conn.execute(
                     "SELECT id FROM movement WHERE idempotency_key = ?"
                     " OR idempotency_key LIKE ? ESCAPE '\\' ORDER BY id",
-                    (idempotency_key, f"{_escape_like(idempotency_key)}#%"),
+                    (stored_key, f"{_escape_like(stored_key)}#%"),
                 ).fetchall()
                 return [int(row["id"]) for row in rows]
             batches = [_as_batch_view(row)
@@ -130,8 +156,8 @@ class StockManager:
                 # One consumption can span several batches, but the key is UNIQUE:
                 # the first movement carries it, the next ones carry "key#1", "key#2".
                 key = None
-                if idempotency_key:
-                    key = idempotency_key if index == 0 else f"{idempotency_key}#{index}"
+                if stored_key:
+                    key = stored_key if index == 0 else f"{stored_key}#{index}"
                 movement_ids.append(repo.insert_movement(
                     conn, occurred_at=moment, product_id=product_id,
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
@@ -154,10 +180,8 @@ class StockManager:
         moment = occurred_at or _now()
         with self.db.write() as conn:
             row = conn.execute(
-                # kcal rate: the article's own, falling back to the product's
-                # reference_kcal (spec 7.4), same as add_stock() and consume().
-                "SELECT b.*, a.product_id,"
-                "       COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_unit"
+                # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
+                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit"
                 " FROM batch b"
                 " JOIN article a ON a.id = b.article_id"
                 " JOIN product p ON p.id = a.product_id"
@@ -167,7 +191,7 @@ class StockManager:
             if row is None:
                 raise ValueError(f"unknown or closed batch {batch_id}")
             taken = row["remaining"] if quantity is None else float(quantity)
-            if taken > row["remaining"] + 0.001:
+            if taken > row["remaining"] + QUANTITY_EPSILON:
                 raise InsufficientStock(requested=taken, available=row["remaining"])
             remaining_after = row["remaining"] - taken
             closes = is_empty(remaining_after)
@@ -238,7 +262,7 @@ class StockManager:
             ).fetchall()
             current = sum(row["remaining"] for row in rows)
             delta = counted_quantity - current
-            if abs(delta) < 0.001:
+            if abs(delta) < QUANTITY_EPSILON:
                 return None
             if delta < 0:
                 # Reuse the same BatchView construction as consume(): the rows
@@ -281,8 +305,8 @@ class StockManager:
             entry["batches"] += 1
         result = list(grouped.values())
         if name:
-            needle = name.casefold()
-            result = [e for e in result if needle in e["product_name"].casefold()]
+            needle = _fold_for_search(name)
+            result = [e for e in result if needle in _fold_for_search(e["product_name"])]
         for entry in result:
             entry["display"] = format_quantity(entry["quantity"], entry["base_unit"])
         return sorted(result, key=lambda e: e["product_name"])
@@ -296,13 +320,18 @@ class StockManager:
         rows = repo.stock_rows(conn)
 
         value = 0.0
+        value_by_location: dict[str, float] = {}
         unpriced = 0
         expiring: list[dict[str, Any]] = []
         for row in rows:
             if row["price_per_base_unit"] is None:
                 unpriced += 1
             else:
-                value += row["remaining"] * row["price_per_base_unit"]
+                line_value = row["remaining"] * row["price_per_base_unit"]
+                value += line_value
+                value_by_location[row["location_name"]] = (
+                    value_by_location.get(row["location_name"], 0.0) + line_value
+                )
             if row["best_before"] and date.fromisoformat(row["best_before"]) <= limit:
                 expiring.append({
                     "batch_id": row["id"], "product_name": row["product_name"],
@@ -322,6 +351,9 @@ class StockManager:
         totals = repo.counted_totals(conn)
         return {
             "stock_value": round(value, 2),
+            "stock_value_by_location": {
+                location: round(amount, 2) for location, amount in value_by_location.items()
+            },
             "unpriced_batches": unpriced,
             "batch_count": len(rows),
             "open_batch_count": sum(1 for row in rows if row["opened_at"]),

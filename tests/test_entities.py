@@ -45,7 +45,9 @@ async def test_entities_reflect_the_stock(hass, loaded):
     await hass.async_block_till_done()
 
     assert hass.states.get("sensor.home_stock_batches").state == "1"
-    assert float(hass.states.get("sensor.home_stock_stock_value").state) == 1.2
+    stock_value = hass.states.get("sensor.home_stock_stock_value")
+    assert float(stock_value.state) == 1.2
+    assert stock_value.attributes["by_location"] == {"Frigo": pytest.approx(1.2)}
     assert hass.states.get("binary_sensor.home_stock_shortages").state == "on"
     shortages = hass.states.get("binary_sensor.home_stock_shortages")
     assert shortages.attributes["products"] == ["Lait"]
