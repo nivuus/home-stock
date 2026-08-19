@@ -139,9 +139,11 @@ def link_barcode(conn, code: str, article_id: int) -> None:
 
 def insert_packaging(conn, *, scope: str, target_id: int, name: str,
                      base_quantity: float, is_purchase_default: bool = False) -> int:
-    # Deliberately unused until lot 1 (design §10, amended 2026-08-18): net
-    # weights come from Open Food Facts' product_quantity, a measurement, not
-    # from a guess parsed out of a product name. Do not delete as dead code.
+    # Used by StockManager.convert_product_unit (Task 10) to record the name
+    # of the pack an article used to be sold in, once its product switches to
+    # weight/volume. Net weights themselves still come from Open Food Facts'
+    # product_quantity, a measurement, never from a guess parsed out of a
+    # product name (design §10, amended 2026-08-18).
     return _insert(conn, "packaging", {
         "scope": scope, "target_id": target_id, "name": name,
         "base_quantity": base_quantity,
@@ -155,6 +157,21 @@ def insert_price(conn, *, article_id: int, observed_on: str,
         "article_id": article_id, "observed_on": observed_on,
         "price_per_base_unit": price_per_base_unit, "source": source, "store": store,
     })
+
+
+def rescale_prices_for_article(conn, article_id: int, factor: float) -> None:
+    """Divide every recorded price of this article by `factor`.
+
+    Used when a product's unit is converted (StockManager.convert_product_unit):
+    a price is money PER unit, so it moves opposite to the quantities — 1.20 €
+    per packet and 0.0024 €/g are the same fact said twice, not two facts. Left
+    unconverted, a stale row here would reseed the wrong price on the
+    article's next purchase through the suggestion cascade.
+    """
+    conn.execute(
+        "UPDATE price SET price_per_base_unit = price_per_base_unit / ? WHERE article_id = ?",
+        (factor, article_id),
+    )
 
 
 def latest_price(conn, article_id: int) -> float | None:
@@ -434,6 +451,27 @@ def line_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
     return _row(conn.execute(
         "SELECT * FROM shopping_line WHERE idempotency_key = ?",
         (idempotency_key,)).fetchone())
+
+
+def count_pending_lines_for_product(conn, product_id: int) -> int:
+    """Shopping lines not yet turned into a batch (`stored_at IS NULL`), for
+    any article of this product.
+
+    Used by StockManager.convert_product_unit to refuse converting while one
+    is queued: `shopping_line.quantity` is stored in the product's base unit
+    as a promise about a quantity, not yet a batch — changing what the number
+    means underneath it would lose stock with no trace the moment the line is
+    put away.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM shopping_line l
+        JOIN article a ON a.id = l.article_id
+        WHERE a.product_id = ? AND l.stored_at IS NULL
+        """,
+        (product_id,),
+    ).fetchone()
+    return int(row["n"])
 
 
 _LINE_SELECT_SQL = """

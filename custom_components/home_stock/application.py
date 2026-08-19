@@ -16,7 +16,7 @@ from .const import (
     REASON_PURCHASE,
     REASON_TRANSFER,
 )
-from .domain.conversion import plan_conversion
+from .domain.conversion import ConversionError, plan_conversion
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
@@ -322,10 +322,31 @@ class StockManager:
             if product is None:
                 raise LookupError(f"no product {product_id}")
             articles = repo.list_articles_for_product(conn, product_id)
+            # Closed batches are deliberately left out and stay in their
+            # pre-conversion unit. Safe only because every read today filters
+            # on open batches and `batch.initial` is written but never read
+            # back — this stops being safe the day something reads a closed
+            # batch's remaining/initial (e.g. a future "how much of each pack
+            # did we finish" report), which would then silently average
+            # pieces with grams.
             batches = repo.list_open_batches_for_product(conn, product_id)
 
             plan = plan_conversion(product=product, articles=articles, batches=batches,
                                    to_unit=to_unit, reference_quantity=reference_quantity)
+
+            # A pending shopping_line stores its quantity in the product's
+            # base unit as a promise, not yet a batch. Converting under it
+            # would silently reinterpret that number in the new unit — two
+            # queued packets becoming "2 g" instead of 1000 g the moment they
+            # are put away — with no trace in the journal. Refuse instead,
+            # even for a dry run: a plan that cannot actually be applied is
+            # not a plan worth showing.
+            pending = repo.count_pending_lines_for_product(conn, product_id)
+            if pending:
+                raise ConversionError(
+                    f"{pending} ligne(s) de courses en attente de rangement pour ce "
+                    "produit : rangez d'abord les courses avant de convertir son unité"
+                )
 
             report = {
                 "product_id": plan.product_id,
@@ -344,6 +365,8 @@ class StockManager:
 
             occurred_at = _now()
             articles_by_id = {a["id"]: a for a in articles}
+            batches_by_id = {b["id"]: b for b in batches}
+            factors = {a.article_id: a.factor for a in plan.articles}
 
             for article in plan.articles:
                 # Nutrition is stored per base unit: per packet becomes per gram.
@@ -358,11 +381,17 @@ class StockManager:
                 repo.insert_packaging(conn, scope="article", target_id=article.article_id,
                                       name=packaging_name, base_quantity=article.factor,
                                       is_purchase_default=True)
+                # A price is euros PER unit, so a change of denomination moves
+                # it opposite to the quantities: 1.20 €/packet and 0.0024 €/g
+                # are the same fact said twice, not history being rewritten.
+                repo.rescale_prices_for_article(conn, article.article_id, article.factor)
 
             for batch in plan.batches:
-                # The movement recording the old quantity is written before
-                # set_batch_remaining, so the journal captures the number that
-                # was actually true at that moment, not the one it becomes.
+                # The plan already carries the pre-conversion quantity
+                # (batch.old_remaining), so the journal stays correct no
+                # matter which of these two writes runs first. Only reading
+                # `remaining` back from the batch row instead of from the
+                # plan would make this order load-bearing.
                 repo.insert_movement(
                     conn, occurred_at=occurred_at, product_id=product_id,
                     article_id=batch.article_id, batch_id=batch.batch_id,
@@ -379,9 +408,20 @@ class StockManager:
                     ref_type=None, ref_id=None,
                     idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:in",
                 )
+                # Same denomination change as the article's own price above,
+                # applied to the batch's own recorded price — divided by the
+                # same factor that multiplies its quantity, so the batch's
+                # value in euros (remaining * price_per_base_unit) is
+                # unchanged by the conversion. A NULL price stays NULL: there
+                # is nothing to convert.
+                old_price = batches_by_id[batch.batch_id]["price_per_base_unit"]
+                new_price = (None if old_price is None
+                            else old_price / factors[batch.article_id])
                 repo.set_batch_remaining(conn, batch.batch_id, batch.new_remaining)
-                conn.execute("UPDATE batch SET initial = ? WHERE id = ?",
-                             (batch.new_initial, batch.batch_id))
+                conn.execute(
+                    "UPDATE batch SET initial = ?, price_per_base_unit = ? WHERE id = ?",
+                    (batch.new_initial, new_price, batch.batch_id),
+                )
 
             product_fields: dict[str, Any] = {"base_unit": plan.to_unit}
             if product["min_quantity"] is not None:
