@@ -89,6 +89,27 @@ def test_a_conversion_counts_neither_calories_nor_cost(manager):
     assert all(r["kcal"] is None and r["cost"] is None for r in rows)
 
 
+def test_a_conversion_does_not_move_the_summary_totals(manager):
+    """The conversion reason is absent from the reasons totals_between
+    tracks, but that exclusion is worthless untested: exercise it with a
+    non-zero baseline from a real consumption, then convert and check that
+    kcal_total, cost_total and cost_waste_total really did not move."""
+    manager.add_stock(article_id=10, quantity=2, location_id=1, price_per_base_unit=1.20)
+    manager.consume(product_id=1, quantity=1)
+
+    before = manager.summary(expiration_alert_days=7, tz=ZoneInfo("UTC"))
+    assert before["kcal_total"] == pytest.approx(1750.0)
+    assert before["cost_total"] == pytest.approx(1.20)
+    assert before["cost_waste_total"] == 0.0
+
+    manager.convert_product_unit(product_id=1, to_unit="g", reference_quantity=500)
+
+    after = manager.summary(expiration_alert_days=7, tz=ZoneInfo("UTC"))
+    assert after["kcal_total"] == before["kcal_total"]
+    assert after["cost_total"] == before["cost_total"]
+    assert after["cost_waste_total"] == before["cost_waste_total"]
+
+
 def test_nutrition_is_divided_by_the_weight_of_its_own_article(manager):
     # reference_quantity (400) deliberately differs from article 10's own net
     # weight (500): if the code rescaled by the reference instead of the

@@ -103,12 +103,17 @@ def test_journal_series_buckets_by_day(manager):
 
 def test_journal_series_applies_the_parts_like_the_day_does(manager):
     article_id, product_id = _seed_article(manager, base_unit="g", kcal_per_base_unit=1.2)
-    manager.add_stock(article_id=article_id, quantity=2000.0, location_id=1)
+    manager.add_stock(article_id=article_id, quantity=2000.0, location_id=1,
+                      price_per_base_unit=0.01)
     manager.consume(product_id=product_id, quantity=400.0, parts_total=4, parts_mine=1,
                     occurred_at="2026-08-20T10:00:00")
 
     series = manager.journal_series("day", 1, tz=PARIS, now=NOON)
-    assert series["buckets"][0]["kcal"] == pytest.approx(120.0)
+    bucket = series["buckets"][0]
+    assert bucket["kcal"] == pytest.approx(120.0)
+    # The pack cost what it cost, whether it was eaten alone or shared four
+    # ways: unlike kcal, cost is never divided by the parts (spec 7).
+    assert bucket["cost"] == pytest.approx(4.0)
 
 
 def test_journal_series_keeps_waste_out_of_the_calories_but_in_the_euros(manager):

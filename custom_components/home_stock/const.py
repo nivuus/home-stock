@@ -23,9 +23,6 @@ REASONS: Final = (
     REASON_CONVERSION,
 )
 
-# Reasons that count towards the daily kcal and cost totals (spec 7.5).
-COUNTED_REASONS: Final = frozenset({REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED})
-
 DATABASE_FILENAME: Final = "home_stock.db"
 DEFAULT_EXPIRATION_ALERT_DAYS: Final = 3
 CONF_EXPIRATION_ALERT_DAYS: Final = "expiration_alert_days"

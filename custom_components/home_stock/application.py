@@ -44,8 +44,15 @@ def _empty_totals() -> dict[str, float]:
 
 
 def _accumulate(totals: dict[str, float], row: dict[str, Any]) -> None:
-    """Add one movement to a bucket, applying the same rules as the SQL in
-    repo.totals_between — personal share on the nutrients, never on the money."""
+    """Add one movement to a bucket, splitting it the way repo.totals_between's
+    SQL does: personal share on the nutrients, never on the money.
+
+    This function does not itself filter by reason — every row that is not a
+    consumption is booked as waste, whatever its reason. It relies on its only
+    caller, repo.counted_movements, to have already excluded purchase,
+    inventory, transfer and conversion rows; fed anything else, it would
+    mislabel it as waste.
+    """
     reason = row["reason"]
     if reason == REASON_CONSUMPTION:
         share = ((row["parts_mine"] if row["parts_mine"] is not None else 1)

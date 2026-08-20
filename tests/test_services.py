@@ -236,8 +236,9 @@ async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass
 async def test_consume_rejects_a_reason_not_meant_for_consumption(hass, seeded):
     entry, ids = seeded
     # "purchase"/"inventory"/"transfer" are written by other services; letting
-    # consume() carry them would silently escape COUNTED_REASONS and
-    # under-count the kcal/cost totals for stock that really left the pantry.
+    # consume() carry them would silently escape the reasons totals_between
+    # tracks, and under-count the kcal/cost/cost_waste totals for stock that
+    # really left the pantry.
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "consume", {
             "product_id": ids["product_id"], "quantity": 1, "reason": "purchase",
