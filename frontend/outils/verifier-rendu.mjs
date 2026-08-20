@@ -13,8 +13,9 @@
  *   1. Il construit le bundle **en mémoire** depuis `src/panneau.ts`
  *      (esbuild, `write: false`) — un vérificateur ne déploie jamais, un
  *      `npm run build` s'en charge (voir `docs/exploitation.md`).
- *   2. Il sert une page de test locale (`page.setContent`, jamais de
- *      requête réseau) qui monte `<home-stock-panel>` avec un `hass`
+ *   2. Il sert une page de test locale — un petit serveur HTTP posé sur
+ *      127.0.0.1, port éphémère, jamais exposé au-delà de la machine — qui
+ *      monte `<home-stock-panel>` avec un `hass`
  *      FACTICE : un objet minimal qui répond aux mêmes formes que le vrai
  *      (`connection.sendMessagePromise`, `connection.subscribeMessage`,
  *      `callService`), piloté par des scénarios ci-dessous plutôt que par
@@ -23,7 +24,13 @@
  *      quelques centaines de produits, l'écran de réglages, et un refus
  *      serveur affiché en bannière.
  *   3. Aucun jeton n'est lu, aucune session n'est ouverte : le hass factice
- *      n'a besoin d'aucun secret.
+ *      n'a besoin d'aucun secret. (Un `page.setContent()` direct semblait
+ *      suffire, mais produit un document d'origine opaque où l'accès à
+ *      `window.localStorage` lève une `SecurityError` — `FileAttente` en a
+ *      besoin dès `connectedCallback()`, donc TOUT le panneau échouait à se
+ *      monter silencieusement ; voir le rapport de tâche. Le petit serveur
+ *      local ci-dessus donne une vraie origine `http://127.0.0.1`, sous
+ *      laquelle `localStorage` marche normalement.)
  *   4. Deux formats, ceux du spec du panneau (§14) — 412 × 915 (le
  *      téléphone qui scanne en rayon) et 1280 × 800 (le bureau, écran
  *      Catalogue/Réglages) — avec des seuils plus stricts que le mur
@@ -35,16 +42,24 @@
  *  Échoue sur : un débordement horizontal, une cible tactile sous 48 px,
  *  un contraste texte/fond sous 4,5:1, ou du texte tronqué.
  *
+ *  Chaque scénario vérifie aussi qu'il a bien ATTEINT l'écran attendu (le
+ *  bon composant enfant monté dans le panneau) avant de le mesurer : un
+ *  clic de navigation qui ne trouve pas son bouton (`if (bouton) bouton.
+ *  click()`) est un no-op silencieux qui, sans ce contrôle, ferait mesurer
+ *  l'écran précédent sous le nom d'un autre — et rapporterait « aucun
+ *  défaut » sur un écran jamais rendu.
+ *
  *  Usage : `node outils/verifier-rendu.mjs` (ou `npm run verifier`).
- *  Option `--auto-verifier-check` (par défaut) : après la vérification
- *  normale, casse volontairement quatre choses (une cible, un contraste,
- *  un débordement, une troncature) sur une page jetable et vérifie que
- *  chacune est bien détectée — la preuve que ce script échoue vraiment
- *  quand il le doit, pas seulement qu'il n'a rien trouvé à dire. Désactivable
- *  avec `--sans-auto-verification`.
+ *  Auto-vérification (par défaut, après la vérification normale) : casse
+ *  volontairement cinq choses sur une page jetable — une cible, un
+ *  contraste, un débordement, une troncature, et un clic de navigation qui
+ *  ne trouve pas son bouton — et vérifie que chacune est bien détectée : la
+ *  preuve que ce script échoue vraiment quand il le doit, pas seulement
+ *  qu'il n'a rien trouvé à dire. Désactivable avec `--sans-auto-verification`.
  */
 import esbuild from 'esbuild';
 import { chromium } from 'playwright-core';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -107,6 +122,27 @@ function pageHtml(bundleJs) {
 <home-stock-panel></home-stock-panel>
 <script type="module">${bundleJs}</script>
 </body></html>`;
+}
+
+/** Sert `html` sur 127.0.0.1, port éphémère — jamais exposé au-delà de la
+ *  machine, jamais un vrai réseau. Nécessaire : `page.setContent()`
+ *  produit un document d'origine opaque où `window.localStorage` lève une
+ *  `SecurityError` à la simple lecture de la propriété, ce qui fait
+ *  échouer `connectedCallback()` du panneau AVANT même qu'il construise sa
+ *  `FileAttente` — silencieusement, puisque c'est une exception non
+ *  interceptée dans un cycle de vie Lit, jamais rapportée comme un défaut
+ *  de rendu. Une vraie origine `http://127.0.0.1` n'a pas ce problème. */
+async function servirPageStatique(html) {
+  const serveur = createServer((_requete, reponse) => {
+    reponse.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    reponse.end(html);
+  });
+  await new Promise((resolve, reject) => {
+    serveur.once('error', reject);
+    serveur.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = serveur.address();
+  return { url: `http://127.0.0.1:${port}/`, fermer: () => serveur.close() };
 }
 
 // --- fixtures ---------------------------------------------------------------
@@ -258,6 +294,7 @@ const SCENARIOS = [
     nom: 'Scanner (écran par défaut)',
     fixture: { reponses: { 'home_stock/session/current': null } },
     actions: [],
+    ecranAttendu: 'home-stock-scanner',
   },
   {
     nom: 'Fiche (article inconnu, plusieurs candidats)',
@@ -268,6 +305,7 @@ const SCENARIOS = [
       },
     },
     actions: [{ type: 'dispatch-code-lu', code: '3229820129488' }],
+    ecranAttendu: 'home-stock-fiche',
   },
   {
     nom: 'Panier (plusieurs lignes, plusieurs rayons)',
@@ -277,6 +315,7 @@ const SCENARIOS = [
       },
     },
     actions: [{ type: 'click-nav', texte: 'Panier' }],
+    ecranAttendu: 'home-stock-panier',
   },
   {
     nom: 'Rangement (liste à ranger)',
@@ -287,6 +326,7 @@ const SCENARIOS = [
       },
     },
     actions: [{ type: 'click-nav', texte: 'Ranger' }],
+    ecranAttendu: 'home-stock-rangement',
   },
   {
     nom: 'Catalogue (quelques centaines de produits, édition ouverte)',
@@ -304,6 +344,11 @@ const SCENARIOS = [
       { type: 'click-nav', texte: 'Catalogue' },
       { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
     ],
+    ecranAttendu: 'home-stock-catalogue',
+    // Le clic sur « Modifier » doit vraiment avoir ouvert le panneau
+    // d'édition — sans quoi son propre débordement (le bug réel trouvé
+    // pendant le développement de ce script) ne serait jamais mesuré.
+    elementAttendu: { enfant: 'home-stock-catalogue', selector: '.edition' },
   },
   {
     nom: 'Réglages (rayons, emplacements, resynchronisation lancée)',
@@ -319,6 +364,8 @@ const SCENARIOS = [
       { type: 'click-nav', texte: 'Réglages' },
       { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.resynchroniser' },
     ],
+    ecranAttendu: 'home-stock-reglages',
+    elementAttendu: { enfant: 'home-stock-reglages', selector: '.message-resync' },
   },
   {
     nom: 'Bannière de refus (écriture rejetée par le serveur)',
@@ -335,6 +382,11 @@ const SCENARIOS = [
         articleId: 99, quantite: 1000, prixUnitaire: 0.0018, mode: 'panier', offDroppedFields: [],
       } },
     ],
+    // Un refus renvoie au scanner (voir panneau.ts : surArticlePret bascule
+    // l'écran avant même de connaître le sort de l'écriture) — la bannière,
+    // elle, est posée par le panneau lui-même, hors de tout enfant.
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: null, selector: '.erreur-file' },
   },
 ];
 
@@ -343,7 +395,7 @@ const SCENARIOS = [
 // Playwright sérialise cette fonction telle quelle et l'exécute dans le
 // navigateur : elle ne doit fermer sur rien d'extérieur, seulement sur son
 // argument.
-async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse }) {
+async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, ecranAttendu = null, elementAttendu = null }) {
   function attendre(ms) { return new Promise((resolve) => { setTimeout(resolve, ms); }); }
 
   function reponsePour(msg) {
@@ -441,6 +493,32 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   }
 
   await attendre(50);
+
+  // --- l'écran attendu a-t-il seulement été atteint ? ---------------------
+  //
+  // `boutonNav` ci-dessus fait `if (bouton) bouton.click()` : un bouton
+  // introuvable (un libellé renommé, un écran qui ne s'est jamais monté) est
+  // un no-op SILENCIEUX — sans ce contrôle, le scénario mesurerait alors
+  // l'écran resté affiché sous le nom d'un autre, et un vrai défaut sur
+  // l'écran jamais atteint (le débordement de `.edition`, trouvé une
+  // première fois de cette façon pendant le développement de ce script)
+  // resterait invisible tout en rapportant « aucun défaut ». Un vérificateur
+  // qui ne sait pas distinguer « cet écran est propre » de « je ne l'ai
+  // jamais atteint » est pire qu'aucun vérificateur, parce qu'on lui fait
+  // confiance.
+  let ecranManquant = null;
+  if (ecranAttendu && !panneau.shadowRoot.querySelector(ecranAttendu)) {
+    ecranManquant = ecranAttendu;
+  }
+  let elementManquant = null;
+  if (elementAttendu) {
+    const racine = elementAttendu.enfant
+      ? panneau.shadowRoot.querySelector(elementAttendu.enfant)?.shadowRoot
+      : panneau.shadowRoot;
+    if (!racine || !racine.querySelector(elementAttendu.selector)) {
+      elementManquant = `${elementAttendu.enfant ?? '<home-stock-panel>'} ${elementAttendu.selector}`;
+    }
+  }
 
   // --- mesures -----------------------------------------------------------
 
@@ -563,13 +641,21 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
     }
   }
 
-  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque };
+  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque, ecranManquant, elementManquant };
 }
 
 // --- orchestration -----------------------------------------------------------
 
 function formaterDefauts(resultat) {
   const lignes = [];
+  if (resultat.ecranManquant) {
+    lignes.push(`  - Écran jamais atteint : <${resultat.ecranManquant}> absent du panneau — le scénario a `
+      + 'mesuré autre chose sous ce nom (bouton de navigation introuvable, ou action sans effet).');
+  }
+  if (resultat.elementManquant) {
+    lignes.push(`  - Élément attendu absent : ${resultat.elementManquant} — l'action censée le produire `
+      + 'n’a apparemment pas eu lieu.');
+  }
   if (resultat.debordement) lignes.push('  - Débordement horizontal de la page.');
   for (const c of resultat.ciblesTropPetites) {
     lignes.push(`  - Cible tactile trop petite (${c.largeur}×${c.hauteur}px) : ${c.element}`);
@@ -584,8 +670,9 @@ function formaterDefauts(resultat) {
 }
 
 function aDesDefauts(resultat) {
-  return resultat.debordement || resultat.ciblesTropPetites.length > 0
-    || resultat.contrasteInsuffisant.length > 0 || resultat.texteTronque.length > 0;
+  return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant) || resultat.debordement
+    || resultat.ciblesTropPetites.length > 0 || resultat.contrasteInsuffisant.length > 0
+    || resultat.texteTronque.length > 0;
 }
 
 async function lancerNavigateur() {
@@ -599,7 +686,7 @@ async function lancerNavigateur() {
   }
 }
 
-async function executerScenarios(navigateur, bundle) {
+async function executerScenarios(navigateur, urlHarnais) {
   let fautes = 0;
   let total = 0;
   for (const format of FORMATS) {
@@ -608,11 +695,12 @@ async function executerScenarios(navigateur, bundle) {
       total += 1;
       const contexte = await navigateur.newContext({ viewport: { width: format.width, height: format.height } });
       const page = await contexte.newPage();
-      await page.setContent(pageHtml(bundle), { waitUntil: 'load' });
+      await page.goto(urlHarnais, { waitUntil: 'load' });
       await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
       const resultat = await page.evaluate(monterEtMesurer, {
         fixture: scenario.fixture, actions: scenario.actions,
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+        ecranAttendu: scenario.ecranAttendu ?? null, elementAttendu: scenario.elementAttendu ?? null,
       });
       await contexte.close();
 
@@ -656,13 +744,13 @@ const CASSURES = [
   },
 ];
 
-async function autoVerification(navigateur, bundle) {
+async function autoVerification(navigateur, urlHarnais) {
   console.log('\n=== Auto-vérification : le script sait-il détecter une régression ? ===');
   let toutDetecte = true;
   for (const cassure of CASSURES) {
     const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
     const page = await contexte.newPage();
-    await page.setContent(pageHtml(bundle), { waitUntil: 'load' });
+    await page.goto(urlHarnais, { waitUntil: 'load' });
     await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
@@ -674,6 +762,33 @@ async function autoVerification(navigateur, bundle) {
     console.log(`  ${detecte ? '✓' : '✗'} ${cassure.nom} — ${detecte ? 'détectée' : 'NON DÉTECTÉE (bug du vérificateur)'}`);
     if (!detecte) toutDetecte = false;
   }
+
+  // Cinquième cassure, d'une nature différente : pas une feuille de style,
+  // mais un clic de navigation qui ne trouve JAMAIS son bouton — exactement
+  // la régression qu'une relecture a reproduite en renommant un libellé de
+  // navigation : `boutonNav` rend `null`, `if (bouton) bouton.click()` ne
+  // fait rien, et l'écran reste celui d'avant sous le nom d'un autre. Cette
+  // preuve passe par le VRAI chemin de scénario (`monterEtMesurer` avec de
+  // vraies `actions`), pas une simulation à côté, pour être fidèle à ce
+  // qu'un bouton renommé produirait réellement.
+  {
+    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
+    const page = await contexte.newPage();
+    await page.goto(urlHarnais, { waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: { reponses: { 'home_stock/session/current': null } },
+      actions: [{ type: 'click-nav', texte: 'Bouton Introuvable Exprès' }],
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, ecranAttendu: 'home-stock-catalogue',
+    });
+    await contexte.close();
+
+    const detecte = resultat.ecranManquant === 'home-stock-catalogue';
+    console.log(`  ${detecte ? '✓' : '✗'} un clic de navigation qui ne trouve pas son bouton — `
+      + `${detecte ? 'détecté comme écran manquant' : 'NON DÉTECTÉ (bug du vérificateur)'}`);
+    if (!detecte) toutDetecte = false;
+  }
+
   return toutDetecte;
 }
 
@@ -684,13 +799,19 @@ async function main() {
   const bundle = await bundlerApplication();
   console.log(`Bundle : ${(bundle.length / 1024).toFixed(0)} ko.`);
 
+  // Une seule page servie pour tout le run (127.0.0.1, port éphémère) : le
+  // contenu ne change jamais d'un scénario à l'autre — seul ce qu'on y
+  // injecte après coup (fixture, actions, cassure) varie. Voir
+  // `servirPageStatique` pour pourquoi `page.setContent()` seul ne suffit pas.
+  const { url: urlHarnais, fermer: fermerServeur } = await servirPageStatique(pageHtml(bundle));
+
   const navigateur = await lancerNavigateur();
   try {
-    const { fautes, total } = await executerScenarios(navigateur, bundle);
+    const { fautes, total } = await executerScenarios(navigateur, urlHarnais);
 
     let autoOk = true;
     if (!sansAutoVerification) {
-      autoOk = await autoVerification(navigateur, bundle);
+      autoOk = await autoVerification(navigateur, urlHarnais);
     }
 
     console.log(`\n${total - fautes}/${total} scénarios sans défaut.`);
@@ -705,6 +826,7 @@ async function main() {
     }
   } finally {
     await navigateur.close();
+    fermerServeur();
   }
 }
 

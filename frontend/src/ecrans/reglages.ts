@@ -7,7 +7,10 @@
  *  ici comme partout ailleurs. Chaque appui envoie la liste ordonnée complète
  *  à `home_stock/aisles/reorder`, qui refuse tout identifiant de rayon
  *  inconnu — donc toujours la liste actuelle, jamais une liste reconstruite
- *  à la main.
+ *  à la main. L'ordre affiché bouge tout de suite (optimiste), mais si le
+ *  serveur refuse, l'écran recharge la vraie liste au lieu de continuer à
+ *  montrer — et à renvoyer au prochain appui — un ordre que le serveur n'a
+ *  jamais accepté.
  *
  *  Le réordonnancement passe par la file hors-ligne comme le Catalogue (une
  *  écriture est une écriture). La resynchronisation, elle, n'y passe pas :
@@ -24,11 +27,23 @@ import type { FileAttente } from '../file-attente';
 import type { Emplacement } from './rangement';
 import type { Rayon } from './catalogue';
 
-function messageErreur(err: unknown): string {
-  if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
-    return (err as any).message;
-  }
-  return 'Une erreur est survenue.';
+/** Les seuls messages que `home_stock.resync_off` est connu pour renvoyer,
+ *  déjà rédigés en français pour être lus tels quels (voir `resync_off`,
+ *  `services.py`). Tout le reste — une exception Python imprévue, jamais
+ *  traduite — obtient le message générique plutôt que d'être montré tel
+ *  quel : même principe de liste blanche que `CODES_DE_REFUS_EN_FRANCAIS`
+ *  dans `file-attente.ts`, adapté à un appel de service, qui ne porte pas de
+ *  code d'erreur structuré comme une commande websocket du domaine — seulement
+ *  un texte. */
+const MESSAGES_RESYNC_CONNUS: ReadonlySet<string> = new Set([
+  'Une resynchronisation Open Food Facts est déjà en cours.',
+]);
+const MESSAGE_RESYNC_GENERIQUE = "La resynchronisation n'a pas pu être lancée.";
+
+function messageResyncAffichable(err: unknown): string {
+  const texte = err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string'
+    ? (err as any).message as string : null;
+  return texte !== null && MESSAGES_RESYNC_CONNUS.has(texte) ? texte : MESSAGE_RESYNC_GENERIQUE;
 }
 
 /** Fait remonter (ou descendre) l'élément d'index `index` d'un cran — une
@@ -79,31 +94,32 @@ export class EcranReglages extends LitElement {
     }
   }
 
-  /** Empile puis rejoue tout de suite — même méthode que le Catalogue, le
-   *  panier et le rangement. */
-  private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
-    if (!this.file) return Promise.resolve(false);
-    const cle = this.file.ajouter(type, charge);
-    this.avertirFile();
-    return this.file.rejouer().then(() => {
-      this.avertirFile();
-      return this.file!.resultatDe(cle) === 'envoyee';
-    });
-  }
-
   private avertirFile(): void {
     this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
   }
 
-  private deplacerRayon(index: number, sens: -1 | 1): void {
+  /** Empile, rejoue tout de suite, et — c'est ce qui distingue ce geste du
+   *  même motif dans le Catalogue — recharge la vraie liste depuis le
+   *  serveur si CE réordonnancement précis a été refusé (un rayon disparu
+   *  entre-temps, par exemple). Sans ça, l'écran continuerait d'afficher un
+   *  ordre optimiste que le serveur n'a jamais accepté, et le renverrait
+   *  identique au prochain appui. Une panne de transport (toujours en
+   *  file, hors ligne) laisse l'ordre optimiste en place — la file le
+   *  retentera d'elle-même. */
+  private async deplacerRayon(index: number, sens: -1 | 1): Promise<void> {
     const nouvelOrdre = deplacer(this.rayons, index, sens);
     if (nouvelOrdre === null) return;
-    // Optimiste : l'ordre affiché bouge tout de suite, un magasin ne se
-    // parcourt pas plus vite parce que l'écriture a fini par arriver. Un
-    // refus (rayon disparu entre-temps) remonte déjà dans la bannière
-    // globale du panneau — rien à corriger ici de plus qu'un rechargement.
     this.rayons = nouvelOrdre;
-    void this.ecrire('home_stock/aisles/reorder', { aisle_ids: nouvelOrdre.map((r) => r.id) });
+    if (!this.file) return;
+    const cle = this.file.ajouter('home_stock/aisles/reorder', { aisle_ids: nouvelOrdre.map((r) => r.id) });
+    this.avertirFile();
+    await this.file.rejouer();
+    this.avertirFile();
+    if (this.file.resultatDe(cle) === 'refusee') {
+      // Déjà signalé en français dans la bannière globale du panneau : rien
+      // à ajouter ici, seulement corriger l'affichage.
+      await this.charger();
+    }
   }
 
   private async resynchroniser(): Promise<void> {
@@ -116,7 +132,7 @@ export class EcranReglages extends LitElement {
       this.messageResync = 'Resynchronisation lancée en tâche de fond — environ 40 minutes pour tout le catalogue. '
         + 'Les champs corrigés à la main ne sont jamais écrasés.';
     } catch (err) {
-      this.erreurResync = messageErreur(err);
+      this.erreurResync = messageResyncAffichable(err);
     } finally {
       this.resyncEnCours = false;
     }
@@ -131,10 +147,10 @@ export class EcranReglages extends LitElement {
             <span class="rayon-nom">${rayon.name}</span>
             <span class="rayon-boutons">
               <button class="monter" aria-label="Monter ${rayon.name}" ?disabled=${index === 0}
-                @click=${() => this.deplacerRayon(index, -1)}>▲</button>
+                @click=${() => { void this.deplacerRayon(index, -1); }}>▲</button>
               <button class="descendre" aria-label="Descendre ${rayon.name}"
                 ?disabled=${index === this.rayons.length - 1}
-                @click=${() => this.deplacerRayon(index, 1)}>▼</button>
+                @click=${() => { void this.deplacerRayon(index, 1); }}>▼</button>
             </span>
           </li>
         `)}

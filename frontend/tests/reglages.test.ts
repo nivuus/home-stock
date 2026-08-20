@@ -126,6 +126,53 @@ describe('<home-stock-reglages>', () => {
     expect(connexion.appeler).not.toHaveBeenCalledWith('home_stock/aisles/reorder', expect.anything());
   });
 
+  it('recharge les rayons depuis le serveur quand un réordonnancement est refusé, au lieu de continuer '
+     + 'à afficher (et à renvoyer) un ordre que le serveur n’a jamais accepté', async () => {
+    const appeler = vi.fn().mockImplementation(reponsesParDefaut);
+    const connexion = { appeler } as unknown as Connexion;
+    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('refusee') };
+    const element = monter({ connexion, file });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    appeler.mockClear();
+
+    (element.shadowRoot!.querySelectorAll('.descendre')[0] as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    // L'ordre optimiste a bien été tenté...
+    expect(ajouter).toHaveBeenCalledWith('home_stock/aisles/reorder', { aisle_ids: [2, 1, 3] });
+    // ...mais le refus a déclenché un rechargement de la vraie liste, qui
+    // répond toujours l'ordre d'origine ici : l'écran doit refléter CELA,
+    // pas l'ordre optimiste que le serveur a refusé.
+    expect(appeler).toHaveBeenCalledWith('home_stock/aisles/list');
+    const noms = Array.from(element.shadowRoot!.querySelectorAll('.rayon-nom')).map((n) => n.textContent);
+    expect(noms).toEqual(['Épicerie', 'Frais', 'Surgelés']);
+  });
+
+  it('ne recharge rien quand le réordonnancement reste simplement en file (hors ligne, pas un refus)', async () => {
+    const appeler = vi.fn().mockImplementation(reponsesParDefaut);
+    const connexion = { appeler } as unknown as Connexion;
+    const ajouter = vi.fn().mockReturnValue('cle-test');
+    // `undefined` : toujours en file, comme `FileAttente.resultatDe` le rend
+    // tant qu'aucun sort n'est connu (panne de transport).
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue(undefined) };
+    const element = monter({ connexion, file });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    appeler.mockClear();
+
+    (element.shadowRoot!.querySelectorAll('.descendre')[0] as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    expect(appeler).not.toHaveBeenCalledWith('home_stock/aisles/list');
+    // L'ordre optimiste reste affiché : la file retentera d'elle-même.
+    const noms = Array.from(element.shadowRoot!.querySelectorAll('.rayon-nom')).map((n) => n.textContent);
+    expect(noms).toEqual(['Frais', 'Épicerie', 'Surgelés']);
+  });
+
   it('appelle le service home_stock.resync_off avec all: true, pas une commande websocket', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
     const element = monter({ connexion });
@@ -156,6 +203,26 @@ describe('<home-stock-reglages>', () => {
     expect(element.shadowRoot!.querySelector('.erreur')!.textContent)
       .toContain('déjà en cours');
     expect(element.shadowRoot!.querySelector('.message-resync')).toBeNull();
+  });
+
+  it('remplace un message de service imprévu (une exception Python non traduite) par le message '
+     + 'générique en français plutôt que de l’afficher tel quel', async () => {
+    const connexion = connexionFactice(reponsesParDefaut);
+    (connexion as any).appelerService = vi.fn().mockRejectedValue({
+      message: 'ValueError: division by zero in _write_resync',
+    });
+    const element = monter({ connexion });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.resynchroniser') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const erreur = element.shadowRoot!.querySelector('.erreur')!.textContent;
+    expect(erreur).not.toContain('ValueError');
+    expect(erreur).not.toContain('division by zero');
+    expect(erreur).toContain('pas pu être lancée');
   });
 
   it('affiche une erreur en français si le chargement des rayons échoue', async () => {

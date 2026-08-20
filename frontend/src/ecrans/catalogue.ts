@@ -15,10 +15,22 @@
  *  fait, atomiquement. Cet écran n'offre donc **jamais** de champ pour
  *  `base_unit` — juste sa valeur, en lecture seule.
  *
- *  Aucun `home_stock/categories/list` n'existe côté serveur (seul
- *  `insert_category` est utilisé, par l'import Grocy) : la catégorie se
- *  modifie donc par son identifiant numérique, sans nom à afficher — plutôt
- *  que d'inventer une commande hors du périmètre de ce lot.
+ *  La catégorie est, de la même façon, en lecture seule : aucun
+ *  `home_stock/categories/list` n'existe côté serveur (seul
+ *  `insert_category` est utilisé, par l'import Grocy), donc aucun nom n'est
+ *  disponible pour vérifier une saisie — un mauvais identifiant, mais
+ *  valide, filerait un produit sous la catégorie de quelqu'un d'autre sans
+ *  le moindre avertissement, une donnée que les lots recettes et liste de
+ *  courses liront un jour. Plutôt qu'inventer une commande hors périmètre,
+ *  cet écran affiche l'identifiant tel quel et n'en propose pas l'édition.
+ *
+ *  Un champ numérique saisi à la main (seuil, durée de conservation) peut
+ *  contenir une virgule décimale — celle qu'un clavier français produit, et
+ *  que `inputmode="decimal"` encourage. `Number('1,5')` vaut `NaN`, et
+ *  `NaN` sérialisé en JSON vaut `null` : sans précaution, une simple
+ *  virgule effacerait silencieusement un seuil tout en laissant croire à un
+ *  enregistrement réussi — voir `analyserNombre` et `champsModifies`, qui
+ *  refusent explicitement l'envoi plutôt que de deviner.
  */
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -47,14 +59,21 @@ export type Produit = {
   external_ref: string | null;
 };
 
-/** Les seuls champs que cet écran propose de modifier — le sous-ensemble de
- *  `PRODUCT_EDITABLE` que le spec de l'écran Catalogue nomme explicitement.
- *  Une saisie vide vaut « aucun » (`null`), jamais une chaîne vide que le
+/** Les seuls noms de colonnes que cet écran peut envoyer à
+ *  `home_stock/product/update` — un filet de sécurité statique, vérifié
+ *  directement par le test plutôt que déduit d'une convention de nom de
+ *  classe CSS. `base_unit` et `category_id` en sont volontairement absents
+ *  (voir l'en-tête du fichier). */
+export const CHAMPS_CATALOGUE_MODIFIABLES = [
+  'name', 'aisle_id', 'default_location_id', 'min_quantity', 'default_shelf_life_days',
+] as const;
+
+/** Les seuls champs que cet écran propose de modifier. Une saisie vide vaut
+ *  « aucun » (`null`) pour un identifiant, jamais une chaîne vide que le
  *  serveur refuserait pour un champ numérique. */
 export type Brouillon = {
   name: string;
   aisle_id: string;
-  category_id: string;
   default_location_id: string;
   min_quantity: string;
   default_shelf_life_days: string;
@@ -64,7 +83,6 @@ export function brouillonDepuis(produit: Produit): Brouillon {
   return {
     name: produit.name,
     aisle_id: produit.aisle_id !== null ? String(produit.aisle_id) : '',
-    category_id: produit.category_id !== null ? String(produit.category_id) : '',
     default_location_id: produit.default_location_id !== null ? String(produit.default_location_id) : '',
     min_quantity: produit.min_quantity !== null ? String(produit.min_quantity) : '',
     default_shelf_life_days: produit.default_shelf_life_days !== null ? String(produit.default_shelf_life_days) : '',
@@ -76,26 +94,68 @@ function idOuNull(saisie: string): number | null {
   return s === '' ? null : Number(s);
 }
 
+export type ResultatNombre = { ok: true; valeur: number | null } | { ok: false };
+
+/** Un champ numérique saisi à la main peut être vide (effacé exprès →
+ *  `null`), un nombre valide, ou du texte qui n'en est pas — jamais un
+ *  `NaN` silencieux : `Number('1,5')` vaut `NaN`, `NaN !== ancienneValeur`
+ *  est toujours vrai, et `JSON.stringify(NaN)` vaut `'null'`. Un incident
+ *  réel a montré qu'une simple virgule décimale suffisait ainsi à effacer
+ *  un seuil de réapprovisionnement en silence tout en laissant croire à un
+ *  enregistrement réussi. Accepte donc la virgule comme le point ; refuse
+ *  explicitement (`{ok:false}`) tout le reste plutôt que de deviner un
+ *  nombre dans du texte (« 7 jours » n'est pas 7). */
+export function analyserNombre(saisie: string): ResultatNombre {
+  const texte = saisie.trim();
+  if (texte === '') return { ok: true, valeur: null };
+  const nombre = Number(texte.replace(',', '.'));
+  if (!Number.isFinite(nombre)) return { ok: false };
+  return { ok: true, valeur: nombre };
+}
+
+const LIBELLE_CHAMP_NUMERIQUE = {
+  min_quantity: 'Seuil de réapprovisionnement',
+  default_shelf_life_days: 'Durée de conservation',
+} as const;
+
+function appliquerChampNumerique(
+  cle: keyof typeof LIBELLE_CHAMP_NUMERIQUE, brouillon: Brouillon, produit: Produit,
+  champs: Record<string, unknown>,
+): string | null {
+  const resultat = analyserNombre(brouillon[cle]);
+  if (!resultat.ok) {
+    return `${LIBELLE_CHAMP_NUMERIQUE[cle]} : nombre invalide (« ${brouillon[cle]} »).`;
+  }
+  if (resultat.valeur !== produit[cle]) champs[cle] = resultat.valeur;
+  return null;
+}
+
+export type ResultatChampsModifies =
+  | { ok: true; champs: Record<string, unknown> }
+  | { ok: false; erreur: string };
+
 /** Ce que `home_stock/product/update` doit recevoir dans `fields` : seuls
  *  les champs qui ont réellement changé — jamais tous, pour ne jamais
- *  réécrire une valeur inchangée sous prétexte de tout renvoyer. Vide si
- *  rien n'a bougé : l'appelant n'écrit alors rien. */
-export function champsModifies(brouillon: Brouillon, produit: Produit): Record<string, unknown> {
+ *  réécrire une valeur inchangée sous prétexte de tout renvoyer. `{ok:
+ *  false}` dès qu'un champ numérique n'est pas lisible comme un nombre :
+ *  l'appelant doit alors refuser l'édition entière plutôt que d'en envoyer
+ *  une partie avec un champ effacé par erreur. */
+export function champsModifies(brouillon: Brouillon, produit: Produit): ResultatChampsModifies {
   const champs: Record<string, unknown> = {};
   const nom = brouillon.name.trim();
   if (nom && nom !== produit.name) champs.name = nom;
+
   if (idOuNull(brouillon.aisle_id) !== produit.aisle_id) champs.aisle_id = idOuNull(brouillon.aisle_id);
-  if (idOuNull(brouillon.category_id) !== produit.category_id) champs.category_id = idOuNull(brouillon.category_id);
   if (idOuNull(brouillon.default_location_id) !== produit.default_location_id) {
     champs.default_location_id = idOuNull(brouillon.default_location_id);
   }
-  if (idOuNull(brouillon.min_quantity) !== produit.min_quantity) {
-    champs.min_quantity = idOuNull(brouillon.min_quantity);
-  }
-  if (idOuNull(brouillon.default_shelf_life_days) !== produit.default_shelf_life_days) {
-    champs.default_shelf_life_days = idOuNull(brouillon.default_shelf_life_days);
-  }
-  return champs;
+
+  const erreurSeuil = appliquerChampNumerique('min_quantity', brouillon, produit, champs);
+  if (erreurSeuil) return { ok: false, erreur: erreurSeuil };
+  const erreurConservation = appliquerChampNumerique('default_shelf_life_days', brouillon, produit, champs);
+  if (erreurConservation) return { ok: false, erreur: erreurConservation };
+
+  return { ok: true, champs };
 }
 
 /** Filtre par nom de produit ou nom de rayon, insensible à la casse — un
@@ -229,15 +289,24 @@ export class EcranCatalogue extends LitElement {
     const produit = this.produitEnEdition;
     const brouillon = this.brouillon;
     if (!produit || !brouillon || this.enCours) return;
-    const champs = champsModifies(brouillon, produit);
-    if (Object.keys(champs).length === 0) {
+    const resultat = champsModifies(brouillon, produit);
+    if (!resultat.ok) {
+      // Une virgule, une unité tapée avec le nombre (« 7 jours ») : on
+      // refuse l'envoi entier plutôt que d'en laisser passer une partie
+      // avec un champ effacé par erreur (voir `analyserNombre`).
+      this.erreurEdition = resultat.erreur;
+      return;
+    }
+    if (Object.keys(resultat.champs).length === 0) {
       this.fermerEdition();
       return;
     }
     this.enCours = true;
     this.erreurEdition = null;
     this.enAttenteEnvoi = false;
-    const reussi = await this.ecrire('home_stock/product/update', { product_id: produit.id, fields: champs });
+    const reussi = await this.ecrire('home_stock/product/update', {
+      product_id: produit.id, fields: resultat.champs,
+    });
     this.enCours = false;
     if (reussi) {
       await this.charger();
@@ -269,12 +338,6 @@ export class EcranCatalogue extends LitElement {
           </select>
         </label>
         <label class="champ">
-          Catégorie (identifiant)
-          <input class="champ-categorie" inputmode="numeric" placeholder="ex. 3" .value=${brouillon.category_id}
-            @input=${(e: InputEvent) => this.modifierBrouillon('category_id', (e.target as HTMLInputElement).value)} />
-          <span class="aide">Aucune liste de noms de catégorie n'est disponible côté serveur.</span>
-        </label>
-        <label class="champ">
           Emplacement par défaut
           <select class="champ-emplacement" .value=${brouillon.default_location_id}
             @change=${(e: Event) => this.modifierBrouillon('default_location_id', (e.target as HTMLSelectElement).value)}>
@@ -289,10 +352,14 @@ export class EcranCatalogue extends LitElement {
         </label>
         <label class="champ">
           Durée de conservation (jours)
-          <input class="champ-conservation" inputmode="numeric" placeholder="ex. 5" .value=${brouillon.default_shelf_life_days}
+          <input class="champ-conservation" inputmode="decimal" placeholder="ex. 5" .value=${brouillon.default_shelf_life_days}
             @input=${(e: InputEvent) =>
               this.modifierBrouillon('default_shelf_life_days', (e.target as HTMLInputElement).value)} />
         </label>
+        <p class="champ-lecture-seule">
+          Catégorie : ${produit.category_id ?? 'aucune'} (identifiant interne) — non modifiable ici : aucune
+          liste de noms n'existe côté serveur pour vérifier une saisie.
+        </p>
         <p class="champ-lecture-seule">
           Unité de base : ${produit.base_unit === 'piece' ? 'à la pièce' : produit.base_unit}
           — se change uniquement par une conversion, pas depuis cet écran.
@@ -385,11 +452,10 @@ export class EcranCatalogue extends LitElement {
       box-sizing: border-box;
     }
     .champ { display: block; font-size: 0.85rem; }
-    .champ-nom, .champ-rayon, .champ-categorie, .champ-emplacement, .champ-seuil, .champ-conservation {
+    .champ-nom, .champ-rayon, .champ-emplacement, .champ-seuil, .champ-conservation {
       display: block; width: 100%; min-height: 48px; box-sizing: border-box; font-size: 1rem;
       padding: 4px 8px; margin-top: 4px;
     }
-    .aide { display: block; color: var(--secondary-text-color); font-size: 0.75rem; margin-top: 2px; }
     .champ-lecture-seule { color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0; }
     .etat-envoi { color: var(--secondary-text-color); font-size: 0.85rem; }
     .actions-edition { display: flex; flex-wrap: wrap; gap: 8px; }
