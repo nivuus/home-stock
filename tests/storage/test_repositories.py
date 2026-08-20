@@ -1,5 +1,6 @@
 import pytest
 
+from custom_components.home_stock.const import MACRO_COLUMNS
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
@@ -14,6 +15,21 @@ def conn(tmp_path):
     with db.write() as c:
         yield c
     db.close()
+
+
+@pytest.fixture
+def seeded_conn(conn):
+    """`conn`, plus one location, one product in grams, one article and an
+    open batch of 500 g — all landing on id 1 in a fresh test database, so
+    tests can hardcode product_id=1/article_id=1 the way this file's
+    insert_movement tests already do.
+    """
+    repo.insert_location(conn, name="Placard", kind="pantry")
+    product_id = repo.insert_product(conn, name="Article", base_unit="g")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    repo.insert_batch(conn, article_id=article_id, location_id=1,
+                      quantity=500, entered_at="2026-08-01T10:00:00")
+    return conn
 
 
 def test_product_round_trip(conn):
@@ -213,3 +229,45 @@ def test_pending_lines_of_a_closed_session_no_longer_count(conn):
     repo.set_session_state(conn, session_id, "done", closed_at="2026-08-19T12:00:00")
 
     assert repo.count_pending_lines_for_product(conn, product_id) == 0
+
+
+def test_insert_movement_freezes_the_eight_macros(seeded_conn):
+    movement_id = repo.insert_movement(
+        seeded_conn, occurred_at="2026-08-20T10:00:00", product_id=1, article_id=1,
+        quantity=-200.0, reason="consumption", base_unit="g", kcal=240.0, cost=0.8,
+        macros={"proteins": 10.0, "salt": 0.2},
+    )
+    row = seeded_conn.execute(
+        "SELECT * FROM movement WHERE id = ?", (movement_id,)).fetchone()
+    assert row["proteins"] == 10.0
+    assert row["salt"] == 0.2
+    # Une macro absente du dictionnaire reste NULL, pas 0.
+    assert row["fiber"] is None
+
+
+def test_insert_movement_without_macros_writes_eight_nulls(seeded_conn):
+    movement_id = repo.insert_movement(
+        seeded_conn, occurred_at="2026-08-20T10:00:00", product_id=1, article_id=1,
+        quantity=-200.0, reason="consumption", base_unit="g")
+    row = seeded_conn.execute(
+        "SELECT * FROM movement WHERE id = ?", (movement_id,)).fetchone()
+    assert all(row[column] is None for column in MACRO_COLUMNS)
+
+
+def test_macro_rates_reads_the_eight_columns_of_a_row():
+    row = {"proteins": 0.05, "carbohydrates": None, "sugars": 0.01,
+           "added_sugars": None, "fat": 0.02, "saturated_fat": None,
+           "fiber": 0.0, "salt": 0.001, "kcal_per_base_unit": 1.2}
+    rates = repo.macro_rates(row)
+    assert set(rates) == set(MACRO_COLUMNS)
+    assert rates["proteins"] == 0.05
+    assert rates["carbohydrates"] is None
+    assert rates["fiber"] == 0.0       # mesuré à zéro, pas manquant
+    assert "kcal_per_base_unit" not in rates
+
+
+def test_list_batches_for_product_reports_the_macro_rates(seeded_conn):
+    seeded_conn.execute("UPDATE article SET proteins = 0.05, salt = 0.001 WHERE id = 1")
+    [row] = repo.list_batches_for_product(seeded_conn, 1)
+    assert row["proteins"] == 0.05
+    assert row["salt"] == 0.001

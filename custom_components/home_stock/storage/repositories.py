@@ -6,9 +6,10 @@ service can write a batch and its movement atomically.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from typing import Any
 
-from ..const import COUNTED_REASONS
+from ..const import COUNTED_REASONS, MACRO_COLUMNS
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -30,6 +31,18 @@ ARTICLE_FIELDS = (
 # sites (resolve_kcal_rate, used by application.add_stock/consume_batch) cannot
 # drift apart.
 KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
+
+# The eight macro rates, read straight off the article. Unlike the kcal rate
+# above, there is NO product-level fallback: `product.reference_kcal` exists
+# because a generic article (loose apples) still has a known calorie count,
+# but nobody maintains a reference protein content per product. No value on
+# the article means no value, and the movement freezes NULL.
+MACRO_RATE_SQL = ", ".join(f"a.{column}" for column in MACRO_COLUMNS)
+
+
+def macro_rates(row: Mapping[str, Any]) -> dict[str, float | None]:
+    """The eight macro rates of an already-read row, keyed by column name."""
+    return {column: row[column] for column in MACRO_COLUMNS}
 
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -253,7 +266,7 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     (spec 7.4 — generic/produce articles usually carry no rate of their own).
     """
     return _rows(conn.execute(
-        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit,"
+        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit, {MACRO_RATE_SQL},"
         "       a.product_id FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
@@ -309,15 +322,23 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
                     quantity: float, reason: str, base_unit: str,
                     batch_id: int | None = None,
                     kcal: float | None = None, cost: float | None = None,
+                    macros: Mapping[str, float | None] | None = None,
+                    parts_total: int | None = None, parts_mine: int | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
-    return _insert(conn, "movement", {
+    values: dict[str, Any] = {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
         "batch_id": batch_id, "quantity": quantity, "reason": reason,
         "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
+        "parts_total": parts_total, "parts_mine": parts_mine,
         "idempotency_key": idempotency_key,
-    })
+    }
+    # Always all eight columns, so an absent rate lands as an explicit NULL
+    # rather than as a column this INSERT simply never mentioned.
+    given = macros or {}
+    values.update({column: given.get(column) for column in MACRO_COLUMNS})
+    return _insert(conn, "movement", values)
 
 
 def product_base_unit(conn, product_id: int) -> str:

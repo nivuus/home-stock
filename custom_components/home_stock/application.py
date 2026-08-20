@@ -83,6 +83,7 @@ def _as_batch_view(row: dict[str, Any]) -> BatchView:
         opened_at=datetime.fromisoformat(row["opened_at"]) if row["opened_at"] else None,
         price_per_base_unit=row["price_per_base_unit"],
         kcal_per_base_unit=row["kcal_per_base_unit"],
+        macros=repo.macro_rates(row),
     )
 
 
@@ -128,13 +129,14 @@ class StockManager:
                 price_per_base_unit=price_per_base_unit,
             )
             kcal_rate = repo.resolve_kcal_rate(conn, article)
-            values = movement_values(amount, kcal_rate, price_per_base_unit)
+            values = movement_values(amount, kcal_rate, price_per_base_unit,
+                                     macro_rates=repo.macro_rates(article))
             base_unit = repo.product_base_unit(conn, article["product_id"])
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
                 reason=REASON_PURCHASE, base_unit=base_unit,
-                kcal=values.kcal, cost=values.cost,
+                kcal=values.kcal, cost=values.cost, macros=values.macros,
                 idempotency_key=stored_key,
             )
             if price_per_base_unit is not None and record_price_observation:
@@ -174,7 +176,8 @@ class StockManager:
                 ).fetchone()
                 values = movement_values(allocation.quantity,
                                          allocation.kcal_per_base_unit,
-                                         allocation.price_per_base_unit)
+                                         allocation.price_per_base_unit,
+                                         macro_rates=allocation.macros)
                 # One consumption can span several batches, but the key is UNIQUE:
                 # the first movement carries it, the next ones carry "key#1", "key#2".
                 key = None
@@ -184,7 +187,8 @@ class StockManager:
                     conn, occurred_at=moment, product_id=product_id,
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
                     quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
-                    kcal=values.kcal, cost=values.cost, idempotency_key=key,
+                    kcal=values.kcal, cost=values.cost, macros=values.macros,
+                    idempotency_key=key,
                 ))
                 repo.set_batch_remaining(
                     conn, allocation.batch_id, allocation.remaining_after,
@@ -203,7 +207,8 @@ class StockManager:
         with self.db.write() as conn:
             row = conn.execute(
                 # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
-                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit"
+                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
+                f" {repo.MACRO_RATE_SQL}"
                 " FROM batch b"
                 " JOIN article a ON a.id = b.article_id"
                 " JOIN product p ON p.id = a.product_id"
@@ -218,12 +223,14 @@ class StockManager:
             remaining_after = row["remaining"] - taken
             closes = is_empty(remaining_after)
             values = movement_values(taken, row["kcal_per_base_unit"],
-                                     row["price_per_base_unit"])
+                                     row["price_per_base_unit"],
+                                     macro_rates=repo.macro_rates(row))
             base_unit = repo.product_base_unit(conn, row["product_id"])
             movement_id = repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
                 reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
+                macros=values.macros,
             )
             repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
                                      closed_at=moment if closes else None)
@@ -291,10 +298,20 @@ class StockManager:
                 return None
             if delta < 0:
                 # Reuse the same BatchView construction as consume(): the rows
-                # from `SELECT * FROM batch` do not carry kcal_per_base_unit, so
-                # inject the article's rate before handing them to the helper.
+                # from `SELECT * FROM batch` do not carry kcal_per_base_unit or
+                # the eight macro columns (those live on `article`, not
+                # `batch`), so inject the article's own values before handing
+                # them to the helper. Unused here in practice — the movement
+                # below is written with kcal and cost pinned to None because a
+                # correction is not a consumption (spec 7.5) — but _as_batch_view
+                # now always reads all eight macro columns off its row, so they
+                # must be present to avoid a KeyError.
                 views = [
-                    _as_batch_view({**dict(row), "kcal_per_base_unit": article["kcal_per_base_unit"]})
+                    _as_batch_view({
+                        **dict(row),
+                        "kcal_per_base_unit": article["kcal_per_base_unit"],
+                        **repo.macro_rates(article),
+                    })
                     for row in rows
                 ]
                 for allocation in allocate(views, -delta):
