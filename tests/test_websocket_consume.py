@@ -69,6 +69,31 @@ async def test_consume_refuses_a_batch_of_another_product(hass, hass_ws_client,
     assert not answer["success"]
 
 
+async def test_consume_refuses_a_negative_product_id(hass, hass_ws_client, setup_entry):
+    """No real row has a negative id: refused AT THE SCHEMA, the same as the
+    services surface (correction round 1 pin — see
+    tests/test_services.py::test_consume_rejects_a_negative_product_id).
+
+    Asserts the error code specifically (`invalid_format`, voluptuous's own
+    schema-rejection code), not just `success is False`: before this fix,
+    product_id went through the bare `_bounded_int` (no floor), so -1
+    passed schema validation, reached `StockManager.consume`, and only
+    failed once `repo.product_base_unit` raised `LookupError("no product
+    -1")` — a message the `no product (\\d+)` pattern in messages.py does
+    not match (no digit for a `-`), so it fell through to the generic
+    `invalid_value` / "Valeur invalide." A plain `not success` assertion
+    would have stayed green through that whole detour, hiding exactly the
+    asymmetry this test exists to catch."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({
+        "type": "home_stock/stock/consume", "product_id": -1, "quantity": 1.0})
+    answer = await client.receive_json()
+    assert not answer["success"]
+    assert answer["error"]["code"] == "invalid_format"
+
+
 async def test_consume_is_idempotent(hass, hass_ws_client, setup_entry):
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager

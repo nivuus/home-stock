@@ -117,10 +117,21 @@ async def _run(hass: HomeAssistant, work) -> Any:
     depending on whether the panel or a script asked. Re-raising `str(error)`
     here used to leak the English original ("unknown article 5") into a
     notification and a voice answer.
+
+    `LookupError` is caught alongside the `ValueError` family for the same
+    reason: `repo.product_base_unit` raises it for an unknown product id
+    (StockManager.consume's FIFO path calls it directly with the caller's
+    own `product_id`, before any existence check), and the websocket surface
+    already catches it (`websocket_api._send_domain_error`'s callers list it
+    explicitly). Missing it here meant a well-formed but nonexistent
+    `product_id` — a deleted product an automation still references — raised
+    a bare Python `LookupError` straight into the Home Assistant log instead
+    of a French refusal: the exact weaker-surface asymmetry this lot's rule
+    forbids.
     """
     try:
         return await hass.async_add_executor_job(work)
-    except (InsufficientStock, PartsError, UnitError, ValueError) as error:
+    except (InsufficientStock, LookupError, PartsError, UnitError, ValueError) as error:
         raise HomeAssistantError(french_message(error)) from error
     except OverflowError as error:
         # Backstop, not the primary defence: ADD_STOCK_SCHEMA/CONSUME_SCHEMA/

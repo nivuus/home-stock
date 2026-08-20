@@ -152,6 +152,17 @@ async def test_consume_rejects_an_id_larger_than_64_bits(hass, seeded):
         }, blocking=True)
 
 
+async def test_consume_rejects_a_negative_product_id(hass, seeded):
+    """No real row has a negative id: refused at the schema, the same as the
+    websocket surface (correction round 1 pin — see
+    tests/test_websocket_consume.py::test_consume_refuses_a_negative_product_id)."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": -1, "quantity": 1,
+        }, blocking=True)
+
+
 # --- Fix round 5: best_before must not be able to disable the pantry -------
 # A bad best_before used to be accepted by cv.string, stored verbatim, and
 # from that moment application.py's summary() raised ValueError on every
@@ -231,6 +242,24 @@ async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass
         await hass.services.async_call(DOMAIN, "consume", {
             "product_id": ids["product_id"], "quantity": 500,
         }, blocking=True)
+
+
+async def test_consume_reports_an_unknown_product_as_a_home_assistant_error(hass, seeded):
+    """StockManager.consume's FIFO path (no batch_id) calls
+    repo.product_base_unit(conn, product_id) directly on the caller's own
+    id, before any existence check — it raises a bare `LookupError`, not a
+    `ValueError`. `_run` used to only translate the `ValueError` family, so
+    a well-formed but nonexistent product_id (a deleted product an
+    automation still references) escaped as a raw Python exception instead
+    of the French refusal the websocket surface already gives for the same
+    case. Pins both: a HomeAssistantError, in French, not a bare
+    LookupError."""
+    entry, ids = seeded
+    with pytest.raises(HomeAssistantError) as refusal:
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 999, "quantity": 1,
+        }, blocking=True)
+    assert str(refusal.value) == "Produit 999 inconnu."
 
 
 async def test_consume_rejects_a_reason_not_meant_for_consumption(hass, seeded):

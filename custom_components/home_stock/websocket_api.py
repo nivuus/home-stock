@@ -113,7 +113,13 @@ _BASE_UNIT: Final = vol.In(BASE_UNITS)
 # never corrected. Zero stays valid on both counts — a free item is a real
 # observation.
 _NON_NEGATIVE_FLOAT: Final = vol.Any(_non_negative_float, None)
-_NON_NEGATIVE_INT: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=0)), None)
+# The plain (non-nullable) form, for a field that is never cleared to None —
+# home_stock/stock/consume's product_id and batch_id, notably (correction
+# round 1): unlike the None-tolerant _NON_NEGATIVE_INT below, wrapping this
+# in vol.Any(..., None) for a Required field would let {"product_id": null}
+# pass schema validation and reach the application layer as a genuine None.
+_NON_NEGATIVE_ID: Final = vol.All(_bounded_int, vol.Range(min=0))
+_NON_NEGATIVE_INT: Final = vol.Any(_NON_NEGATIVE_ID, None)
 # category_id/aisle_id/default_location_id reference an INTEGER PRIMARY KEY,
 # which SQLite starts at 1: 0 or a negative id can never be a real row.
 _POSITIVE_ID: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=1)), None)
@@ -791,10 +797,15 @@ async def stock_add(hass, connection, msg) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/stock/consume",
-    vol.Required("product_id"): _bounded_int,
+    # _NON_NEGATIVE_ID, not the bare _bounded_int used elsewhere in this
+    # file for an id that is range-checked further down (e.g. product/get's
+    # own product_id): no real row ever has a negative id, and the services
+    # surface (services.CONSUME_SCHEMA's own `_id`) already refused one.
+    # Neither surface may be the weaker one (correction round 1).
+    vol.Required("product_id"): _NON_NEGATIVE_ID,
     vol.Required("quantity"): _finite_float,
     vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
-    vol.Optional("batch_id"): _bounded_int,
+    vol.Optional("batch_id"): _NON_NEGATIVE_ID,
     vol.Optional("parts_total"): _PARTS,
     vol.Optional("parts_mine"): _PARTS,
     vol.Optional("idempotency_key"): _bounded_text,
