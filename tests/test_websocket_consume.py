@@ -157,14 +157,31 @@ async def test_product_get_carries_the_portion_and_the_next_batch(hass, hass_ws_
 async def test_the_learned_portion_beats_the_open_food_facts_one(hass, hass_ws_client,
                                                                  setup_entry):
     """What the owner actually eats beats what the manufacturer calls a
-    serving."""
+    serving — proven by making both sources available at once, with
+    different values, so the priority between them is actually exercised.
+
+    A prior version of this test only ever populated one source at a time
+    (serving_quantity alone, or three consumptions alone), so it passed
+    just as well with the priority order flipped — the very thing it
+    claimed to guard. Both are seeded here, with distinct numbers, so
+    asserting the learned value specifically proves the ordering.
+    """
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager
     await hass.async_add_executor_job(
         lambda: manager.add_stock(article_id=1, quantity=2000.0, location_id=1))
-    for _ in range(3):
+
+    def _set_the_off_serving():
+        with manager.db.write() as conn:
+            conn.execute("UPDATE article SET serving_quantity = 200 WHERE id = 1")
+    await hass.async_add_executor_job(_set_the_off_serving)
+
+    # Three different consumptions: the median (80) must not be confused
+    # with a value that would also satisfy a mean, a last-value, or a
+    # first-value implementation.
+    for quantity in (70.0, 80.0, 90.0):
         await hass.async_add_executor_job(
-            lambda: manager.consume(product_id=1, quantity=80.0))
+            lambda quantity=quantity: manager.consume(product_id=1, quantity=quantity))
     client = await hass_ws_client(hass)
 
     await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})

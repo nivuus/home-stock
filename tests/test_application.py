@@ -528,6 +528,29 @@ def test_consume_batch_refuses_an_unknown_batch(manager):
         manager.consume_batch(999999, occurred_at="2026-08-18T19:00:00")
 
 
+def test_consume_batch_refuses_a_batch_of_another_product(manager, pasta):
+    """product_id, when given, is checked against the batch's own article —
+    the pair is refused rather than trusting either side of it (lot 2: the
+    panel always sends both, targeting the batch FIFO would pick)."""
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=200,
+                                 location_id=pasta["location_id"],
+                                 occurred_at="2026-08-18T10:00:00")
+    with manager.db.write() as conn:
+        other_product_id = repo.insert_product(conn, name="Riz", base_unit="g")
+
+    with pytest.raises(ValueError, match="does not belong to product"):
+        manager.consume_batch(batch_id, product_id=other_product_id,
+                              occurred_at="2026-08-18T19:00:00")
+
+    # Refused before any write: the batch is untouched and no movement exists.
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movement = conn.execute(
+            "SELECT * FROM movement WHERE reason = 'consumption'").fetchone()
+    assert batch["remaining"] == 200
+    assert movement is None
+
+
 def test_summary_totals_keep_waste_and_expired_out_of_kcal_and_cost(manager, pasta):
     """Lot 2, amendment A2: kcal_total and cost_total now count consumption
     only, and cost_waste_total picks up waste and expiry instead, so that
