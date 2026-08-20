@@ -45,3 +45,8 @@ MACRO_COLUMNS: Final = (
 # A serving above this value is not a serving: it is a data entry mistake in
 # a collaborative database (a pallet announced in grams).
 MAX_SERVING: Final = 5000.0
+
+# A food day runs from 04:00 local to 04:00 local: what you eat at one in the
+# morning belongs to the evening you are still finishing, not to the calendar
+# day that just started.
+FOOD_DAY_START_HOUR: Final = 4
