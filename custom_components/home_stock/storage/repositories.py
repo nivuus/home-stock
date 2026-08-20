@@ -9,7 +9,13 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
-from ..const import COUNTED_REASONS, MACRO_COLUMNS
+from ..const import (
+    COUNTED_REASONS,
+    MACRO_COLUMNS,
+    REASON_CONSUMPTION,
+    REASON_EXPIRED,
+    REASON_WASTE,
+)
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -405,6 +411,103 @@ def counted_totals(conn) -> dict[str, float]:
         tuple(sorted(COUNTED_REASONS)),
     ).fetchone()
     return {"kcal": float(row["kcal"]), "cost": float(row["cost"])}
+
+
+# The personal share of a movement. The CAST is not decoration: parts_mine and
+# parts_total are INTEGER columns, and SQLite's `1 / 4` on two integers is 0 —
+# without it, one plate out of four would silently zero the whole day and the
+# sensor would read 0 kcal with no error anywhere.
+SHARE_SQL = "(CAST(COALESCE(parts_mine, 1) AS REAL) / COALESCE(parts_total, 1))"
+
+# Only a consumption feeds the personal diary. Waste and expiry leave the
+# stock and cost money, but nobody ate them (spec 7).
+_PERSONAL_SUMS = ", ".join(
+    [f"COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}'"
+     f" THEN kcal * {SHARE_SQL} END), 0) AS kcal"]
+    + [f"COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}'"
+       f" THEN {column} * {SHARE_SQL} END), 0) AS {column}"
+       for column in MACRO_COLUMNS]
+)
+
+_WASTE_REASONS_SQL = f"('{REASON_WASTE}', '{REASON_EXPIRED}')"
+
+
+def totals_between(conn, start: str | None = None,
+                   end: str | None = None) -> dict[str, Any]:
+    """Nutrients, money and coverage over a half-open range, or over everything.
+
+    Money is NEVER divided by the parts: the pack cost what it cost, whether
+    it was eaten alone or shared four ways (spec 7). Only the nine nutrients
+    carry the personal share.
+    """
+    where, params = "", []
+    if start is not None and end is not None:
+        where = " WHERE occurred_at >= ? AND occurred_at < ?"
+        params = [start, end]
+    row = conn.execute(
+        f"SELECT {_PERSONAL_SUMS},"
+        f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' THEN cost END), 0)"
+        "   AS cost,"
+        f" COALESCE(SUM(CASE WHEN reason IN {_WASTE_REASONS_SQL} THEN cost END), 0)"
+        "   AS waste_cost,"
+        f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' AND kcal IS NULL"
+        "   THEN 1 END), 0) AS unvalued"
+        f" FROM movement{where}",
+        tuple(params),
+    ).fetchone()
+    return dict(row)
+
+
+def journal_entries(conn, start: str, end: str) -> list[dict[str, Any]]:
+    """What left the stock during a food day, oldest first."""
+    return _rows(conn.execute(
+        "SELECT m.id, m.occurred_at, m.quantity, m.reason, m.base_unit, m.kcal,"
+        "       m.cost, m.parts_total, m.parts_mine, p.name AS product_name"
+        " FROM movement m JOIN product p ON p.id = m.product_id"
+        f" WHERE m.reason IN ('{REASON_CONSUMPTION}', '{REASON_WASTE}',"
+        f"                    '{REASON_EXPIRED}')"
+        "   AND m.occurred_at >= ? AND m.occurred_at < ?"
+        " ORDER BY m.occurred_at, m.id",
+        (start, end),
+    ))
+
+
+def counted_movements(conn, since: str) -> list[dict[str, Any]]:
+    """The raw rows a series is bucketed from, in Python.
+
+    Bucketing here rather than in SQL is not laziness: SQLite ships no
+    timezone database, so a GROUP BY on a locally-shifted date would be wrong
+    twice a year — precisely on the two days the food-day boundary is
+    interesting. The volume makes this free: a household writes some fifteen
+    movements a day, so twelve months is on the order of 5 000 rows.
+    """
+    return _rows(conn.execute(
+        "SELECT occurred_at, reason, kcal, cost, parts_total, parts_mine,"
+        f"       {', '.join(MACRO_COLUMNS)}"
+        " FROM movement"
+        f" WHERE reason IN ('{REASON_CONSUMPTION}', '{REASON_WASTE}',"
+        f"                  '{REASON_EXPIRED}')"
+        "   AND occurred_at >= ? ORDER BY occurred_at, id",
+        (since,),
+    ))
+
+
+def learned_portion(conn, product_id: int) -> float | None:
+    """The median of the last three consumptions of this product, or nothing.
+
+    Under three, there is no habit yet — and proposing a number drawn from a
+    single meal would train the button to be wrong. Same discipline as lot 1's
+    learned shelf life.
+    """
+    rows = conn.execute(
+        "SELECT ABS(quantity) AS quantity FROM movement"
+        f" WHERE product_id = ? AND reason = '{REASON_CONSUMPTION}'"
+        " ORDER BY id DESC LIMIT 3",
+        (product_id,),
+    ).fetchall()
+    if len(rows) < 3:
+        return None
+    return float(sorted(row["quantity"] for row in rows)[1])
 
 
 def shortage_rows(conn) -> list[dict[str, Any]]:
