@@ -56,6 +56,18 @@ consume:
             - { value: consumption, label: Consommé }
             - { value: waste, label: Jeté }
             - { value: expired, label: Périmé }
+    batch_id:
+      name: Lot
+      description: Prendre dans ce lot précis plutôt que de suivre l'ordre FIFO.
+      selector: { number: { min: 1, mode: box } }
+    parts_total:
+      name: Parts servies
+      description: Nombre d'assiettes servies au total. À donner avec « parts mangées ».
+      selector: { number: { min: 1, max: 24, mode: box } }
+    parts_mine:
+      name: Parts mangées
+      description: Combien de ces assiettes sont les tiennes. Zéro est valide.
+      selector: { number: { min: 0, max: 24, mode: box } }
     idempotency_key:
       name: Clé d'idempotence
       selector: { text: }

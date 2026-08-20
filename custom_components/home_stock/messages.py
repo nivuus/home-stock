@@ -38,6 +38,16 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
      lambda m: f"Stock insuffisant : {m.group(1)} demandé, {m.group(2)} disponible."),
     (re.compile(r"^batch (\d+) does not belong to product (\d+)$"), "invalid_field",
      lambda m: f"Le lot {m.group(1)} n'appartient pas au produit {m.group(2)}."),
+    (re.compile(r"^parts_total and parts_mine go together$"), "invalid_value",
+     lambda m: "Les parts sont incohérentes : il faut donner "
+               "« parts servies » et « parts mangées » ensemble, ou aucun des deux."),
+    (re.compile(r"^a (.+) movement cannot be shared$"), "invalid_value",
+     lambda m: f"Un mouvement « {m.group(1)} » ne peut pas être partagé en parts."),
+    (re.compile(r"^parts_total must be between 1 and (\d+)$"), "invalid_value",
+     lambda m: f"Le nombre de parts servies doit être entre 1 et {m.group(1)}."),
+    (re.compile(r"^parts_mine must be between 0 and parts_total$"), "invalid_value",
+     lambda m: "Les parts sont incohérentes : on ne mange pas plus de parts "
+               "qu'il n'en a été servi."),
 )
 
 GENERIC_CODE: Final = "invalid_value"

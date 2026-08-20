@@ -245,6 +245,67 @@ async def test_consume_rejects_a_reason_not_meant_for_consumption(hass, seeded):
         }, blocking=True)
 
 
+async def test_the_consume_service_records_the_parts(hass, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    await hass.services.async_call(DOMAIN, "consume", {
+        "product_id": 1, "quantity": 400.0, "parts_total": 4, "parts_mine": 1,
+    }, blocking=True)
+
+    row = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchone())
+    assert (row["parts_total"], row["parts_mine"]) == (4, 1)
+
+
+async def test_the_consume_service_refuses_impossible_parts(hass, setup_entry):
+    """The same rule as the websocket surface, on the oldest surface."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": 100.0, "parts_total": 2, "parts_mine": 3,
+        }, blocking=True)
+
+
+@pytest.mark.parametrize("value", [1.5, "2", -1, 25])
+async def test_the_consume_service_refuses_a_parts_value_the_schema_rejects(
+        hass, setup_entry, value):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    with pytest.raises((vol.Invalid, HomeAssistantError)):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": 100.0, "parts_total": value, "parts_mine": 1,
+        }, blocking=True)
+
+
+async def test_the_consume_service_can_target_one_batch(hass, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    old = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))
+    recent = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))
+
+    await hass.services.async_call(DOMAIN, "consume", {
+        "product_id": 1, "quantity": 50.0, "batch_id": recent,
+    }, blocking=True)
+
+    remaining = await hass.async_add_executor_job(lambda: dict(
+        manager.db.read().execute("SELECT id, remaining FROM batch ORDER BY id")
+        .fetchall()[1]))
+    assert remaining["remaining"] == 50.0
+
+
 async def test_query_stock_returns_a_response(hass, seeded):
     entry, ids = seeded
     await hass.services.async_call(DOMAIN, "add_stock", {
