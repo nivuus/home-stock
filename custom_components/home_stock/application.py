@@ -38,6 +38,9 @@ NUTRITION_COLUMNS: Final = (
 # day can never disagree about what "kcal" means.
 _TOTAL_KEYS: Final = ("kcal", *MACRO_COLUMNS, "cost", "waste_cost", "unvalued")
 
+# The two stages of an expiry announcement, in the only order they may occur.
+EXPIRY_STAGES: Final = ("approaching", "expired")
+
 
 def _empty_totals() -> dict[str, float]:
     return {key: 0.0 for key in _TOTAL_KEYS}
@@ -663,6 +666,40 @@ class StockManager:
             "cart_store": session["store"] if session else None,
             "cart_to_store": awaiting_storage,
         }
+
+    def claim_expiry_announcements(
+        self, *, expiration_alert_days: int, today: str | None = None,
+    ) -> list[tuple[str, list[dict[str, Any]]]]:
+        """What has just crossed a threshold, marked as announced on the way out.
+
+        Claiming and marking happen in ONE write transaction: an announcement
+        read but not marked would be repeated at the next refresh, which is
+        the exact failure this method exists to prevent.
+
+        A stage never goes backwards. A batch already announced as `expired`
+        stays there even if the clock moves back — a corrected timezone or a
+        restored backup must not re-announce the whole fridge.
+        """
+        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        limit = (reference + timedelta(days=expiration_alert_days)).isoformat()
+        claimed: dict[str, list[dict[str, Any]]] = {stage: [] for stage in EXPIRY_STAGES}
+        with self.db.write() as conn:
+            for row in repo.expiry_candidates(conn, limit):
+                stage = ("expired" if date.fromisoformat(row["best_before"]) < reference
+                         else "approaching")
+                already = row["expiry_announced_stage"]
+                if already is not None and (
+                        already == stage
+                        or EXPIRY_STAGES.index(already) > EXPIRY_STAGES.index(stage)):
+                    continue
+                repo.mark_expiry_announced(conn, row["id"], stage)
+                claimed[stage].append({
+                    "batch_id": row["id"],
+                    "product_name": row["product_name"],
+                    "best_before": row["best_before"],
+                    "display": format_quantity(row["remaining"], row["base_unit"]),
+                })
+        return [(stage, batches) for stage, batches in claimed.items() if batches]
 
     def journal_day(self, day: date | None, *, tz: ZoneInfo,
                     now: datetime | None = None) -> dict[str, Any]:

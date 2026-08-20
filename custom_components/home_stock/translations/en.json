@@ -44,6 +44,9 @@
       "expirations": { "name": "Expiring soon" },
       "shortages": { "name": "Shortages" }
     },
+    "event": {
+      "expiration": { "name": "Expiration" }
+    },
     "todo": {
       "expirations": { "name": "To eat" }
     }

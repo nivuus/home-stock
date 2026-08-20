@@ -514,6 +514,27 @@ def shortage_rows(conn) -> list[dict[str, Any]]:
     ))
 
 
+def expiry_candidates(conn, limit: str) -> list[dict[str, Any]]:
+    """Open batches with a date on or before `limit`, and what has already
+    been announced about each one."""
+    return _rows(conn.execute(
+        "SELECT b.id, b.best_before, b.remaining, b.expiry_announced_stage,"
+        "       p.name AS product_name, p.base_unit"
+        " FROM batch b"
+        " JOIN article a ON a.id = b.article_id"
+        " JOIN product p ON p.id = a.product_id"
+        " WHERE b.closed_at IS NULL AND b.best_before IS NOT NULL"
+        "   AND b.best_before <= ?"
+        " ORDER BY b.best_before, b.id",
+        (limit,),
+    ))
+
+
+def mark_expiry_announced(conn, batch_id: int, stage: str) -> None:
+    conn.execute("UPDATE batch SET expiry_announced_stage = ? WHERE id = ?",
+                 (stage, batch_id))
+
+
 # --- shopping sessions ------------------------------------------------------
 
 def open_session(conn, *, started_at: str, store: str | None) -> int:

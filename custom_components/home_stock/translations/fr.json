@@ -44,6 +44,9 @@
       "expirations": { "name": "Péremptions proches" },
       "shortages": { "name": "Ruptures" }
     },
+    "event": {
+      "expiration": { "name": "Péremption" }
+    },
     "todo": {
       "expirations": { "name": "À consommer" }
     }

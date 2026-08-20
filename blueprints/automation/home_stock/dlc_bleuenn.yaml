@@ -1,0 +1,54 @@
+blueprint:
+  name: Garde-manger — annonce des dates limites
+  description: >-
+    Chaque jour à l'heure choisie, fait annoncer par l'assistant conversationnel
+    ce qui approche de sa date limite.
+
+    Déclencheur horaire volontaire : le composant constate un basculement au
+    moment où son coordinateur se rafraîchit, parfois à trois heures du matin.
+    Ce qu'un foyer veut, c'est « chaque soir, dis-moi ce qui périme ».
+    L'entité `event.home_stock_expiration` reste disponible pour qui préfère
+    écrire une automation qui réagit à l'instant même.
+
+    À importer une fois ; ce fichier n'est jamais installé par l'intégration.
+  domain: automation
+  input:
+    heure:
+      name: Heure de l'annonce
+      default: "18:00:00"
+      selector:
+        time:
+    agent:
+      name: Agent conversationnel
+      default: conversation.personas_studio_home_manager
+      selector:
+        entity:
+          domain: conversation
+    capteur:
+      name: Capteur de péremptions
+      default: binary_sensor.home_stock_expirations
+      selector:
+        entity:
+          domain: binary_sensor
+
+triggers:
+  - trigger: time
+    at: !input heure
+
+conditions:
+  - condition: state
+    entity_id: !input capteur
+    state: "on"
+
+actions:
+  - action: conversation.process
+    data:
+      agent_id: !input agent
+      text: >-
+        {% set lots = state_attr(nom_capteur, 'batches') or [] %}
+        Dans le garde-manger, {{ lots | count }}
+        {{ 'article approche de sa date limite' if lots | count == 1
+           else 'articles approchent de leur date limite' }} :
+        {{ lots | map(attribute='product_name') | join(', ') }}.
+    variables:
+      nom_capteur: !input capteur
