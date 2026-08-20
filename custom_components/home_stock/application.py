@@ -6,20 +6,29 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from .const import (
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
+    REASON_CONVERSION,
     REASON_INVENTORY,
     REASON_PURCHASE,
     REASON_TRANSFER,
 )
+from .domain.conversion import ConversionError, plan_conversion
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
+
+# Nutrition columns of `article`, all stored per base unit, all rescaled when a
+# product changes unit.
+NUTRITION_COLUMNS: Final = (
+    "kcal_per_base_unit", "proteins", "carbohydrates", "sugars", "added_sugars",
+    "fat", "saturated_fat", "fiber", "salt",
+)
 
 
 def _now() -> str:
@@ -90,8 +99,16 @@ class StockManager:
                   price_per_base_unit: float | None = None,
                   packaging_base_quantity: float | None = None,
                   occurred_at: str | None = None,
-                  idempotency_key: str | None = None) -> int:
-        """Create a batch and its purchase movement. Returns the batch id."""
+                  idempotency_key: str | None = None,
+                  record_price_observation: bool = True) -> int:
+        """Create a batch and its purchase movement. Returns the batch id.
+
+        `record_price_observation` defaults to True for every existing
+        caller. The one caller that must pass False is the shopping session
+        (shopping.store_line): a price observed in the aisle is recorded at
+        the moment of the scan, with the shop it was seen in — put-away time
+        is not a second observation, so add_stock must not write it again.
+        """
         moment = occurred_at or _now()
         amount = to_base_quantity(quantity, packaging_base_quantity)
         stored_key = _namespaced_key("add_stock", idempotency_key)
@@ -112,13 +129,15 @@ class StockManager:
             )
             kcal_rate = repo.resolve_kcal_rate(conn, article)
             values = movement_values(amount, kcal_rate, price_per_base_unit)
+            base_unit = repo.product_base_unit(conn, article["product_id"])
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
-                reason=REASON_PURCHASE, kcal=values.kcal, cost=values.cost,
+                reason=REASON_PURCHASE, base_unit=base_unit,
+                kcal=values.kcal, cost=values.cost,
                 idempotency_key=stored_key,
             )
-            if price_per_base_unit is not None:
+            if price_per_base_unit is not None and record_price_observation:
                 repo.insert_price(
                     conn, article_id=article_id, observed_on=moment[:10],
                     price_per_base_unit=price_per_base_unit, source="manual",
@@ -142,6 +161,9 @@ class StockManager:
                     (stored_key, f"{_escape_like(stored_key)}#%"),
                 ).fetchall()
                 return [int(row["id"]) for row in rows]
+            # Every batch of one product necessarily shares that product's unit:
+            # read it once here rather than once per batch in the loop below.
+            base_unit = repo.product_base_unit(conn, product_id)
             batches = [_as_batch_view(row)
                        for row in repo.list_batches_for_product(conn, product_id)]
             allocations = allocate(batches, quantity)   # raises InsufficientStock
@@ -161,8 +183,8 @@ class StockManager:
                 movement_ids.append(repo.insert_movement(
                     conn, occurred_at=moment, product_id=product_id,
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
-                    quantity=-allocation.quantity, reason=reason, kcal=values.kcal,
-                    cost=values.cost, idempotency_key=key,
+                    quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
+                    kcal=values.kcal, cost=values.cost, idempotency_key=key,
                 ))
                 repo.set_batch_remaining(
                     conn, allocation.batch_id, allocation.remaining_after,
@@ -197,10 +219,11 @@ class StockManager:
             closes = is_empty(remaining_after)
             values = movement_values(taken, row["kcal_per_base_unit"],
                                      row["price_per_base_unit"])
+            base_unit = repo.product_base_unit(conn, row["product_id"])
             movement_id = repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
-                reason=reason, kcal=values.kcal, cost=values.cost,
+                reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
             )
             repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
                                      closed_at=moment if closes else None)
@@ -241,10 +264,12 @@ class StockManager:
             if row is None:
                 raise ValueError(f"unknown batch {batch_id}")
             repo.set_batch_location(conn, batch_id, location_id)
+            base_unit = repo.product_base_unit(conn, row["product_id"])
             return repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=0,
-                reason=REASON_TRANSFER, ref_type="location", ref_id=location_id,
+                reason=REASON_TRANSFER, base_unit=base_unit,
+                ref_type="location", ref_id=location_id,
             )
 
     def adjust_inventory(self, *, article_id: int, location_id: int,
@@ -284,11 +309,143 @@ class StockManager:
                     quantity=delta, entered_at=moment,
                 )
             # kcal and cost stay NULL: a correction is not a consumption (spec 7.5).
+            base_unit = repo.product_base_unit(conn, article["product_id"])
             return repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=delta,
-                reason=REASON_INVENTORY,
+                reason=REASON_INVENTORY, base_unit=base_unit,
             )
+
+    def convert_product_unit(self, *, product_id: int, to_unit: str,
+                             reference_quantity: float, packaging_name: str = "unité",
+                             dry_run: bool = False) -> dict[str, Any]:
+        """Move a product from pieces to grams or millilitres.
+
+        Everything happens in one transaction: a product half-converted would
+        report a stock that is partly packets and partly grams, and no reading
+        of the journal could tell them apart afterwards.
+        """
+        with self.db.write() as conn:
+            product = repo.get_product(conn, product_id)
+            if product is None:
+                raise LookupError(f"no product {product_id}")
+            articles = repo.list_articles_for_product(conn, product_id)
+            # Closed batches are deliberately left out and stay in their
+            # pre-conversion unit: their `remaining`, `initial` AND
+            # `price_per_base_unit` all stay expressed in the old unit. Safe
+            # only because every read today filters on open batches and none
+            # of those three columns is ever read back off a closed batch —
+            # this stops being safe the day something does (e.g. a future
+            # "how much of each pack did we finish" or "what did this pack
+            # cost us" report), which would then silently average pieces
+            # with grams, or euros per piece with euros per gram.
+            batches = repo.list_open_batches_for_product(conn, product_id)
+
+            plan = plan_conversion(product=product, articles=articles, batches=batches,
+                                   to_unit=to_unit, reference_quantity=reference_quantity)
+
+            # A pending shopping_line stores its quantity in the product's
+            # base unit as a promise, not yet a batch. Converting under it
+            # would silently reinterpret that number in the new unit — two
+            # queued packets becoming "2 g" instead of 1000 g the moment they
+            # are put away — with no trace in the journal. Refuse instead,
+            # even for a dry run: a plan that cannot actually be applied is
+            # not a plan worth showing.
+            pending = repo.count_pending_lines_for_product(conn, product_id)
+            if pending:
+                raise ConversionError(
+                    f"{pending} ligne(s) de courses en attente de rangement pour ce "
+                    "produit : rangez d'abord les courses avant de convertir son unité"
+                )
+
+            report = {
+                "product_id": plan.product_id,
+                "product_name": product["name"],
+                "from_unit": plan.from_unit,
+                "to_unit": plan.to_unit,
+                "reference_quantity": plan.reference_quantity,
+                "articles": len(plan.articles),
+                "batches": len(plan.batches),
+                "movements": plan.movements,
+                "articles_using_reference": list(plan.articles_using_reference),
+                "applied": False,
+            }
+            if dry_run:
+                return report
+
+            occurred_at = _now()
+            articles_by_id = {a["id"]: a for a in articles}
+            batches_by_id = {b["id"]: b for b in batches}
+            factors = {a.article_id: a.factor for a in plan.articles}
+
+            for article in plan.articles:
+                # Nutrition is stored per base unit: per packet becomes per gram.
+                # net_quantity is a mass or a volume already, so it does not move.
+                current = articles_by_id[article.article_id]
+                rescaled = {
+                    column: current[column] / article.factor
+                    for column in NUTRITION_COLUMNS
+                    if current[column] is not None
+                }
+                repo.update_article_fields(conn, article.article_id, rescaled)
+                repo.insert_packaging(conn, scope="article", target_id=article.article_id,
+                                      name=packaging_name, base_quantity=article.factor,
+                                      is_purchase_default=True)
+                # A price is euros PER unit, so a change of denomination moves
+                # it opposite to the quantities: 1.20 €/packet and 0.0024 €/g
+                # are the same fact said twice, not history being rewritten.
+                repo.rescale_prices_for_article(conn, article.article_id, article.factor)
+
+            for batch in plan.batches:
+                # The plan already carries the pre-conversion quantity
+                # (batch.old_remaining), so the journal stays correct no
+                # matter which of these two writes runs first. Only reading
+                # `remaining` back from the batch row instead of from the
+                # plan would make this order load-bearing.
+                repo.insert_movement(
+                    conn, occurred_at=occurred_at, product_id=product_id,
+                    article_id=batch.article_id, batch_id=batch.batch_id,
+                    quantity=-batch.old_remaining, reason=REASON_CONVERSION,
+                    base_unit=plan.from_unit, kcal=None, cost=None,
+                    ref_type=None, ref_id=None,
+                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:out",
+                )
+                repo.insert_movement(
+                    conn, occurred_at=occurred_at, product_id=product_id,
+                    article_id=batch.article_id, batch_id=batch.batch_id,
+                    quantity=batch.new_remaining, reason=REASON_CONVERSION,
+                    base_unit=plan.to_unit, kcal=None, cost=None,
+                    ref_type=None, ref_id=None,
+                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:in",
+                )
+                # Same denomination change as the article's own price above,
+                # applied to the batch's own recorded price — divided by the
+                # same factor that multiplies its quantity, so the batch's
+                # value in euros (remaining * price_per_base_unit) is
+                # unchanged by the conversion. A NULL price stays NULL: there
+                # is nothing to convert.
+                old_price = batches_by_id[batch.batch_id]["price_per_base_unit"]
+                new_price = (None if old_price is None
+                            else old_price / factors[batch.article_id])
+                repo.set_batch_remaining(conn, batch.batch_id, batch.new_remaining)
+                conn.execute(
+                    "UPDATE batch SET initial = ?, price_per_base_unit = ? WHERE id = ?",
+                    (batch.new_initial, new_price, batch.batch_id),
+                )
+
+            product_fields: dict[str, Any] = {"base_unit": plan.to_unit}
+            if product["min_quantity"] is not None:
+                product_fields["min_quantity"] = (
+                    product["min_quantity"] * plan.reference_quantity
+                )
+            if product["reference_kcal"] is not None:
+                product_fields["reference_kcal"] = (
+                    product["reference_kcal"] / plan.reference_quantity
+                )
+            repo.update_product_fields(conn, product_id, product_fields)
+
+            report["applied"] = True
+            return report
 
     # --- reads --------------------------------------------------------------
 
@@ -349,6 +506,21 @@ class StockManager:
             for row in repo.shortage_rows(conn)
         ]
         totals = repo.counted_totals(conn)
+
+        # The cart: read on this same connection, like the rest of the
+        # summary — a second, separate read here could race a concurrent
+        # write and show a session that no longer matches its own totals.
+        session = repo.current_session(conn)
+        cart_totals = repo.session_totals(conn, session["id"]) if session else None
+        # "Awaiting put-away" only starts once the trolley has left the
+        # shop: a line scanned in the aisle is not yet "to store" just
+        # because it has no batch, or sensor.home_stock_to_store would read
+        # 1 while the shopper is still walking the aisles, which is not
+        # what that name promises.
+        awaiting_storage = (
+            cart_totals["pending"] if session and session["state"] != "shopping" else 0
+        )
+
         return {
             "stock_value": round(value, 2),
             "stock_value_by_location": {
@@ -361,6 +533,14 @@ class StockManager:
             "shortages": shortages,
             "kcal_total": round(totals["kcal"], 1),
             "cost_total": round(totals["cost"], 2),
+            # Rounded to 2 decimals like every other euro sensor
+            # (stock_value, cost_total): session_totals() itself keeps 4,
+            # for the websocket API's own precision needs.
+            "cart_total": round(cart_totals["total"], 2) if cart_totals else 0.0,
+            "cart_lines": cart_totals["lines"] if cart_totals else 0,
+            "cart_pending": cart_totals["pending"] if cart_totals else 0,
+            "cart_store": session["store"] if session else None,
+            "cart_to_store": awaiting_storage,
         }
 
     def export_journal(self) -> list[dict[str, Any]]:

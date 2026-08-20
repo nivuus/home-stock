@@ -1,0 +1,72 @@
+{
+ "_note": "Fiches fabriquées à la main pour les cas qu'OFF produit et que le catalogue réel ne contient pas. Chaque clé décrit ce que le mapping doit refuser ou convertir.",
+ "quantite_illisible": {
+  "off_source": "food",
+  "product": {"code": "0000000000101", "product_name_fr": "Farine illisible",
+   "product_quantity": "1,kg", "product_quantity_unit": "kg",
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 340, "proteins_100g": 10,
+    "carbohydrates_100g": 72, "fat_100g": 1, "salt_100g": 0.01}}
+ },
+ "quantite_nulle": {
+  "off_source": "food",
+  "product": {"code": "0000000000102", "product_name_fr": "Poids zéro",
+   "product_quantity": 0, "product_quantity_unit": "g",
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 100}}
+ },
+ "quantite_demesuree": {
+  "off_source": "food",
+  "product": {"code": "0000000000103", "product_name_fr": "Palette de riz",
+   "product_quantity": 80000, "product_quantity_unit": "g",
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 350}}
+ },
+ "kcal_impossibles": {
+  "off_source": "food",
+  "product": {"code": "0000000000104", "product_name_fr": "Épinards hachés",
+   "product_quantity": 750, "product_quantity_unit": "g",
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 5000, "proteins_100g": 3}}
+ },
+ "macros_incoherentes": {
+  "off_source": "food",
+  "product": {"code": "0000000000105", "product_name_fr": "Somme impossible",
+   "product_quantity": 500, "product_quantity_unit": "g",
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 400, "proteins_100g": 40,
+    "carbohydrates_100g": 60, "fat_100g": 50}}
+ },
+ "par_portion_seulement": {
+  "off_source": "food",
+  "product": {"code": "0000000000106", "product_name_fr": "Barre par portion",
+   "product_quantity": 210, "product_quantity_unit": "g",
+   "serving_size": "35 g", "serving_quantity": 35,
+   "nutrition_data_per": "serving",
+   "nutriments": {"energy-kcal_serving": 140, "proteins_serving": 2.1,
+    "carbohydrates_serving": 20, "fat_serving": 5.6}}
+ },
+ "prepare_seulement": {
+  "off_source": "food",
+  "product": {"code": "0000000000107", "product_name_fr": "Soupe déshydratée",
+   "product_quantity": 60, "product_quantity_unit": "g",
+   "nutrition_data_prepared_per": "100g",
+   "nutriments": {"energy-kcal_prepared_100g": 30, "proteins_prepared_100g": 0.8}}
+ },
+ "sans_nutrition": {
+  "off_source": "products",
+  "product": {"code": "0000000000108", "product_name_fr": "Éponge grattante",
+   "product_quantity": 3, "product_quantity_unit": "unité",
+   "categories_tags": ["en:non-food-products", "en:household-products", "en:sponges"]}
+ },
+ "volume_en_cl": {
+  "off_source": "food",
+  "product": {"code": "0000000000109", "product_name_fr": "Huile d'olive vierge",
+   "product_quantity": 75, "product_quantity_unit": "cl",
+   "nutrition_data_per": "100g",
+   "nutriments": {"energy-kcal_100g": 824, "fat_100g": 91.6, "saturated-fat_100g": 13.8,
+    "proteins_100g": 0, "carbohydrates_100g": 0}}
+ },
+ "categories_generiques_seulement": {
+  "off_source": "food",
+  "product": {"code": "0000000000110", "product_name_fr": "Produit sans rayon évident",
+   "product_quantity": 200, "product_quantity_unit": "g",
+   "categories_tags": ["en:plant-based-foods-and-beverages", "en:plant-based-foods"],
+   "nutrition_data_per": "100g", "nutriments": {"energy-kcal_100g": 120}}
+ }
+}

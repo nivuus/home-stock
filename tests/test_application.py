@@ -30,6 +30,18 @@ def pasta(manager):
     return {"location_id": location_id, "product_id": product_id, "article_id": article_id}
 
 
+def _seed_article(manager, *, base_unit: str = "g") -> int:
+    """Seed one location, one product and one article. Returns the article id.
+
+    In a fresh test database this lands location, product and article all on
+    id 1, which is what callers hardcoding product_id=1/location_id=1 rely on.
+    """
+    with manager.db.write() as conn:
+        repo.insert_location(conn, name="Placard", kind="pantry")
+        product_id = repo.insert_product(conn, name="Article", base_unit=base_unit)
+        return repo.insert_article(conn, product_id=product_id)
+
+
 def test_add_stock_creates_a_batch_and_a_purchase_movement(manager, pasta):
     batch_id = manager.add_stock(
         article_id=pasta["article_id"], quantity=500, location_id=pasta["location_id"],
@@ -523,3 +535,26 @@ def test_summary_totals_also_count_waste_and_expired(manager, pasta):
     # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each.
     assert summary["kcal_total"] == pytest.approx(150 * 3.5, rel=1e-3)
     assert summary["cost_total"] == pytest.approx(150 * 0.004, rel=1e-3)
+
+
+def test_every_movement_written_carries_its_unit(manager):
+    """A quantity without its unit is unreadable the day the product converts."""
+    article_id = _seed_article(manager, base_unit="g")
+
+    manager.add_stock(article_id=article_id, quantity=500, location_id=1)
+    manager.consume(product_id=1, quantity=200, reason="consumption")
+
+    with manager.db.write() as conn:
+        rows = conn.execute("SELECT reason, base_unit FROM movement ORDER BY id").fetchall()
+    assert [r["base_unit"] for r in rows] == ["g", "g"]
+    assert all(r["base_unit"] is not None for r in rows)
+
+
+def test_the_unit_written_is_the_product_s_own(manager):
+    article_id = _seed_article(manager, base_unit="ml")
+
+    manager.add_stock(article_id=article_id, quantity=750, location_id=1)
+
+    with manager.db.write() as conn:
+        row = conn.execute("SELECT base_unit FROM movement ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["base_unit"] == "ml"

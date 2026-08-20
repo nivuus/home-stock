@@ -12,7 +12,8 @@ from ..const import COUNTED_REASONS
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
-    "days_after_opening", "reference_kcal", "active", "external_ref",
+    "days_after_opening", "default_shelf_life_days", "reference_kcal", "active",
+    "external_ref",
 )
 ARTICLE_FIELDS = (
     "brand", "label", "net_quantity", "image", "kcal_per_base_unit", "proteins",
@@ -59,7 +60,7 @@ def list_locations(conn) -> list[dict[str, Any]]:
 
 
 def list_aisles(conn) -> list[dict[str, Any]]:
-    """Aisles in walking order. Empty until Open Food Facts seeds them (lot 1)."""
+    """Aisles in walking order. Seeded by the m002 migration."""
     return _rows(conn.execute("SELECT * FROM aisle ORDER BY position, name"))
 
 
@@ -68,7 +69,9 @@ def insert_category(conn, name: str) -> int:
 
 
 def insert_aisle(conn, *, name: str, position: int = 0) -> int:
-    # Unused in lot 0; lot 1 seeds aisles from Open Food Facts categories.
+    # Not called by the integration itself: lot 1 seeds the aisle table from
+    # the migration (storage/migrations/m002_scan.py), not through here.
+    # Kept for tests and for a future by-shop ordering (lot 4).
     return _insert(conn, "aisle", {"name": name, "position": position})
 
 
@@ -85,8 +88,9 @@ def get_product(conn, product_id: int) -> dict[str, Any] | None:
 
 
 def find_product_by_name(conn, name: str) -> dict[str, Any] | None:
-    # Unused in lot 0; lot 1 needs it to match a scanned article to an
-    # existing product before offering to create a duplicate.
+    # Not called by the integration itself: lot 1 matches a scanned article
+    # to a product by score (domain/matching.py), not by exact name, and the
+    # duplicate-name case is caught by product.name's UNIQUE constraint.
     return _row(conn.execute("SELECT * FROM product WHERE name = ?", (name,)).fetchone())
 
 
@@ -135,13 +139,48 @@ def link_barcode(conn, code: str, article_id: int) -> None:
     conn.execute("INSERT INTO barcode (code, article_id) VALUES (?, ?)", (code, article_id))
 
 
+def barcodes_to_resync(conn, *, article_id: int | None, product_id: int | None,
+                       everything: bool) -> list[tuple[str, int]]:
+    """One (code, article_id) pair per article that has a barcode, for the
+    `home_stock.resync_off` service: the whole catalogue (`everything`), one
+    article, or every article of one product.
+
+    An article linked to more than one code contributes only its lowest one
+    — Open Food Facts only needs a single code to answer for an article, and
+    a barcode-less article (never scanned, hand-entered) has nothing to
+    resync from in the first place, so it is silently left out rather than
+    reported as an error.
+    """
+    if everything:
+        where, params = "", ()
+    elif article_id is not None:
+        where, params = "WHERE a.id = ?", (article_id,)
+    elif product_id is not None:
+        where, params = "WHERE a.product_id = ?", (product_id,)
+    else:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT a.id AS article_id, MIN(b.code) AS code
+        FROM article a JOIN barcode b ON b.article_id = a.id
+        {where}
+        GROUP BY a.id
+        ORDER BY a.id
+        """,
+        params,
+    ).fetchall()
+    return [(row["code"], row["article_id"]) for row in rows]
+
+
 # --- packagings and prices --------------------------------------------------
 
 def insert_packaging(conn, *, scope: str, target_id: int, name: str,
                      base_quantity: float, is_purchase_default: bool = False) -> int:
-    # Deliberately unused until lot 1 (design §10, amended 2026-08-18): net
-    # weights come from Open Food Facts' product_quantity, a measurement, not
-    # from a guess parsed out of a product name. Do not delete as dead code.
+    # Used by StockManager.convert_product_unit (Task 10) to record the name
+    # of the pack an article used to be sold in, once its product switches to
+    # weight/volume. Net weights themselves still come from Open Food Facts'
+    # product_quantity, a measurement, never from a guess parsed out of a
+    # product name (design §10, amended 2026-08-18).
     return _insert(conn, "packaging", {
         "scope": scope, "target_id": target_id, "name": name,
         "base_quantity": base_quantity,
@@ -157,8 +196,23 @@ def insert_price(conn, *, article_id: int, observed_on: str,
     })
 
 
+def rescale_prices_for_article(conn, article_id: int, factor: float) -> None:
+    """Divide every recorded price of this article by `factor`.
+
+    Used when a product's unit is converted (StockManager.convert_product_unit):
+    a price is money PER unit, so it moves opposite to the quantities — 1.20 €
+    per packet and 0.0024 €/g are the same fact said twice, not two facts. Left
+    unconverted, a stale row here would reseed the wrong price on the
+    article's next purchase through the suggestion cascade.
+    """
+    conn.execute(
+        "UPDATE price SET price_per_base_unit = price_per_base_unit / ? WHERE article_id = ?",
+        (factor, article_id),
+    )
+
+
 def latest_price(conn, article_id: int) -> float | None:
-    # Unused in lot 0; lot 1 needs it to pre-fill the price field at scan time.
+    # Rank 3 of the price cascade (spec 11): the last price seen anywhere.
     row = conn.execute(
         "SELECT price_per_base_unit FROM price WHERE article_id = ?"
         " ORDER BY observed_on DESC, id DESC LIMIT 1",
@@ -177,6 +231,20 @@ def insert_batch(conn, *, article_id: int, location_id: int, quantity: float,
         "remaining": quantity, "initial": quantity, "entered_at": entered_at,
         "best_before": best_before, "price_per_base_unit": price_per_base_unit,
     })
+
+
+def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT * FROM article WHERE product_id = ? ORDER BY id", (product_id,)))
+
+
+def list_open_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        """
+        SELECT b.* FROM batch b JOIN article a ON a.id = b.article_id
+        WHERE a.product_id = ? AND b.closed_at IS NULL ORDER BY b.id
+        """,
+        (product_id,)))
 
 
 def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
@@ -213,19 +281,53 @@ def set_batch_location(conn, batch_id: int, location_id: int) -> None:
     conn.execute("UPDATE batch SET location_id = ? WHERE id = ?", (location_id, batch_id))
 
 
+def _update_fields(conn, table: str, row_id: int, fields: dict[str, Any]) -> None:
+    """Write only the columns given. An empty dict is a no-op, not an error.
+
+    Column names are interpolated into the SQL: `fields` keys must never come
+    from raw user input. Callers are expected to filter against a whitelist of
+    columns before calling (see PRODUCT_FIELDS/ARTICLE_FIELDS above).
+    """
+    if not fields:
+        return
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    conn.execute(f"UPDATE {table} SET {assignments} WHERE id = ?",
+                 (*fields.values(), row_id))
+
+
+def update_article_fields(conn, article_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "article", article_id, fields)
+
+
+def update_product_fields(conn, product_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "product", product_id, fields)
+
+
 # --- movements --------------------------------------------------------------
 
 def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
-                    quantity: float, reason: str, batch_id: int | None = None,
+                    quantity: float, reason: str, base_unit: str,
+                    batch_id: int | None = None,
                     kcal: float | None = None, cost: float | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
     return _insert(conn, "movement", {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
-        "batch_id": batch_id, "quantity": quantity, "reason": reason, "kcal": kcal,
+        "batch_id": batch_id, "quantity": quantity, "reason": reason,
+        "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
         "idempotency_key": idempotency_key,
     })
+
+
+def product_base_unit(conn, product_id: int) -> str:
+    """The base unit a movement on this product must be recorded in."""
+    row = conn.execute(
+        "SELECT base_unit FROM product WHERE id = ?", (product_id,)
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no product {product_id}")
+    return row["base_unit"]
 
 
 def movement_exists(conn, idempotency_key: str) -> bool:
@@ -302,3 +404,208 @@ def shortage_rows(conn) -> list[dict[str, Any]]:
         " HAVING quantity < p.min_quantity"
         " ORDER BY p.name"
     ))
+
+
+# --- shopping sessions ------------------------------------------------------
+
+def open_session(conn, *, started_at: str, store: str | None) -> int:
+    """Start a shopping session. The partial unique index refuses a second one."""
+    return _insert(conn, "shopping_session",
+                   {"started_at": started_at, "store": store, "state": "shopping"})
+
+
+def current_session(conn) -> dict[str, Any] | None:
+    """The session the panel should show: the open one, else the oldest one
+    still waiting to be put away.
+
+    Among several `to_store` sessions, the earliest started (not the most
+    recently started, and not the most recently closed) is the one to surface:
+    when two shops are queued unstored, the older one is the one whose
+    chilled items have been sitting out of a fridge the longest, so it is the
+    backlog to clear first.
+    """
+    return _row(conn.execute(
+        """
+        SELECT * FROM shopping_session
+        WHERE state IN ('shopping', 'to_store')
+        ORDER BY CASE state WHEN 'shopping' THEN 0 ELSE 1 END, started_at ASC
+        LIMIT 1
+        """
+    ).fetchone())
+
+
+def get_session(conn, session_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM shopping_session WHERE id = ?", (session_id,)).fetchone())
+
+
+def set_session_state(conn, session_id: int, state: str, *,
+                      closed_at: str | None = None) -> None:
+    """Move the session to a new state.
+
+    `closed_at` is written only when actually passed: it records when the
+    session was checked out, and a timestamp like that must never be cleared
+    as a side effect of an unrelated later state change (there is no way to
+    recover it once gone — the journal keeps no other copy).
+    """
+    if closed_at is not None:
+        conn.execute("UPDATE shopping_session SET state = ?, closed_at = ? WHERE id = ?",
+                     (state, closed_at, session_id))
+    else:
+        conn.execute("UPDATE shopping_session SET state = ? WHERE id = ?",
+                     (state, session_id))
+
+
+def add_line(conn, *, session_id: int, article_id: int, quantity: float,
+             unit_price: float | None, scanned_at: str,
+             idempotency_key: str | None) -> int:
+    return _insert(conn, "shopping_line", {
+        "session_id": session_id, "article_id": article_id, "quantity": quantity,
+        "unit_price": unit_price, "scanned_at": scanned_at,
+        "idempotency_key": idempotency_key,
+    })
+
+
+def update_line(conn, line_id: int, *, quantity: float | None = None,
+                unit_price: float | None = None) -> None:
+    """Only the fields actually passed are written: None means "leave it", which
+    is not the same as "clear it"."""
+    if quantity is not None:
+        conn.execute("UPDATE shopping_line SET quantity = ? WHERE id = ?",
+                     (quantity, line_id))
+    if unit_price is not None:
+        conn.execute("UPDATE shopping_line SET unit_price = ? WHERE id = ?",
+                     (unit_price, line_id))
+
+
+def remove_line(conn, line_id: int) -> None:
+    """Drop a line. Safe because nothing entered the stock yet — a stored line
+    is refused by the caller, not here."""
+    conn.execute("DELETE FROM shopping_line WHERE id = ?", (line_id,))
+
+
+def line_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM shopping_line WHERE idempotency_key = ?",
+        (idempotency_key,)).fetchone())
+
+
+def get_line(conn, line_id: int) -> dict[str, Any] | None:
+    """The raw shopping_line row, as the database holds it — no join.
+
+    Used to hand a caller back exactly what it just wrote, whether or not it
+    supplied an idempotency key (line_by_key only works with one).
+    """
+    return _row(conn.execute(
+        "SELECT * FROM shopping_line WHERE id = ?", (line_id,)).fetchone())
+
+
+def count_pending_lines_for_product(conn, product_id: int) -> int:
+    """Shopping lines not yet turned into a batch (`stored_at IS NULL`), for
+    any article of this product.
+
+    Used by StockManager.convert_product_unit to refuse converting while one
+    is queued: `shopping_line.quantity` is stored in the product's base unit
+    as a promise about a quantity, not yet a batch — changing what the number
+    means underneath it would lose stock with no trace the moment the line is
+    put away.
+
+    Lines of a CLOSED session (`state = 'done'`) do not count. Closing a
+    session is how an abandoned trip is given up: whatever was never put
+    away then never will be. Counted, such a line blocked every future
+    conversion of its product forever — and no screen reaches it any more to
+    clear it by hand, since the panel only ever shows the current session.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM shopping_line l
+        JOIN article a ON a.id = l.article_id
+        JOIN shopping_session s ON s.id = l.session_id
+        WHERE a.product_id = ? AND l.stored_at IS NULL AND s.state <> 'done'
+        """,
+        (product_id,),
+    ).fetchone()
+    return int(row["n"])
+
+
+_LINE_SELECT_SQL = """
+SELECT l.*, p.id AS product_id, p.name AS product_name, p.base_unit,
+       p.default_location_id, p.default_shelf_life_days, p.days_after_opening,
+       a.label AS article_label, a.brand, a.image, a.net_quantity,
+       ai.name AS aisle_name, COALESCE(ai.position, 999) AS aisle_position
+FROM shopping_line l
+JOIN article a ON a.id = l.article_id
+JOIN product p ON p.id = a.product_id
+LEFT JOIN aisle ai ON ai.id = p.aisle_id
+WHERE l.session_id = ?
+"""
+
+
+def list_lines(conn, session_id: int, *, pending_only: bool = False) -> list[dict[str, Any]]:
+    """The cart, in walking order. Scan order is never what a shopper wants."""
+    sql = _LINE_SELECT_SQL
+    if pending_only:
+        sql += " AND l.stored_at IS NULL"
+    sql += " ORDER BY aisle_position, p.name, l.id"
+    return _rows(conn.execute(sql, (session_id,)))
+
+
+def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> None:
+    conn.execute("UPDATE shopping_line SET batch_id = ?, stored_at = ? WHERE id = ?",
+                 (batch_id, stored_at, line_id))
+
+
+def session_totals(conn, session_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS lines,
+               SUM(CASE WHEN stored_at IS NULL THEN 1 ELSE 0 END) AS pending,
+               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total
+        FROM shopping_line WHERE session_id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    return {"lines": row["lines"], "pending": row["pending"] or 0,
+            "total": round(row["total"], 4)}
+
+
+def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
+    row = conn.execute(
+        """
+        SELECT price_per_base_unit FROM price
+        WHERE article_id = ? AND store = ?
+        ORDER BY observed_on DESC, id DESC LIMIT 1
+        """,
+        (article_id, store),
+    ).fetchone()
+    return row["price_per_base_unit"] if row else None
+
+
+def recent_shelf_lives(conn, product_id: int, limit: int = 3) -> list[int]:
+    """Days between entry and best-before on this product's latest batches.
+
+    Feeds the default the panel offers as a one-tap button. Batches with no
+    best-before say nothing about shelf life and are left out.
+    """
+    rows = conn.execute(
+        """
+        SELECT CAST(julianday(b.best_before) - julianday(date(b.entered_at)) AS INTEGER) AS days
+        FROM batch b JOIN article a ON a.id = b.article_id
+        WHERE a.product_id = ? AND b.best_before IS NOT NULL
+        ORDER BY b.entered_at DESC, b.id DESC LIMIT ?
+        """,
+        (product_id, limit),
+    ).fetchall()
+    return [row["days"] for row in rows if row["days"] is not None and row["days"] >= 0]
+
+
+def list_stores(conn) -> list[str]:
+    """Shops already used, most recently seen first — the panel shows them as chips."""
+    rows = conn.execute(
+        """
+        SELECT store, MAX(observed_on) AS last_seen FROM price
+        WHERE store IS NOT NULL AND store <> ''
+        GROUP BY store ORDER BY last_seen DESC, store
+        """
+    ).fetchall()
+    return [row["store"] for row in rows]

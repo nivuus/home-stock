@@ -92,6 +92,135 @@ async def test_add_stock_rejects_an_unknown_barcode(hass, seeded):
         }, blocking=True)
 
 
+# --- Fix round 4: services must not be the weaker surface ------------------
+# The websocket commands refuse "inf"/"nan" and an out-of-64-bit id before
+# they ever reach SQL (see tests/test_websocket_write.py); a service call —
+# an automation, a voice command through Bleuenn — used to have no such
+# guard and could write the exact same Inf/NaN into the append-only journal,
+# or crash uncaught on an id past 64 bits.
+
+async def test_add_stock_rejects_an_infinite_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": "inf",
+            "location_id": ids["location_id"],
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_infinite_price(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 100,
+            "location_id": ids["location_id"], "price_per_base_unit": "inf",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_infinite_packaging_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 1,
+            "location_id": ids["location_id"], "packaging_base_quantity": "inf",
+        }, blocking=True)
+
+
+async def test_adjust_inventory_rejects_a_non_finite_counted_quantity(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "adjust_inventory", {
+            "article_id": ids["article_id"], "location_id": ids["location_id"],
+            "counted_quantity": "nan",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_id_larger_than_64_bits(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": 2**64, "quantity": 1,
+            "location_id": ids["location_id"],
+        }, blocking=True)
+
+
+async def test_consume_rejects_an_id_larger_than_64_bits(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 2**64, "quantity": 1,
+        }, blocking=True)
+
+
+# --- Fix round 5: best_before must not be able to disable the pantry -------
+# A bad best_before used to be accepted by cv.string, stored verbatim, and
+# from that moment application.py's summary() raised ValueError on every
+# coordinator refresh — every sensor and the todo entity went unavailable
+# and stayed there, in an append-only table nothing in the integration can
+# repair. This household drives add_stock from automations and from a voice
+# assistant, so a template rendering to anything but a date is not
+# hypothetical.
+
+async def test_add_stock_with_an_invalid_best_before_does_not_disable_the_pantry(hass, seeded):
+    """Pins the actual failure, not just the refusal: the entities must
+    still be available afterwards — that is what was at stake, not merely
+    that the call itself failed."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 100,
+            "location_id": ids["location_id"], "best_before": "pas une date",
+        }, blocking=True)
+    await hass.async_block_till_done()
+
+    for entity_id in ("sensor.home_stock_batches", "sensor.home_stock_stock_value",
+                      "sensor.home_stock_kcal_total", "binary_sensor.home_stock_expirations"):
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state != "unavailable"
+
+
+async def test_add_stock_rejects_a_compact_date(hass, seeded):
+    """date.fromisoformat has accepted the compact form ("20261201") since
+    Python 3.11; SQLite's julianday() then returns NULL for it, silently
+    dropping the batch from shelf-life learning and from the
+    first-expiring-first ordering. Only the extended AAAA-MM-JJ form the
+    error message promises is accepted."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 1,
+            "location_id": ids["location_id"], "best_before": "20261201",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_a_week_form_date(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 1,
+            "location_id": ids["location_id"], "best_before": "2026-W01-1",
+        }, blocking=True)
+
+
+async def test_add_stock_rejects_an_overlong_idempotency_key(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 1,
+            "location_id": ids["location_id"], "idempotency_key": "x" * 500_000,
+        }, blocking=True)
+
+
+async def test_consume_rejects_an_overlong_idempotency_key(hass, seeded):
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": ids["product_id"], "quantity": 1,
+            "idempotency_key": "x" * 500_000,
+        }, blocking=True)
+
+
 async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass, seeded):
     entry, ids = seeded
     await hass.services.async_call(DOMAIN, "add_stock", {
@@ -212,5 +341,31 @@ async def test_services_yaml_parses_for_every_service(hass, seeded):
     for service in (
         "add_stock", "consume", "open_batch", "transfer_batch",
         "adjust_inventory", "query_stock", "export_journal", "import_grocy_catalog",
+        "resync_off",
     ):
         assert descriptions[DOMAIN][service]["name"], service
+
+
+async def test_a_domain_refusal_reaches_the_service_caller_in_french(hass, seeded):
+    """`services._run` re-raised `str(error)` — the domain's English original
+    ("unknown article 999") — into a notification or a voice answer, while
+    its own comment claimed it matched the websocket surface's wording. Both
+    now translate through `messages.py`, one vocabulary."""
+    entry, ids = seeded
+    with pytest.raises(HomeAssistantError) as refusal:
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": 999, "quantity": 100, "location_id": ids["location_id"],
+        }, blocking=True)
+
+    assert str(refusal.value) == "Article 999 inconnu."
+
+
+async def test_add_stock_rejects_a_negative_price(hass, seeded):
+    """The same rule as the websocket surface: a price is never negative, on
+    any surface that writes one into the append-only journal."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 100,
+            "location_id": ids["location_id"], "price_per_base_unit": -2.5,
+        }, blocking=True)

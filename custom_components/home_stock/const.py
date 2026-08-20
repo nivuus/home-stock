@@ -12,6 +12,7 @@ REASON_WASTE: Final = "waste"
 REASON_EXPIRED: Final = "expired"
 REASON_INVENTORY: Final = "inventory"
 REASON_TRANSFER: Final = "transfer"
+REASON_CONVERSION: Final = "conversion"
 REASONS: Final = (
     REASON_PURCHASE,
     REASON_CONSUMPTION,
@@ -19,6 +20,7 @@ REASONS: Final = (
     REASON_EXPIRED,
     REASON_INVENTORY,
     REASON_TRANSFER,
+    REASON_CONVERSION,
 )
 
 # Reasons that count towards the daily kcal and cost totals (spec 7.5).

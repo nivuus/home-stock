@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from . import m001_initial
+from . import m001_initial, m002_scan
 
-MIGRATIONS = (m001_initial,)
+MIGRATIONS = (m001_initial, m002_scan)
 CURRENT_VERSION = MIGRATIONS[-1].VERSION
 
 
@@ -21,6 +21,11 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     for migration in MIGRATIONS:
         if migration.VERSION > version:
             conn.executescript(migration.SQL)
+            # A migration whose data step needs the referential in Python
+            # (aisles.py) exposes apply(); schema-only migrations do not.
+            hook = getattr(migration, "apply", None)
+            if hook is not None:
+                hook(conn)
             conn.execute("DELETE FROM schema_version")
             conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)", (migration.VERSION,)

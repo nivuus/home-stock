@@ -78,7 +78,7 @@ def test_movement_idempotency(conn):
     article_id = repo.insert_article(conn, product_id=product_id)
     repo.insert_movement(conn, occurred_at="2026-08-18T10:00:00", product_id=product_id,
                          article_id=article_id, quantity=-200, reason="consumption",
-                         kcal=700.0, cost=0.6, idempotency_key="k1")
+                         base_unit="g", kcal=700.0, cost=0.6, idempotency_key="k1")
     assert repo.movement_exists(conn, "k1") is True
     assert repo.movement_exists(conn, "k2") is False
 
@@ -122,3 +122,94 @@ def test_resolve_kcal_rate_falls_back_to_the_product_reference(conn):
     with_own_rate = repo.insert_article(conn, product_id=product_id,
                                         kcal_per_base_unit=1.1)
     assert repo.resolve_kcal_rate(conn, repo.get_article(conn, with_own_rate)) == 1.1
+
+
+def test_barcodes_to_resync_everything_lists_every_barcoded_article(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    with_code = repo.insert_article(conn, product_id=product_id)
+    without_code = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", with_code)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=None, everything=True)
+
+    # without_code never scanned, so it has nothing to resync from: silently
+    # left out rather than reported as an error.
+    assert found == [("111", with_code)]
+
+
+def test_barcodes_to_resync_narrows_to_one_article(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    first = repo.insert_article(conn, product_id=product_id)
+    second = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", first)
+    repo.link_barcode(conn, "222", second)
+
+    found = repo.barcodes_to_resync(conn, article_id=second, product_id=None,
+                                    everything=False)
+
+    assert found == [("222", second)]
+
+
+def test_barcodes_to_resync_narrows_to_one_product(conn):
+    wanted_product = repo.insert_product(conn, name="Muesli", base_unit="g")
+    other_product = repo.insert_product(conn, name="Riz", base_unit="g")
+    wanted_article = repo.insert_article(conn, product_id=wanted_product)
+    other_article = repo.insert_article(conn, product_id=other_product)
+    repo.link_barcode(conn, "111", wanted_article)
+    repo.link_barcode(conn, "222", other_article)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=wanted_product,
+                                    everything=False)
+
+    assert found == [("111", wanted_article)]
+
+
+def test_barcodes_to_resync_picks_the_lowest_code_of_several(conn):
+    """An article scanned under more than one code (a relabelled pack, a
+    duplicate scan) still resyncs once, not once per code."""
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "222", article_id)
+    repo.link_barcode(conn, "111", article_id)
+
+    found = repo.barcodes_to_resync(conn, article_id=None, product_id=None, everything=True)
+
+    assert found == [("111", article_id)]
+
+
+def test_barcodes_to_resync_with_nothing_selected_returns_nothing(conn):
+    product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    repo.link_barcode(conn, "111", article_id)
+
+    assert repo.barcodes_to_resync(conn, article_id=None, product_id=None,
+                                   everything=False) == []
+
+
+def test_insert_product_keeps_the_default_shelf_life(conn):
+    """`default_shelf_life_days` is added by this lot's own m002 migration and
+    accepted by the creation schema, but was missing from PRODUCT_FIELDS —
+    the whitelist insert_product filters against. It was therefore writable
+    on an edit and silently dropped on a creation, with a success answer."""
+    product_id = repo.insert_product(
+        conn, name="Yaourts nature", base_unit="piece", default_shelf_life_days=21)
+
+    assert repo.get_product(conn, product_id)["default_shelf_life_days"] == 21
+
+
+def test_pending_lines_of_a_closed_session_no_longer_count(conn):
+    """A line never put away used to block its product's unit conversion for
+    good: it cannot be deleted once its session is closed, and the count
+    ignored the session's state. Closing a session is how a trip is given up."""
+    product_id = repo.insert_product(conn, name="Yaourts nature", base_unit="piece")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store="Lidl")
+    repo.add_line(conn, session_id=session_id, article_id=article_id, quantity=6,
+                  unit_price=None, scanned_at="2026-08-19T10:01:00",
+                  idempotency_key=None)
+
+    assert repo.count_pending_lines_for_product(conn, product_id) == 1
+
+    repo.set_session_state(conn, session_id, "done", closed_at="2026-08-19T12:00:00")
+
+    assert repo.count_pending_lines_for_product(conn, product_id) == 0
