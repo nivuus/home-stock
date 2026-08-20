@@ -74,6 +74,24 @@ def test_a_purchase_is_never_counted(journal_conn):
     assert totals["kcal"] == 0.0 and totals["cost"] == 0.0 and totals["waste_cost"] == 0.0
 
 
+def test_conversion_inventory_and_transfer_are_never_counted(journal_conn):
+    """A purchase is excluded by the reason filter itself, as the test above
+    proves by pricing it and still seeing it excluded. Conversion, inventory
+    and transfer are, in today's application code, always written with
+    kcal=None and cost=None (application.py's convert_product_unit,
+    adjust_inventory, transfer_batch), so the filter's protection of these
+    three reasons is never actually exercised by the application's own
+    writes. A movement written here by hand, with non-null kcal and cost,
+    is what proves the SQL filter really does exclude them, independently
+    of that upstream discipline — and keeps proving it the day a future
+    version of one of these three starts valuing its movements."""
+    _movement(journal_conn, kcal=1000.0, cost=5.0, reason="conversion")
+    _movement(journal_conn, kcal=700.0, cost=3.0, reason="inventory")
+    _movement(journal_conn, kcal=400.0, cost=2.0, reason="transfer")
+    totals = repo.totals_between(journal_conn, *DAY)
+    assert totals["kcal"] == 0.0 and totals["cost"] == 0.0 and totals["waste_cost"] == 0.0
+
+
 def test_the_eight_macros_are_aggregated_too(journal_conn):
     _movement(journal_conn, kcal=480.0, parts_total=2, parts_mine=1,
               macros={"proteins": 20.0, "salt": 1.0})
