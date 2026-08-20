@@ -331,13 +331,13 @@ def to_article_columns(per_base_unit: dict[str, float] | None) -> dict[str, floa
 
 def plausible_serving(value: Any, *, base_unit: str,
                       net_quantity: float | None) -> float | None:
-    """La portion d'Open Food Facts, ou rien.
+    """Open Food Facts' serving size, or nothing.
 
-    Trois refus, dans cet ordre : un produit suivi à la pièce (une portion y
-    vaut une pièce, un nombre de grammes n'y veut rien dire), une valeur
-    illisible ou hors de `]0 ; MAX_SERVING]`, et une portion plus grosse que
-    le paquet lui-même — Open Food Facts est collaboratif, et « 300 g » sur
-    un pot de 250 g est une faute de frappe, pas une portion.
+    Three refusals, in this order: a product tracked by the piece (a serving
+    there is worth one piece, a number of grams means nothing), a value that
+    is unreadable or outside `]0 ; MAX_SERVING]`, and a serving bigger than
+    the pack itself — Open Food Facts is collaborative, and "300 g" on a
+    250 g jar is a typo, not a serving.
     """
     if base_unit not in ("g", "ml"):
         return None
@@ -351,12 +351,12 @@ def plausible_serving(value: Any, *, base_unit: str,
 
 def serving_from_raw(raw: str | None, *, base_unit: str,
                      net_quantity: float | None) -> float | None:
-    """La portion lue dans la fiche brute déjà stockée (`article.off_raw`).
+    """The serving read from the raw record already stored (`article.off_raw`).
 
-    Tout ce qui n'est pas un objet JSON exploitable rend `None` sans lever :
-    cette lecture sert un confort d'affichage, jamais une donnée dont dépend
-    le stock, et elle tourne à l'intérieur d'une migration qu'un `off_raw`
-    tronqué ne doit pas faire échouer.
+    Anything that is not a usable JSON object yields `None` without raising:
+    this reading serves a display convenience, never a value the stock
+    depends on, and it runs inside a migration that a truncated `off_raw`
+    must not be able to fail.
     """
     if not raw:
         return None

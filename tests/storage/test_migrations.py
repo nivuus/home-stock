@@ -346,3 +346,26 @@ def test_m003_is_replayable(tmp_path):
     apply_migrations(conn)
 
     assert conn.execute("SELECT serving_quantity FROM article").fetchone()[0] == 60.0
+
+
+def test_m003_apply_never_overwrites_a_serving_already_set(tmp_path):
+    """apply_migrations() locks by version: once the base sits at
+    CURRENT_VERSION, m003's own apply() hook is never invoked again, so
+    test_m003_is_replayable's second apply_migrations() call is a total
+    no-op and cannot exercise the `serving_quantity IS NULL` guard in
+    m003_consumption.apply(). Calling m003_consumption.apply(conn) directly
+    is the only path that bypasses the version lock — same trick
+    test_m002_never_overwrites_an_aisle_already_chosen already uses for
+    m002's own hook."""
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw, serving_quantity)"
+        " VALUES (1, 125, ?, 60)", ('{"serving_quantity": "100"}',))
+    conn.commit()
+
+    from custom_components.home_stock.storage.migrations import m003_consumption
+
+    m003_consumption.apply(conn)  # replayed by hand, bypassing the version lock
+
+    assert conn.execute("SELECT serving_quantity FROM article").fetchone()[0] == 60.0
