@@ -117,6 +117,14 @@ export class EcranJournal extends LitElement {
     return maximum > 0 ? kcal / maximum : 0;
   }
 
+  /** Le seau lui-même n'est jamais la cible tactile : à quatorze seaux sur
+   *  un téléphone de 412 px, un bouton qui vaudrait la barre entière ferait
+   *  moins de 24 px de large — sous les 48 px de cible tactile, quelle que
+   *  soit sa hauteur. Le bouton reste donc toujours la colonne (ou la ligne,
+   *  cf. le style plus bas) EN ENTIER, à taille fixe ; seul le remplissage
+   *  intérieur — décoratif, jamais cliqué pour lui-même — varie avec `part`,
+   *  via la variable CSS `--part` que le style choisit d'appliquer en
+   *  hauteur (histogramme large) ou en largeur (liste étroite). */
   private rendreBarres() {
     const seaux = this.serie?.buckets ?? [];
     const maximum = Math.max(0, ...seaux.map((b) => b.kcal));
@@ -126,9 +134,11 @@ export class EcranJournal extends LitElement {
           const part = this.partDeLaBarre(seau.kcal, maximum);
           return html`
             <button class="barre" data-part=${part}
-                    style=${`height: ${Math.round(part * 100)}%`}
+                    style=${`--part: ${Math.round(part * 100)}%`}
                     title=${`${seau.label} — ${Math.round(seau.kcal)} kcal`}
-                    @click=${() => this.ouvrirSeau(seau.label)}></button>`;
+                    @click=${() => this.ouvrirSeau(seau.label)}>
+              <span class="barre-remplissage"></span>
+            </button>`;
         })}
       </div>`;
   }
@@ -203,13 +213,29 @@ export class EcranJournal extends LitElement {
       background: var(--secondary-background-color); color: var(--primary-text-color);
     }
     .granularite-active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    /* La cible tactile de .barre est fixe (colonne pleine hauteur ici,
+       ligne pleine largeur sous 700 px) — jamais la grandeur du seau, qui ne
+       viendrait qu'agrandir les gros jours et rétrécir les petits sous les
+       48 px. Quatorze seaux sur 412 px ne tiennent pas en colonnes larges de
+       48 px (14 x 48 > 372 px de contenu disponible) : sous 700 px, le
+       graphe passe donc en liste de lignes empilées, chacune pleine largeur,
+       où c'est la largeur du remplissage qui porte la valeur. */
     .barres {
-      display: flex; align-items: flex-end; gap: 4px; height: 120px; margin: 8px 0 16px;
+      display: flex; gap: 4px; margin: 8px 0 16px;
       padding: 8px; border-radius: 8px; background: var(--secondary-background-color); box-sizing: border-box;
     }
     .barre {
-      flex: 1 1 auto; min-width: 12px; min-height: 4px; border: none; border-radius: 4px 4px 0 0;
-      background: var(--primary-color);
+      flex: 1 1 auto; min-width: 12px; height: 120px; min-height: 48px; box-sizing: border-box;
+      display: flex; align-items: flex-end; border: none; border-radius: 4px; background: transparent; padding: 0;
+    }
+    .barre-remplissage {
+      display: block; width: 100%; height: var(--part); min-height: 4px;
+      border-radius: 4px 4px 0 0; background: var(--primary-color); pointer-events: none;
+    }
+    @media (max-width: 700px) {
+      .barres { flex-direction: column; }
+      .barre { flex: none; width: 100%; height: auto; min-height: 48px; align-items: stretch; }
+      .barre-remplissage { width: var(--part); height: 100%; min-width: 4px; min-height: 0; border-radius: 0 4px 4px 0; }
     }
     .jour { margin-top: 8px; }
     .titre-jour { margin: 0 0 8px; font-size: 1rem; color: var(--secondary-text-color); }
