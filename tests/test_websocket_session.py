@@ -319,3 +319,39 @@ async def test_closing_a_session_stops_its_leftovers_blocking_a_conversion(
     after = await _send(client, 5, "home_stock/product/convert_unit", product_id=1,
                         to_unit="g", reference_quantity=125, dry_run=True)
     assert after["success"] is True
+
+
+async def test_a_trip_still_waiting_to_be_put_away_blocks_a_new_one(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The partial unique index only covers `state = 'shopping'`, so the
+    database accepted a second session over a `to_store` trip. The older
+    trip's unstored line then became invisible on every screen — while still
+    counting against its product's unit conversion — and the reflex on
+    seeing a stale « Courses à ranger » is to close it, abandoning the line
+    for good. The refusal has to name what is in the way."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                quantity=500, unit_price=0.002, idempotency_key="scan-1")
+    await _send(client, 3, "home_stock/session/checkout")
+
+    refused = await _send(client, 4, "home_stock/session/start", store="Lidl")
+
+    assert refused["success"] is False
+    assert refused["error"]["code"] == "shopping_refused"
+    assert "Leclerc" in refused["error"]["message"]
+    assert "rangez-les ou clôturez-les" in refused["error"]["message"]
+
+    # Toujours une seule session, et c'est bien l'ancienne : rien n'a été
+    # créé à côté d'elle.
+    current = await _send(client, 5, "home_stock/session/current")
+    assert current["result"]["session"]["store"] == "Leclerc"
+    assert current["result"]["totals"]["pending"] == 1
+
+    # Et la sortie existe : clore la libère, le voyage suivant peut partir.
+    await _send(client, 6, "home_stock/session/close")
+    reopened = await _send(client, 7, "home_stock/session/start", store="Lidl")
+    assert reopened["success"] is True
+    assert reopened["result"]["store"] == "Lidl"

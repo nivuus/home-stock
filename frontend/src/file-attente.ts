@@ -101,11 +101,12 @@ export class FileAttente {
    *  elle.
    *
    *  Un appel pendant un rejeu en cours attend donc son tour, puis rejoue à
-   *  son tour : quand il retombe, sa propre action a bien été tentée. C'est
-   *  aussi ce qui ferme la course entre `viderResultats()` et un
-   *  `resultatDe()` concurrent — les continuations s'exécutent dans l'ordre
-   *  où elles ont été posées, plus dans l'ordre où deux boucles se
-   *  bousculent. */
+   *  son tour : quand il retombe, sa propre action a bien été tentée.
+   *
+   *  Ce que cela ne règle PAS : la course entre `viderResultats()` et un
+   *  `resultatDe()` concurrent. Ordonner les boucles n'ordonne pas les
+   *  continuations posées dessus — voir `viderResultats`, qui la décrit et
+   *  nomme la forme de sa vraie correction. */
   async rejouer(): Promise<void> {
     const precedent = this.enVol;
     const courant = (async () => {
@@ -172,9 +173,23 @@ export class FileAttente {
    *  toujours : `resultatDe` ne les retire que si quelqu'un les demande, et
    *  ici personne ne le fera jamais.
    *
-   *  Cet appel ne peut plus emporter le résultat d'un écran qui l'attendait :
-   *  `rejouer()` sérialise les rejeux, donc le `.then()` d'un écran s'exécute
-   *  toujours avant le rejeu suivant, jamais au milieu. */
+   *  ⚠️ **Cet appel peut encore emporter le résultat qu'un écran attendait.**
+   *  Sérialiser `rejouer()` a ordonné les BOUCLES, pas les continuations :
+   *  quand le rejeu générique du panneau démarre avant l'écriture d'un
+   *  écran, son `.then(viderResultats)` est mis en file d'attente AVANT le
+   *  `.then(resultatDe)` de l'écran, et efface le sort le premier —
+   *  l'écran croit alors son action encore en file alors que le serveur l'a
+   *  bien reçue (« Envoi en attente de réseau » sur une session pourtant
+   *  ouverte). Le coût est faible : un rafraîchissement ultérieur corrige
+   *  l'affichage, et la clé d'idempotence garantit qu'aucune action n'est
+   *  envoyée deux fois.
+   *
+   *  La vraie correction n'est pas un verrou de plus : c'est un passage de
+   *  relais **par clé** — `ajouter` rend une promesse, l'entrée de file la
+   *  résout elle-même au moment où son sort est connu, et l'appelant n'a
+   *  plus jamais à relire une table partagée après coup. Reporté au lot 2 ;
+   *  ne pas écrire ici que la course est fermée tant qu'elle ne l'est
+   *  pas. */
   viderResultats(): void {
     this.resultats.clear();
   }

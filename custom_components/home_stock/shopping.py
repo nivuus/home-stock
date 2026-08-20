@@ -31,10 +31,32 @@ class ShoppingService:
     # --- session ------------------------------------------------------------
 
     def start(self, *, store: str | None) -> dict[str, Any]:
+        """Open a trip. Refuses ANY session that is not `done`.
+
+        Not just an open one: the partial unique index only covers
+        `state = 'shopping'`, so the database happily accepts a second
+        session while a `to_store` trip is still waiting to be put away —
+        and `current_session` then surfaces only the newer one. The older
+        trip's unstored lines become invisible on every screen while still
+        counting against their product's unit conversion, and the natural
+        reflex on seeing a stale "Courses à ranger" is to close it, which
+        abandons those lines for good. So the refusal lives here, in
+        Python, where it can say what is in the way and what to do about it
+        — the index alone cannot.
+        """
         with self.manager.db.write() as conn:
             existing = repo.current_session(conn)
-            if existing is not None and existing["state"] == "shopping":
-                raise ShoppingError("Une session de courses est déjà ouverte.")
+            # current_session only ever returns a 'shopping' or a 'to_store'
+            # row (see its WHERE clause): anything it hands back is a trip
+            # still in progress.
+            if existing is not None:
+                if existing["state"] == "shopping":
+                    raise ShoppingError("Une session de courses est déjà ouverte.")
+                enseigne = f" ({existing['store']})" if existing["store"] else ""
+                raise ShoppingError(
+                    f"Des courses{enseigne} attendent encore d'être rangées : "
+                    "rangez-les ou clôturez-les avant d'en ouvrir de nouvelles."
+                )
             session_id = repo.open_session(conn, started_at=_now(), store=store)
             return repo.get_session(conn, session_id)
 

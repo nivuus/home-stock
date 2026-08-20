@@ -173,3 +173,37 @@ describe('écran Courses : clore une session', () => {
     expect(sans.shadowRoot!.querySelector('.restantes')).toBeNull();
   });
 });
+
+describe('écran Courses : une clôture armée ne survit pas à un rafraîchissement', () => {
+  it('un second appui après une poussée du coordinateur ne clôt rien', async () => {
+    // Le scénario réel : on arme, une mise à jour arrive (l'autre tablette,
+    // son propre rangement), on pose l'appareil, et le suivant appuie sur ce
+    // qui ressemble à un bouton rouge ordinaire. `panier.ts` énonce et
+    // applique déjà cette règle pour la suppression d'une ligne ; ici
+    // l'enjeu est un voyage entier abandonné.
+    const file = fileFactice();
+    const element = monter({ donnees: sessionOuverte('to_store', 2), connexion: connexionFactice(), file });
+    await element.updateComplete;
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.clore-session') as HTMLButtonElement).click();
+    await element.updateComplete;
+    const confirmation = element.shadowRoot!.querySelector('.confirmer-cloture') as HTMLButtonElement;
+    expect(confirmation).not.toBeNull();
+
+    // La poussée : une NOUVELLE enveloppe de session (une ligne rangée
+    // entre-temps), exactement ce que `session/current` rend au panneau.
+    element.donnees = sessionOuverte('to_store', 1);
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.confirmer-cloture')).toBeNull();
+    expect(element.shadowRoot!.querySelector('.clore-session')).not.toBeNull();
+
+    // Le bouton que le doigt avait sous lui n'est plus dans l'arbre ; s'il
+    // était encore cliqué (référence gardée), rien ne doit partir non plus.
+    confirmation.click();
+    await laisserPasserLesMicrotaches();
+    expect(file.ajouter).not.toHaveBeenCalled();
+  });
+});

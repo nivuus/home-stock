@@ -812,8 +812,15 @@ def _shopping_error(connection: websocket_api.ActiveConnection, msg: dict[str, A
     # queue stamps this key on EVERY action uniformly (FileAttente.ajouter),
     # opening a session included — a schema that refused it here would make
     # the queue treat a bad-request refusal exactly like being offline and
-    # never get past it. Nothing to deduplicate: the partial unique index
-    # already makes a second open session impossible.
+    # never get past it.
+    #
+    # Ignored, not honoured, and that is a real (small) hole: a replayed
+    # start is a SECOND start, refused in French rather than answering the
+    # session the first call opened. The partial unique index is no help
+    # here either — it only covers `state = 'shopping'`, so it never
+    # blocked a second session opened over a `to_store` trip. What does
+    # block both is ShoppingService.start, which refuses any session that
+    # is not `done`; see its docstring.
     vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response

@@ -16,7 +16,7 @@
  *  panneau. Sans cette sortie, une session abandonnée bloque le voyage
  *  suivant — l'index partiel de la base refuse une seconde session ouverte.
  */
-import { LitElement, html, css, nothing } from 'lit';
+import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
@@ -52,6 +52,20 @@ export class EcranSession extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     void this.chargerMagasins();
+  }
+
+  /** Un rafraîchissement de données désarme la clôture. Même règle — et
+   *  même raison — que la suppression d'une ligne dans `<home-stock-panier>`
+   *  (voir son `willUpdate`) : une gâchette armée ne doit jamais survivre à
+   *  un écran qui vient de changer sous les doigts. Ici le coût est plus
+   *  lourd qu'un panier vidé : quelqu'un arme la clôture, une poussée du
+   *  coordinateur arrive (l'autre tablette, son propre rangement), il pose
+   *  l'appareil, et le suivant appuie sur ce qui a l'air d'un bouton rouge
+   *  ordinaire — les lignes non rangées du voyage sont abandonnées en un
+   *  seul appui. Ré-armer coûte un appui ; ne pas désarmer coûte un
+   *  voyage. */
+  protected willUpdate(changed: PropertyValues): void {
+    if (changed.has('donnees')) this.clotureArmee = false;
   }
 
   private async chargerMagasins(): Promise<void> {
@@ -113,7 +127,11 @@ export class EcranSession extends LitElement {
   }
 
   private async clore(): Promise<void> {
-    if (this.enCours) return;
+    // La garde ne dépend pas de la présence du bouton à l'écran : un
+    // désarmement (voir `willUpdate`) retire le bouton de confirmation du
+    // DOM, mais une référence gardée dessus porte toujours son écouteur.
+    // C'est la donnée qui autorise la clôture, pas le rendu.
+    if (!this.clotureArmee || this.enCours) return;
     this.enCours = true;
     this.message = null;
     const partie = await this.ecrire('home_stock/session/close', {});
