@@ -32,3 +32,16 @@ CONF_EXPIRATION_ALERT_DAYS: Final = "expiration_alert_days"
 
 # Below this many base units, a batch is empty: floating point dust (spec 7.2).
 QUANTITY_EPSILON: Final = 0.001
+
+# The eight macros of `article`, exactly as the schema names them. `kcal` is
+# not among them: it is `kcal_per_base_unit` on `article` and `kcal` on
+# `movement`, and it is the only one with a fallback at the product level
+# (`product.reference_kcal`).
+MACRO_COLUMNS: Final = (
+    "proteins", "carbohydrates", "sugars", "added_sugars",
+    "fat", "saturated_fat", "fiber", "salt",
+)
+
+# A serving above this value is not a serving: it is a data entry mistake in
+# a collaborative database (a pallet announced in grams).
+MAX_SERVING: Final = 5000.0

@@ -12,12 +12,13 @@ scanned: that is `nutrition_per_base_unit`'s job. Renaming the result onto
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 from ..aisles import resolve_aisle
-from ..const import BASE_UNITS
+from ..const import BASE_UNITS, MAX_SERVING
 
 # Our internal nutrition keys, mapped to the OFF nutriment name each one
 # reads (e.g. "energy-kcal_100g"). This is NOT the list of `article` columns:
@@ -326,3 +327,44 @@ def to_article_columns(per_base_unit: dict[str, float] | None) -> dict[str, floa
     if unexpected:
         raise ValueError(f"unexpected nutrition keys: {unexpected}")
     return {_ARTICLE_COLUMN_NAMES[key]: value for key, value in per_base_unit.items()}
+
+
+def plausible_serving(value: Any, *, base_unit: str,
+                      net_quantity: float | None) -> float | None:
+    """La portion d'Open Food Facts, ou rien.
+
+    Trois refus, dans cet ordre : un produit suivi à la pièce (une portion y
+    vaut une pièce, un nombre de grammes n'y veut rien dire), une valeur
+    illisible ou hors de `]0 ; MAX_SERVING]`, et une portion plus grosse que
+    le paquet lui-même — Open Food Facts est collaboratif, et « 300 g » sur
+    un pot de 250 g est une faute de frappe, pas une portion.
+    """
+    if base_unit not in ("g", "ml"):
+        return None
+    number = _number(value)
+    if number is None or not 0 < number <= MAX_SERVING:
+        return None
+    if net_quantity is not None and number > net_quantity:
+        return None
+    return number
+
+
+def serving_from_raw(raw: str | None, *, base_unit: str,
+                     net_quantity: float | None) -> float | None:
+    """La portion lue dans la fiche brute déjà stockée (`article.off_raw`).
+
+    Tout ce qui n'est pas un objet JSON exploitable rend `None` sans lever :
+    cette lecture sert un confort d'affichage, jamais une donnée dont dépend
+    le stock, et elle tourne à l'intérieur d'une migration qu'un `off_raw`
+    tronqué ne doit pas faire échouer.
+    """
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return plausible_serving(payload.get("serving_quantity"),
+                             base_unit=base_unit, net_quantity=net_quantity)
