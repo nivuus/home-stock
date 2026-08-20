@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 
 from .const import (
+    MAX_PARTS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
     REASON_CONVERSION,
@@ -72,6 +73,30 @@ def _namespaced_key(operation: str, key: str | None) -> str | None:
     doing its own work.
     """
     return f"{operation}:{key}" if key else None
+
+
+class PartsError(ValueError):
+    """Parts that cannot be true, or parts on a movement that cannot have any."""
+
+
+def _checked_parts(reason: str, parts_total: int | None,
+                   parts_mine: int | None) -> tuple[int | None, int | None]:
+    """Validate the pair, or refuse the whole call.
+
+    Both or neither: given one alone, the caller believes it recorded a share
+    it did not, and the movement would read as 1/1 forever after.
+    """
+    if parts_total is None and parts_mine is None:
+        return None, None
+    if parts_total is None or parts_mine is None:
+        raise PartsError("parts_total and parts_mine go together")
+    if reason != REASON_CONSUMPTION:
+        raise PartsError(f"a {reason} movement cannot be shared")
+    if not 1 <= parts_total <= MAX_PARTS:
+        raise PartsError(f"parts_total must be between 1 and {MAX_PARTS}")
+    if not 0 <= parts_mine <= parts_total:
+        raise PartsError("parts_mine must be between 0 and parts_total")
+    return parts_total, parts_mine
 
 
 def _as_batch_view(row: dict[str, Any]) -> BatchView:
@@ -148,10 +173,14 @@ class StockManager:
 
     def consume(self, *, product_id: int, quantity: float,
                 reason: str = REASON_CONSUMPTION, occurred_at: str | None = None,
-                idempotency_key: str | None = None) -> list[int]:
+                idempotency_key: str | None = None,
+                parts_total: int | None = None, parts_mine: int | None = None) -> list[int]:
         """Take a quantity out of stock, across as many batches as needed."""
         moment = occurred_at or _now()
         stored_key = _namespaced_key("consume", idempotency_key)
+        # Validated before the write transaction opens: an inconsistent
+        # entry must not take the write lock just to be refused inside it.
+        parts_total, parts_mine = _checked_parts(reason, parts_total, parts_mine)
         with self.db.write() as conn:
             if stored_key and repo.movement_exists(conn, stored_key):
                 # Replayed call: return the movements the first call wrote.
@@ -188,6 +217,7 @@ class StockManager:
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
                     quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
                     kcal=values.kcal, cost=values.cost, macros=values.macros,
+                    parts_total=parts_total, parts_mine=parts_mine,
                     idempotency_key=key,
                 ))
                 repo.set_batch_remaining(
@@ -198,13 +228,25 @@ class StockManager:
 
     def consume_batch(self, batch_id: int, *, quantity: float | None = None,
                       reason: str = REASON_CONSUMPTION,
-                      occurred_at: str | None = None) -> int:
+                      occurred_at: str | None = None,
+                      idempotency_key: str | None = None,
+                      parts_total: int | None = None, parts_mine: int | None = None) -> int:
         """Take from one precise batch. Without a quantity, empties it.
 
         The expiry list checks off a batch, not a product: FIFO must not apply.
         """
         moment = occurred_at or _now()
+        stored_key = _namespaced_key("consume_batch", idempotency_key)
+        # Validated before the write transaction opens: an inconsistent
+        # entry must not take the write lock just to be refused inside it.
+        parts_total, parts_mine = _checked_parts(reason, parts_total, parts_mine)
         with self.db.write() as conn:
+            if stored_key and repo.movement_exists(conn, stored_key):
+                row = conn.execute(
+                    "SELECT id FROM movement WHERE idempotency_key = ?",
+                    (stored_key,),
+                ).fetchone()
+                return int(row["id"])
             row = conn.execute(
                 # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
                 f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
@@ -230,7 +272,8 @@ class StockManager:
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
                 reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
-                macros=values.macros,
+                macros=values.macros, parts_total=parts_total, parts_mine=parts_mine,
+                idempotency_key=stored_key,
             )
             repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
                                      closed_at=moment if closes else None)

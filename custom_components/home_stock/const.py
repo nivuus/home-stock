@@ -50,3 +50,7 @@ MAX_SERVING: Final = 5000.0
 # morning belongs to the evening you are still finishing, not to the calendar
 # day that just started.
 FOOD_DAY_START_HOUR: Final = 4
+
+# Twenty-four plates is already a party; past that it is a typo, and the
+# number ends up dividing someone's calories by a hundred.
+MAX_PARTS: Final = 24

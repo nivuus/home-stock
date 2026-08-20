@@ -1,6 +1,6 @@
 import pytest
 
-from custom_components.home_stock.application import StockManager
+from custom_components.home_stock.application import PartsError, StockManager
 from custom_components.home_stock.domain.stock import InsufficientStock
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
@@ -636,3 +636,119 @@ def test_consume_batch_freezes_the_macros_too(manager):
     row = manager.db.read().execute(
         "SELECT proteins FROM movement WHERE reason = 'consumption'").fetchone()
     assert row["proteins"] == pytest.approx(5.0)
+
+
+def test_parts_are_written_on_a_consumption(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g", kcal_per_base_unit=1.2)
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=400.0, parts_total=4, parts_mine=1)
+
+    row = manager.db.read().execute(
+        "SELECT parts_total, parts_mine, kcal FROM movement"
+        " WHERE reason = 'consumption'").fetchone()
+    assert (row["parts_total"], row["parts_mine"]) == (4, 1)
+    # The FROZEN kcal stays that of everything taken out of stock: the
+    # division by the parts happens at read time, never at write time —
+    # otherwise the quantity and the kcal of the same movement would no
+    # longer agree with each other.
+    assert row["kcal"] == pytest.approx(480.0)
+
+
+def test_parts_default_to_nothing_at_all(manager):
+    """Without parts, the columns stay NULL — and NULL means 1/1 at read
+    time. Writing 1/1 in stone would taint the whole history predating lot 2
+    with data that was never actually entered."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchone()
+    assert row["parts_total"] is None and row["parts_mine"] is None
+
+
+def test_parts_mine_may_be_zero(manager):
+    """"I served my guests, I didn't eat any of it": the stock leaves, the
+    food journal carries none of it."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=400.0, parts_total=4, parts_mine=0)
+
+    row = manager.db.read().execute(
+        "SELECT parts_mine FROM movement WHERE reason = 'consumption'").fetchone()
+    assert row["parts_mine"] == 0
+
+
+def test_more_parts_eaten_than_served_is_refused(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=2, parts_mine=3)
+
+    assert manager.db.read().execute("SELECT COUNT(*) FROM movement"
+                                     " WHERE reason = 'consumption'").fetchone()[0] == 0
+
+
+def test_zero_parts_served_is_refused(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=0, parts_mine=0)
+
+
+def test_parts_on_waste_are_refused(manager):
+    """Nobody shares a bin: accepting parts here would write data that makes
+    no sense, and that the day's totals ignore anyway."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, reason="waste",
+                        parts_total=2, parts_mine=1)
+
+
+def test_only_one_part_given_is_refused(manager):
+    """Giving one without the other is an incomplete entry, not a default."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, parts_total=4)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, parts_mine=1)
+
+
+def test_parts_spread_over_several_batches_land_on_every_movement(manager):
+    """A consumption spanning two batches writes two movements: both carry
+    the same parts, otherwise half the meal would be counted for the whole
+    household."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=100.0, location_id=1)
+    manager.add_stock(article_id=article_id, quantity=100.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=150.0, parts_total=3, parts_mine=1)
+
+    rows = manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchall()
+    assert len(rows) == 2
+    assert all((r["parts_total"], r["parts_mine"]) == (3, 1) for r in rows)
+
+
+def test_consume_batch_accepts_parts_and_an_idempotency_key(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    batch_id = manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    first = manager.consume_batch(batch_id, quantity=100.0, parts_total=2,
+                                  parts_mine=1, idempotency_key="abc")
+    second = manager.consume_batch(batch_id, quantity=100.0, parts_total=2,
+                                   parts_mine=1, idempotency_key="abc")
+
+    assert first == second
+    assert manager.db.read().execute(
+        "SELECT COUNT(*) FROM movement WHERE reason = 'consumption'").fetchone()[0] == 1
