@@ -6,6 +6,8 @@ import './ecrans/scanner';
 import './ecrans/fiche';
 import './ecrans/panier';
 import './ecrans/rangement';
+import './ecrans/catalogue';
+import './ecrans/reglages';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
@@ -286,6 +288,12 @@ export class PanneauGardeManger extends LitElement {
             Ranger (${lignesRangement.length})
           </button>
         ` : nothing}
+        ${this.ecran !== 'catalogue' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('catalogue')}>Catalogue</button>
+        ` : nothing}
+        ${this.ecran !== 'reglages' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('reglages')}>Réglages</button>
+        ` : nothing}
       </nav>
     `;
   }
@@ -349,6 +357,18 @@ export class PanneauGardeManger extends LitElement {
           @ligne-autonome-rangee=${this.surLigneAutonomeRangee} @termine=${this.surRangementTermine}
           @file-changee=${this.surFileChangee}>
         </home-stock-rangement>`;
+    }
+    if (this.ecran === 'catalogue') {
+      return html`
+        <home-stock-catalogue .connexion=${this.connexion} .file=${this.file} .enAttente=${this.enAttente}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-catalogue>`;
+    }
+    if (this.ecran === 'reglages') {
+      return html`
+        <home-stock-reglages .connexion=${this.connexion} .file=${this.file} .enAttente=${this.enAttente}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-reglages>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}

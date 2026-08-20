@@ -3,6 +3,7 @@ import { Connexion, type Hass } from '../src/connexion';
 
 function hassFactice(): Hass & {
   connection: { sendMessagePromise: ReturnType<typeof vi.fn>; subscribeMessage: ReturnType<typeof vi.fn> };
+  callService: ReturnType<typeof vi.fn>;
 } {
   return {
     connection: {
@@ -10,6 +11,7 @@ function hassFactice(): Hass & {
       subscribeMessage: vi.fn().mockResolvedValue(() => {}),
     },
     language: 'fr',
+    callService: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -48,6 +50,25 @@ describe('connexion', () => {
     expect(hass.connection.subscribeMessage).toHaveBeenCalledWith(rappel, {
       type: 'home_stock/subscribe',
     });
+  });
+
+  it('appelle un service Home Assistant tel quel, sans passer par le websocket du domaine', async () => {
+    const hass = hassFactice();
+    const connexion = new Connexion(hass);
+
+    await connexion.appelerService('home_stock', 'resync_off', { all: true });
+
+    expect(hass.callService).toHaveBeenCalledWith('home_stock', 'resync_off', { all: true });
+    expect(hass.connection.sendMessagePromise).not.toHaveBeenCalled();
+  });
+
+  it('appelle un service sans donnée quand aucune n’est fournie', async () => {
+    const hass = hassFactice();
+    const connexion = new Connexion(hass);
+
+    await connexion.appelerService('home_stock', 'resync_off');
+
+    expect(hass.callService).toHaveBeenCalledWith('home_stock', 'resync_off', {});
   });
 
   it('ne lit jamais localStorage : tout passe par la connexion de hass', async () => {

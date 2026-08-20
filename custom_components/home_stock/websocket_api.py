@@ -605,6 +605,10 @@ async def article_update(hass, connection, msg) -> None:
     vol.Required("type"): "home_stock/product/update",
     vol.Required("product_id"): _bounded_int,
     vol.Required("fields"): dict,
+    # See session/update_line: the panel's offline queue (FileAttente.ajouter)
+    # stamps this key on every action uniformly, including a catalogue edit —
+    # accepted and ignored here for the same reason.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def product_update(hass, connection, msg) -> None:
@@ -748,6 +752,9 @@ async def stock_add(hass, connection, msg) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/aisles/reorder",
     vol.Required("aisle_ids"): [_bounded_int],
+    # Same allowance as product/update above: the settings screen reorders
+    # aisles through the same offline queue, which stamps this key uniformly.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def aisles_reorder(hass, connection, msg) -> None:

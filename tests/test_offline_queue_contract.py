@@ -56,6 +56,13 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     "home_stock/session/store_line",
     "home_stock/stock/add",
     "home_stock/article/update",
+    # Task 17: the catalogue and settings screens write through the same
+    # offline queue as every other screen (spec §14) — a product edit and an
+    # aisle reorder are writes like any other, even though their usual
+    # context (a desk, not a shop aisle) makes the queue's offline tolerance
+    # rarely exercised in practice.
+    "home_stock/product/update",
+    "home_stock/aisles/reorder",
 }
 
 
@@ -125,6 +132,24 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert added_stock["success"] is True, added_stock.get("error")
     tested.add("home_stock/stock/add")
+
+    updated_product = await _send(
+        client, _id(), "home_stock/product/update", product_id=1,
+        fields={"name": "Article prêt à ranger (modifié)"}, idempotency_key="contract-product-update",
+    )
+    assert updated_product["success"] is True, updated_product.get("error")
+    tested.add("home_stock/product/update")
+
+    # No aisle needs to exist for this contract: an empty list is a valid
+    # (no-op) reorder, and the point here is only the schema's acceptance of
+    # idempotency_key, already exercised against real reordering in
+    # test_websocket_write.py::test_reordering_aisles_accepts_the_offline_
+    # queues_idempotency_key.
+    reordered_aisles = await _send(
+        client, _id(), "home_stock/aisles/reorder", aisle_ids=[], idempotency_key="contract-aisles-reorder",
+    )
+    assert reordered_aisles["success"] is True, reordered_aisles.get("error")
+    tested.add("home_stock/aisles/reorder")
 
     # --- the shopping-session lifecycle, exactly as the panel drives it -
     started = await _send(client, _id(), "home_stock/session/start", store="Leclerc")

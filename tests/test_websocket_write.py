@@ -417,6 +417,25 @@ async def test_getting_a_product_refuses_a_boolean_as_an_id(
     assert answer["success"] is False
 
 
+async def test_product_update_accepts_the_offline_queues_idempotency_key(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The catalogue screen writes through FileAttente like every other
+    screen (Task 17), which stamps `idempotency_key` on every action
+    uniformly — including a product edit. Unlike article/update and
+    session/update_line, product/update never uses the key for anything; the
+    schema must still accept it instead of refusing the whole write with an
+    English voluptuous "extra keys not allowed"."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/product/update",
+                            "product_id": 1, "fields": {"name": "Nouveau nom"},
+                            "idempotency_key": "cle-test"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is True
+
+
 async def test_an_unknown_column_is_refused_rather_than_written(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     """The update path interpolates column names into SQL. The whitelist is
@@ -985,6 +1004,28 @@ async def test_reordering_refuses_an_aisle_id_larger_than_64_bits(
     answer = await client.receive_json()
 
     assert answer["success"] is False
+
+
+async def test_reordering_aisles_accepts_the_offline_queues_idempotency_key(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """Same allowance as product/update: the settings screen (Task 17) reorders
+    aisles through FileAttente, which always stamps `idempotency_key`."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+
+    def ids() -> list[int]:
+        return [r["id"] for r in entry.runtime_data.database.read().execute(
+            "SELECT id FROM aisle ORDER BY position").fetchall()]
+
+    order = await hass.async_add_executor_job(ids)
+    reversed_order = list(reversed(order))
+
+    await client.send_json({"id": 1, "type": "home_stock/aisles/reorder",
+                            "aisle_ids": reversed_order, "idempotency_key": "cle-test"})
+    answer = await client.receive_json()
+
+    assert answer["success"] is True
+    assert await hass.async_add_executor_job(ids) == reversed_order
 
 
 async def test_storing_directly_creates_a_batch_outside_any_session(

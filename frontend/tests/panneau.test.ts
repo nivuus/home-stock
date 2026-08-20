@@ -641,3 +641,106 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
     expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).toBeNull();
   });
 });
+
+describe('panneau : le catalogue et les réglages sont toujours atteignables', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  function monter(hass: Hass) {
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it('le bouton « Catalogue » mène à <home-stock-catalogue>, avec connexion et file', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/products/list') return Promise.resolve({ products: [] });
+      if (msg.type === 'home_stock/aisles/list') return Promise.resolve({ aisles: [] });
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      if (msg.type === 'home_stock/batches/list') return Promise.resolve({ batches: [] });
+      return Promise.resolve({});
+    });
+    const element = monter(hass);
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Catalogue')) as HTMLButtonElement;
+    expect(bouton).not.toBeUndefined();
+    bouton.click();
+    await (element as any).updateComplete;
+
+    expect(element.ecran).toBe('catalogue');
+    const catalogue = element.shadowRoot!.querySelector('home-stock-catalogue') as any;
+    expect(catalogue).not.toBeNull();
+    expect(catalogue.connexion).toBeDefined();
+    expect(catalogue.file).toBeDefined();
+  });
+
+  it('le bouton « Réglages » mène à <home-stock-reglages>, avec connexion et file', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/aisles/list') return Promise.resolve({ aisles: [] });
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      return Promise.resolve({});
+    });
+    const element = monter(hass);
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Réglages')) as HTMLButtonElement;
+    expect(bouton).not.toBeUndefined();
+    bouton.click();
+    await (element as any).updateComplete;
+
+    expect(element.ecran).toBe('reglages');
+    const reglages = element.shadowRoot!.querySelector('home-stock-reglages') as any;
+    expect(reglages).not.toBeNull();
+    expect(reglages.connexion).toBeDefined();
+    expect(reglages.file).toBeDefined();
+  });
+
+  it('quitter un rangement en attente vers le catalogue prévient d’abord, comme vers tout autre écran', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      return Promise.resolve({});
+    });
+    const element = monter(hass);
+    await laisserPasserLesMicrotaches();
+
+    const scanner = element.shadowRoot!.querySelector('home-stock-scanner')!;
+    scanner.dispatchEvent(new CustomEvent('code-lu', {
+      detail: { code: '3229820129488' }, bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+    const fiche = element.shadowRoot!.querySelector('home-stock-fiche')!;
+    fiche.dispatchEvent(new CustomEvent('article-pret', {
+      detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005, mode: 'rangement', offDroppedFields: [] },
+      bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+    expect(element.ecran).toBe('rangement');
+
+    const boutonCatalogue = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes('Catalogue')) as HTMLButtonElement;
+    boutonCatalogue.click();
+    await (element as any).updateComplete;
+
+    expect(element.ecran).toBe('rangement');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
+  });
+});
