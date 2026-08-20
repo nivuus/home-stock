@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from homeassistant.components.todo import DATA_COMPONENT, TodoItem, TodoItemStatus
@@ -258,9 +258,18 @@ async def test_kcal_today_reports_the_day_and_its_gaps(hass, setup_entry):
 
 async def test_the_daily_sensors_declare_a_last_reset(hass, setup_entry):
     """TOTAL without a last_reset, a drop from 1 800 to 0 would be read as a
-    meter rollover and would inflate the statistics."""
+    meter rollover and would inflate the statistics.
+
+    A prefix check on the year is blind to both a naive last_reset and a
+    wrong-but-plausible one, so this compares against the exact aware
+    datetime derived from today["start"] instead."""
     entry = await setup_entry()
     state = hass.states.get("sensor.home_stock_cost_today")
     assert state.attributes["state_class"] == "total"
-    assert state.attributes["last_reset"].startswith(
-        entry.runtime_data.coordinator.data["today"]["food_day"][:4])
+
+    last_reset = datetime.fromisoformat(state.attributes["last_reset"])
+    assert last_reset.tzinfo is not None
+
+    expected_start = entry.runtime_data.coordinator.data["today"]["start"]
+    expected = datetime.fromisoformat(expected_start).replace(tzinfo=UTC)
+    assert last_reset == expected
