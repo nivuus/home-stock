@@ -23,6 +23,9 @@ def test_the_day_totals_only_hold_today(manager):
 
     assert summary["today"]["kcal"] == pytest.approx(240.0)
     assert summary["today"]["food_day"] == "2026-08-20"
+    # Naive UTC ISO, like every other bound this module returns: 04:00 Paris
+    # in August (UTC+2) is 02:00 UTC.
+    assert summary["today"]["start"] == "2026-08-20T02:00:00"
 
 
 def test_a_meal_at_two_in_the_morning_belongs_to_yesterday(manager):

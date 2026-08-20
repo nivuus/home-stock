@@ -643,6 +643,11 @@ class StockManager:
             "cost_waste_total": round(cumulative["waste_cost"], 2),
             "today": {
                 "food_day": food_day_of(now or datetime.now(UTC), tz).isoformat(),
+                # Naive UTC ISO, exactly like every other bound this module
+                # returns (see domain/foodday.py). Sensors turn it into an
+                # aware UTC datetime for `last_reset`; they never resolve a
+                # time zone themselves (spec 9, amendment).
+                "start": day_start,
                 "kcal": round(today_totals["kcal"], 1),
                 **{column: round(today_totals[column], 3) for column in MACRO_COLUMNS},
                 "cost": round(today_totals["cost"], 2),
