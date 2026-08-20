@@ -344,3 +344,28 @@ async def test_services_yaml_parses_for_every_service(hass, seeded):
         "resync_off",
     ):
         assert descriptions[DOMAIN][service]["name"], service
+
+
+async def test_a_domain_refusal_reaches_the_service_caller_in_french(hass, seeded):
+    """`services._run` re-raised `str(error)` — the domain's English original
+    ("unknown article 999") — into a notification or a voice answer, while
+    its own comment claimed it matched the websocket surface's wording. Both
+    now translate through `messages.py`, one vocabulary."""
+    entry, ids = seeded
+    with pytest.raises(HomeAssistantError) as refusal:
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": 999, "quantity": 100, "location_id": ids["location_id"],
+        }, blocking=True)
+
+    assert str(refusal.value) == "Article 999 inconnu."
+
+
+async def test_add_stock_rejects_a_negative_price(hass, seeded):
+    """The same rule as the websocket surface: a price is never negative, on
+    any surface that writes one into the append-only journal."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "add_stock", {
+            "article_id": ids["article_id"], "quantity": 100,
+            "location_id": ids["location_id"], "price_per_base_unit": -2.5,
+        }, blocking=True)

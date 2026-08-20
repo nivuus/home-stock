@@ -16,10 +16,13 @@ from .const import DOMAIN, REASON_CONSUMPTION, REASON_EXPIRED, REASON_WASTE
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
+from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
-from .validators import bounded_int, bounded_text, finite_float, iso_date
+from .validators import (
+    bounded_int, bounded_text, finite_float, iso_date, non_negative_float,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +50,7 @@ ADD_STOCK_SCHEMA = vol.All(
         vol.Required("quantity"): finite_float,
         vol.Required("location_id"): _id,
         vol.Optional("best_before"): iso_date,
-        vol.Optional("price_per_base_unit"): finite_float,
+        vol.Optional("price_per_base_unit"): non_negative_float,
         vol.Optional("packaging_base_quantity"): finite_float,
         vol.Optional("idempotency_key"): bounded_text,
     }),
@@ -107,7 +110,15 @@ def _entry(hass: HomeAssistant):
 
 
 async def _run(hass: HomeAssistant, work) -> Any:
-    """Run a manager call in the executor, translating domain errors."""
+    """Run a manager call in the executor, translating domain errors.
+
+    The translation is `messages.french_message`, the very same vocabulary
+    the websocket surface uses (websocket_api._send_domain_error): one
+    English exception must not become two different French sentences
+    depending on whether the panel or a script asked. Re-raising `str(error)`
+    here used to leak the English original ("unknown article 5") into a
+    notification and a voice answer.
+    """
     try:
         return await hass.async_add_executor_job(work)
     except InsufficientStock as error:
@@ -115,7 +126,7 @@ async def _run(hass: HomeAssistant, work) -> Any:
             f"Stock insuffisant : {error.requested} demandé, {error.available} disponible."
         ) from error
     except (UnitError, ValueError) as error:
-        raise HomeAssistantError(str(error)) from error
+        raise HomeAssistantError(french_message(error)) from error
     except OverflowError as error:
         # Backstop, not the primary defence: ADD_STOCK_SCHEMA/CONSUME_SCHEMA/
         # etc. already validate every numeric field through bounded_int/

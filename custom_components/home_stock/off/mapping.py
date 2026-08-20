@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from ..aisles import resolve_aisle
+from ..const import BASE_UNITS
 
 # Our internal nutrition keys, mapped to the OFF nutriment name each one
 # reads (e.g. "energy-kcal_100g"). This is NOT the list of `article` columns:
@@ -35,7 +36,6 @@ NUTRIMENT_KEYS: Final = {
     "fiber": "fiber",
     "salt": "salt",
 }
-NUTRIMENT_COLUMNS: Final = tuple(NUTRIMENT_KEYS)
 
 # How each internal nutrition key is actually named on `article`. Only `kcal`
 # differs (`kcal_per_base_unit`); the rest keep their name.
@@ -51,9 +51,6 @@ UNIT_TO_BASE: Final = {
     "kg": ("g", 1000.0), "mg": ("g", 0.001),
     "ml": ("ml", 1.0), "cl": ("ml", 10.0), "dl": ("ml", 100.0), "l": ("ml", 1000.0),
 }
-
-# The only base units a product can be stocked in.
-BASE_UNITS: Final = ("g", "ml", "piece")
 
 MIN_NET_QUANTITY: Final = 0.5
 MAX_NET_QUANTITY: Final = 50_000.0

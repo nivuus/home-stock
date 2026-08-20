@@ -744,3 +744,211 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
   });
 });
+
+/** Un serveur en mémoire qui se comporte comme le vrai : une seule session
+ *  ouverte à la fois, `current` qui ne rend que les sessions `shopping` ou
+ *  `to_store`, et une session qui se clôt d'elle-même quand toutes ses
+ *  lignes sont rangées (voir `ShoppingService.store_line`). C'est ce qu'il
+ *  faut pour éprouver le PARCOURS, pas seulement un écran isolé. */
+function serveurDeCourses() {
+  const magasins = ['Leclerc', 'Lidl'];
+  const emplacements = [{ id: 3, name: 'Placard', kind: 'cupboard', position: 0 }];
+  const lignes: any[] = [];
+  let session: any = null;
+  let prochainId = 1;
+  const envoyes: any[] = [];
+
+  const totaux = () => {
+    const miennes = lignes.filter((l) => l.session_id === session.id);
+    return {
+      lines: miennes.length,
+      pending: miennes.filter((l) => l.stored_at === null).length,
+      total: Math.round(miennes.reduce((s, l) => s + l.quantity * (l.unit_price ?? 0), 0) * 100) / 100,
+    };
+  };
+
+  const repondre = async (msg: any): Promise<unknown> => {
+    envoyes.push(msg);
+    switch (msg.type) {
+      case 'home_stock/stores/list':
+        return { stores: magasins };
+      case 'home_stock/locations/list':
+        return { locations: emplacements };
+      case 'home_stock/lookup':
+        return RESULTAT_FACTICE;
+      case 'home_stock/session/current':
+        if (!session || session.state === 'done') return null;
+        return {
+          session, lines: lignes.filter((l) => l.session_id === session.id),
+          totals: totaux(), stores: magasins,
+        };
+      case 'home_stock/session/start':
+        if (session && session.state === 'shopping') {
+          return Promise.reject({ code: 'shopping_refused', message: 'Une session de courses est déjà ouverte.' });
+        }
+        session = { id: prochainId++, state: 'shopping', store: msg.store ?? null,
+                    started_at: '2026-08-19T10:00:00', closed_at: null };
+        return session;
+      case 'home_stock/session/add_line': {
+        const ligne = { ...LIGNE_SESSION, id: 100 + lignes.length, session_id: session.id,
+                        article_id: msg.article_id, quantity: msg.quantity,
+                        unit_price: msg.unit_price ?? null, stored_at: null, batch_id: null };
+        lignes.push(ligne);
+        return ligne;
+      }
+      case 'home_stock/session/checkout':
+        session = { ...session, state: 'to_store' };
+        return session;
+      case 'home_stock/session/store_line': {
+        const ligne = lignes.find((l) => l.id === msg.line_id);
+        ligne.stored_at = '2026-08-19T18:00:00';
+        ligne.batch_id = 7;
+        if (totaux().pending === 0) {
+          session = { ...session, state: 'done', closed_at: '2026-08-19T18:00:00' };
+        }
+        return { line_id: msg.line_id, batch_id: 7, already_stored: false };
+      }
+      case 'home_stock/session/close':
+        if (!session || session.state === 'done') {
+          return Promise.reject({ code: 'shopping_refused', message: 'Aucune session de courses en cours.' });
+        }
+        session = { ...session, state: 'done', closed_at: '2026-08-19T18:00:00' };
+        return session;
+      default:
+        return {};
+    }
+  };
+
+  return { repondre, envoyes, lignes, etat: () => session };
+}
+
+describe('panneau : le parcours complet d’une session de courses', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('ouvrir, scanner, panier, caisse, ranger, clore — tout depuis le panneau assemblé', async () => {
+    const serveur = serveurDeCourses();
+    let pousserLeResume: () => void = () => {};
+    const hass = {
+      connection: {
+        sendMessagePromise: vi.fn().mockImplementation(serveur.repondre),
+        subscribeMessage: vi.fn().mockImplementation((rappel: () => void) => {
+          pousserLeResume = rappel;
+          return Promise.resolve(() => {});
+        }),
+      },
+      language: 'fr',
+    } as unknown as Hass;
+
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; ecran: string; updateComplete: Promise<boolean>;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const nav = (texte: string) => Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes(texte)) as HTMLButtonElement | undefined;
+    const dans = (nom: string, selecteur: string) => element.shadowRoot!
+      .querySelector(nom)!.shadowRoot!.querySelector(selecteur) as HTMLElement | null;
+    const tous = (nom: string, selecteur: string) => Array.from(element.shadowRoot!
+      .querySelector(nom)!.shadowRoot!.querySelectorAll(selecteur)) as HTMLElement[];
+    const reglerTout = async () => {
+      await laisserPasserLesMicrotaches();
+      await element.updateComplete;
+      for (const enfant of Array.from(element.shadowRoot!.children)) {
+        if ((enfant as any).updateComplete) await (enfant as any).updateComplete;
+      }
+      await laisserPasserLesMicrotaches();
+      await element.updateComplete;
+    };
+
+    // --- 1. ouvrir la session, magasin choisi en pastille -------------------
+    expect(element.ecran).toBe('scanner');
+    nav('Courses')!.click();
+    await reglerTout();
+
+    const pastilles = tous('home-stock-session', '.pastille');
+    expect(pastilles.map((p) => p.textContent!.trim())).toEqual(['Leclerc', 'Lidl']);
+    pastilles[0].click();
+    await reglerTout();
+    dans('home-stock-session', '.ouvrir-session')!.click();
+    await reglerTout();
+
+    expect(serveur.envoyes.some((m) => m.type === 'home_stock/session/start' && m.store === 'Leclerc'))
+      .toBe(true);
+    // Une session ouverte n'a qu'un but : scanner. Le panneau y renvoie.
+    expect(element.ecran).toBe('scanner');
+    expect(dans('home-stock-scanner', '.session-banniere')!.textContent).toContain('Leclerc');
+
+    // --- 2. scanner deux articles, qui rejoignent le panier ----------------
+    for (const articleId of [42, 43]) {
+      element.shadowRoot!.querySelector('home-stock-scanner')!.dispatchEvent(
+        new CustomEvent('code-lu', { detail: { code: '3229820129488' }, bubbles: true, composed: true }));
+      await reglerTout();
+      const fiche = element.shadowRoot!.querySelector('home-stock-fiche') as any;
+      expect(fiche.mode).toBe('panier');
+      fiche.dispatchEvent(new CustomEvent('article-pret', {
+        detail: { articleId, quantite: 500, prixUnitaire: 0.005, mode: 'panier', offDroppedFields: [] },
+        bubbles: true, composed: true,
+      }));
+      await reglerTout();
+    }
+    expect(serveur.lignes).toHaveLength(2);
+
+    // Le coordinateur pousse son résumé après une écriture : c'est ce signal
+    // qui fait relire `session/current` au panneau.
+    pousserLeResume();
+    await reglerTout();
+
+    // --- 3. le panier, puis la caisse --------------------------------------
+    nav('Panier')!.click();
+    await reglerTout();
+    expect(tous('home-stock-panier', '.ligne')).toHaveLength(2);
+
+    dans('home-stock-panier', '.checkout')!.click();
+    await reglerTout();
+    pousserLeResume();
+    await reglerTout();
+    expect(serveur.etat().state).toBe('to_store');
+
+    // --- 4. ranger une ligne ------------------------------------------------
+    nav('Ranger')!.click();
+    await reglerTout();
+    expect(tous('home-stock-rangement', '.ligne')).toHaveLength(2);
+
+    tous('home-stock-rangement', '.raccourci-dlc')[0].click();
+    await reglerTout();
+    pousserLeResume();
+    await reglerTout();
+    expect(serveur.lignes.filter((l) => l.stored_at !== null)).toHaveLength(1);
+
+    // --- 5. clore le reste, en deux appuis ---------------------------------
+    nav('Courses')!.click();
+    await reglerTout();
+    expect(dans('home-stock-session', '.restantes')!.textContent).toContain('1 ligne');
+
+    dans('home-stock-session', '.clore-session')!.click();
+    await reglerTout();
+    // Un seul appui n'a rien clos : c'est un geste destructif.
+    expect(serveur.etat().state).toBe('to_store');
+
+    dans('home-stock-session', '.confirmer-cloture')!.click();
+    await reglerTout();
+
+    expect(serveur.etat().state).toBe('done');
+    expect(element.ecran).toBe('scanner');
+    expect(dans('home-stock-scanner', '.session-banniere')).toBeNull();
+
+    // Et le voyage suivant peut commencer : plus rien ne bloque.
+    nav('Courses')!.click();
+    await reglerTout();
+    expect(dans('home-stock-session', '.ouvrir-session')).not.toBeNull();
+  });
+});

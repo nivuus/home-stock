@@ -5,6 +5,7 @@ import { FileAttente } from './file-attente';
 import './ecrans/scanner';
 import './ecrans/fiche';
 import './ecrans/panier';
+import './ecrans/session';
 import './ecrans/rangement';
 import './ecrans/catalogue';
 import './ecrans/reglages';
@@ -13,7 +14,7 @@ import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
 
-export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'catalogue' | 'reglages';
+export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session' | 'catalogue' | 'reglages';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -193,6 +194,15 @@ export class PanneauGardeManger extends LitElement {
     this.ecran = 'rangement';
   };
 
+  /** L'écran « Courses » vient d'ouvrir ou de clore une session côté
+   *  serveur. On relit `session/current` — c'est lui la vérité, pas ce que
+   *  le panneau croyait — puis on renvoie au scanner : ouvrir une session
+   *  n'a qu'un but, scanner en rayon ; la clore n'en laisse plus aucun. */
+  private surSessionChangee = async (): Promise<void> => {
+    await this.actualiserSession();
+    this.ecran = 'scanner';
+  };
+
   private surLigneAutonomeRangee = (evenement: CustomEvent<{ id: string }>): void => {
     this.enAttenteRangement = this.enAttenteRangement.filter((l) => l.id !== evenement.detail.id);
   };
@@ -288,6 +298,11 @@ export class PanneauGardeManger extends LitElement {
             Ranger (${lignesRangement.length})
           </button>
         ` : nothing}
+        ${this.ecran !== 'session' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('session')}>
+            Courses
+          </button>
+        ` : nothing}
         ${this.ecran !== 'catalogue' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('catalogue')}>Catalogue</button>
         ` : nothing}
@@ -310,9 +325,15 @@ export class PanneauGardeManger extends LitElement {
 
   static styles = css`
     :host { display: block; height: 100%; background: var(--primary-background-color); }
-    .navigation { display: flex; gap: 8px; padding: 8px 12px 0; }
+    /* flex-wrap : jusqu'à six boutons cohabitent ici (Scanner, Panier,
+       Ranger, Courses, Catalogue, Réglages). Sur 412 px de large ils ne
+       tiennent pas tous sur une ligne, et un dépassement horizontal fait
+       échouer le vérificateur de rendu — à juste titre. Ils passent donc à
+       la ligne plutôt que de rétrécir sous la cible de 48 px ou de tronquer
+       leur libellé. */
+    .navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px 0; }
     .nav-bouton {
-      flex: 1; min-height: 48px; border-radius: 8px; border: none; font-size: 0.95rem;
+      flex: 1 1 auto; min-height: 48px; min-width: 88px; border-radius: 8px; border: none; font-size: 0.95rem;
       background: var(--secondary-background-color); color: var(--primary-text-color);
     }
     .erreur-file {
@@ -357,6 +378,13 @@ export class PanneauGardeManger extends LitElement {
           @ligne-autonome-rangee=${this.surLigneAutonomeRangee} @termine=${this.surRangementTermine}
           @file-changee=${this.surFileChangee}>
         </home-stock-rangement>`;
+    }
+    if (this.ecran === 'session') {
+      return html`
+        <home-stock-session .donnees=${this.session} .connexion=${this.connexion}
+          .file=${this.file} .enAttente=${this.enAttente}
+          @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}>
+        </home-stock-session>`;
     }
     if (this.ecran === 'catalogue') {
       return html`

@@ -191,6 +191,15 @@ export class EcranRangement extends LitElement {
       void this.ecrire('home_stock/stock/add', {
         article_id: ligne.article_id, quantity: ligne.quantity, location_id: emplacementId,
         best_before: raccourci.date, price_per_base_unit: ligne.unit_price,
+        // Clé STABLE, dérivée de l'identité locale de la ligne : au sous-sol,
+        // un appui sur « +3 j » qui ne part pas laisse la ligne en place et
+        // on réappuie. Sans cette clé, `FileAttente.ajouter` en tirait une
+        // nouvelle au hasard à chaque appel, le contrôle d'idempotence de
+        // `add_stock` ne reconnaissait rien, et le retour du réseau créait
+        // DEUX lots et deux mouvements d'achat dans un journal en ajout
+        // seul. Le chemin session n'a jamais eu ce défaut : `store_line`
+        // dérive sa clé côté serveur de l'identifiant de ligne.
+        idempotency_key: `rangement:${ligne.id}`,
       }).then((reussi) => {
         terminer();
         // Un article autonome n'existe nulle part côté serveur : le signaler

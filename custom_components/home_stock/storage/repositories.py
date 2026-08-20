@@ -12,7 +12,8 @@ from ..const import COUNTED_REASONS
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
-    "days_after_opening", "reference_kcal", "active", "external_ref",
+    "days_after_opening", "default_shelf_life_days", "reference_kcal", "active",
+    "external_ref",
 )
 ARTICLE_FIELDS = (
     "brand", "label", "net_quantity", "image", "kcal_per_base_unit", "proteins",
@@ -59,7 +60,7 @@ def list_locations(conn) -> list[dict[str, Any]]:
 
 
 def list_aisles(conn) -> list[dict[str, Any]]:
-    """Aisles in walking order. Empty until Open Food Facts seeds them (lot 1)."""
+    """Aisles in walking order. Seeded by the m002 migration."""
     return _rows(conn.execute("SELECT * FROM aisle ORDER BY position, name"))
 
 
@@ -68,7 +69,9 @@ def insert_category(conn, name: str) -> int:
 
 
 def insert_aisle(conn, *, name: str, position: int = 0) -> int:
-    # Unused in lot 0; lot 1 seeds aisles from Open Food Facts categories.
+    # Not called by the integration itself: lot 1 seeds the aisle table from
+    # the migration (storage/migrations/m002_scan.py), not through here.
+    # Kept for tests and for a future by-shop ordering (lot 4).
     return _insert(conn, "aisle", {"name": name, "position": position})
 
 
@@ -85,8 +88,9 @@ def get_product(conn, product_id: int) -> dict[str, Any] | None:
 
 
 def find_product_by_name(conn, name: str) -> dict[str, Any] | None:
-    # Unused in lot 0; lot 1 needs it to match a scanned article to an
-    # existing product before offering to create a duplicate.
+    # Not called by the integration itself: lot 1 matches a scanned article
+    # to a product by score (domain/matching.py), not by exact name, and the
+    # duplicate-name case is caught by product.name's UNIQUE constraint.
     return _row(conn.execute("SELECT * FROM product WHERE name = ?", (name,)).fetchone())
 
 
@@ -208,7 +212,7 @@ def rescale_prices_for_article(conn, article_id: int, factor: float) -> None:
 
 
 def latest_price(conn, article_id: int) -> float | None:
-    # Unused in lot 0; lot 1 needs it to pre-fill the price field at scan time.
+    # Rank 3 of the price cascade (spec 11): the last price seen anywhere.
     row = conn.execute(
         "SELECT price_per_base_unit FROM price WHERE article_id = ?"
         " ORDER BY observed_on DESC, id DESC LIMIT 1",
@@ -505,12 +509,19 @@ def count_pending_lines_for_product(conn, product_id: int) -> int:
     as a promise about a quantity, not yet a batch — changing what the number
     means underneath it would lose stock with no trace the moment the line is
     put away.
+
+    Lines of a CLOSED session (`state = 'done'`) do not count. Closing a
+    session is how an abandoned trip is given up: whatever was never put
+    away then never will be. Counted, such a line blocked every future
+    conversion of its product forever — and no screen reaches it any more to
+    clear it by hand, since the panel only ever shows the current session.
     """
     row = conn.execute(
         """
         SELECT COUNT(*) AS n FROM shopping_line l
         JOIN article a ON a.id = l.article_id
-        WHERE a.product_id = ? AND l.stored_at IS NULL
+        JOIN shopping_session s ON s.id = l.session_id
+        WHERE a.product_id = ? AND l.stored_at IS NULL AND s.state <> 'done'
         """,
         (product_id,),
     ).fetchone()

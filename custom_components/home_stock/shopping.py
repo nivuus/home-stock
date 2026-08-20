@@ -102,6 +102,31 @@ class ShoppingService:
             if line["stored_at"]:
                 raise ShoppingError("Cette ligne est déjà rangée.")
             repo.update_line(conn, line_id, quantity=quantity, unit_price=unit_price)
+            if unit_price is not None and unit_price != line["unit_price"]:
+                # A price corrected at the till has to correct the observation
+                # the scan seeded, and a price typed here for the first time
+                # has to record one. Without this, a suggestion accepted at
+                # 0,004 €/g in the aisle and corrected to 0,006 €/g at the
+                # checkout left 0,004 recorded against that shop — at rank 1
+                # of the suggestion cascade (spec 11), reseeding the wrong
+                # figure on every later trip.
+                #
+                # A new observation rather than an UPDATE of the earlier row:
+                # `price` is a log of what was seen, nothing links a row to
+                # the line that wrote it, and both readings really were made.
+                # latest_price_in_store orders by observed_on then id, so the
+                # correction is what the cascade answers from now on.
+                #
+                # Guarded on an actual change of value: a replayed queue (the
+                # panel stamps every action with a key and replays in order)
+                # must not pile up identical rows.
+                session = repo.get_session(conn, line["session_id"])
+                repo.insert_price(
+                    conn, article_id=line["article_id"], observed_on=_now()[:10],
+                    price_per_base_unit=unit_price,
+                    store=session["store"] if session else None,
+                    source="manual",
+                )
             return self._line(conn, line_id)
 
     def remove_line(self, line_id: int) -> None:

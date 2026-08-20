@@ -149,9 +149,18 @@ def resolve_aisle(categories_tags: list[str] | None, off_source: str | None) -> 
     TAG_TO_AISLE is consulted only for 'food' source; non-food sources go
     straight to SOURCE_TO_AISLE to avoid cross-database contamination (e.g.,
     en:Creams on beauty is a hand cream, not dairy).
+
+    A tag that is not a string is skipped rather than crashing: this runs on
+    whatever Open Food Facts happens to have stored, and `map_article`
+    promises never to raise. A `null` or a number inside `categories_tags`
+    used to reach the person scanning as Home Assistant's opaque "Unknown
+    error", with the whole scan lost — instead of one ignored tag.
     """
+    tags = categories_tags if isinstance(categories_tags, list) else []
     if off_source == "food":
-        for tag in reversed(categories_tags or []):
+        for tag in reversed(tags):
+            if not isinstance(tag, str):
+                continue
             normalized_tag = tag.lower().replace(" ", "-")
             aisle = TAG_TO_AISLE.get(normalized_tag)
             if aisle is not None:

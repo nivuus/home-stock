@@ -302,12 +302,38 @@ La valeur proposée au scan est la première disponible dans cet ordre :
 
 1. le dernier prix connu de cet article **dans le magasin de la session en cours** ;
 2. **Open Prices** — `GET https://prices.openfoodfacts.org/api/v1/prices?product_code=<ean>&order_by=-date&size=5`,
-   la plus récente en euros, ramenée à l'unité de base par le poids net. Timeout 5 s, échec
-   silencieux : un prix suggéré n'est pas une donnée dont dépend le rangement ;
+   la plus récente en euros, **ramenée à l'unité de base selon l'unité de suivi du produit**
+   (voir ci-dessous). Timeout 5 s, échec silencieux : un prix suggéré n'est pas une donnée
+   dont dépend le rangement ;
 3. le dernier prix connu, tous magasins confondus ;
 4. rien — et c'est le seul moment où le pavé numérique s'ouvre.
 
-Le magasin se choisit parmi ceux déjà utilisés, présentés en pastilles, ou se saisit.
+**Open Prices donne le prix d'un PAQUET.** Le diviseur qui le ramène à l'unité de base dépend
+de `product.base_unit`, jamais de la simple présence d'un poids net :
+
+- `g` / `ml` : prix du paquet **divisé par le poids net** (celui d'Open Prices s'il en porte
+  un, sinon celui de l'article). Sans poids utilisable, aucune suggestion — on ne devine pas
+  un diviseur ;
+- `piece` : **le paquet EST l'unité, aucun diviseur.** Diviser ici transformait 2,50 € de
+  yaourts (`net_quantity` 125) en une suggestion de 0,02 € le pot ; accepter cette suggestion
+  écrivait un coût 125 fois trop petit dans un journal en ajout seul, où un chiffre faux ne se
+  corrige pas, il se compense.
+
+C'est exactement la règle que le panneau applique déjà à son champ de prix
+(`frontend/src/ecrans/fiche.ts`) : les deux côtés doivent dire la même chose, sans quoi le
+chiffre affiché et le chiffre enregistré divergent.
+
+**Un prix n'est jamais négatif**, sur aucune surface d'écriture — `stock/add`,
+`session/add_line`, `session/update_line`, le service `home_stock.add_stock`, et la lecture
+d'Open Prices. Zéro reste valide : un article gratuit est une observation réelle.
+
+**Un prix corrigé corrige son observation.** `add_line` inscrit dans `price` le prix relevé en
+rayon ; `update_line` en inscrit une nouvelle dès que la valeur change — sans quoi une
+suggestion acceptée à 0,004 €/g et corrigée à 0,006 €/g en caisse laissait 0,004 enregistré
+contre ce magasin, en tête de la cascade, pour tous les voyages suivants.
+
+Le magasin se choisit parmi ceux déjà utilisés, présentés en pastilles, ou se saisit —
+`home_stock/stores/list` les rend (voir 13.1).
 
 ## 12. La session de courses
 
@@ -328,7 +354,16 @@ pré-sélectionné, DLC au bouton. C'est **là**, et pas avant, que le lot est c
 mouvement `purchase` est écrit — clé d'idempotence `shopping_line:<id>`.
 
 **Hors session.** Un scan à la maison sans session ouverte va directement au rangement : lot
-créé sur-le-champ. C'est le mode le plus court, celui d'un article rapporté seul.
+créé sur-le-champ. C'est le mode le plus court, celui d'un article rapporté seul. Son rangement
+porte une clé d'idempotence **stable**, dérivée de l'identité locale de la ligne : un réessai
+après une coupure réseau est la même action, jamais un second lot.
+
+**Abandonner un voyage.** `session/close` clôt la session en cours, quelles que soient ses
+lignes non rangées — c'est le seul moyen d'en rouvrir une, l'index partiel refusant une
+seconde session `shopping`. Les lignes ainsi abandonnées **ne comptent plus** dans le contrôle
+qui interdit une conversion d'unité tant qu'un scan attend son rangement : elles ne pourront
+jamais être ni rangées ni supprimées, et bloquaient sinon la conversion de leur produit pour
+toujours.
 
 **Durées de conservation.** Les boutons de DLC proposent `product.default_shelf_life_days`
 quand il existe, sinon `+3 j / +1 sem / +1 mois / sans DLC`. Chaque saisie met à jour la durée
@@ -340,7 +375,10 @@ une saisie aberrante ne déplace pas le défaut.
 ### 13.1 Commandes websocket
 
 Lecture (lot 0, inchangées) : `products/list`, `product/get`, `batches/list`, `movements/list`,
-`locations/list`, `aisles/list`, `subscribe`.
+`locations/list`, `aisles/list`, `subscribe`. Le lot 1 ajoute une lecture :
+`home_stock/stores/list` — les enseignes déjà utilisées, pour les pastilles de l'écran
+« Courses ». (`session/current` porte la même liste, mais répond `null` quand aucune session
+n'existe, c'est-à-dire précisément au moment où il faut en choisir une.)
 
 Écriture, ajoutées par le lot 1 :
 
@@ -372,7 +410,7 @@ Deux capteurs nouveaux, pour Lovelace et pour le vocal du lot 6 :
 
 ## 14. Le panneau
 
-Six écrans, un seul geste par action, **aucun appui long** — la contrainte est celle des
+Sept écrans, un seul geste par action, **aucun appui long** — la contrainte est celle des
 tablettes de la maison et elle vaut ici aussi.
 
 | Écran | Ce qu'on y fait |
@@ -380,6 +418,7 @@ tablettes de la maison et elle vaut ici aussi.
 | Scanner | Le bouton de scan, la dernière fiche lue, la bannière de session si elle est ouverte |
 | Fiche | Photo, nom, marque, poids net, Nutri-Score, kcal ; rattachement au produit ; prix ; quantité ; l'action principale suit le mode — « Au panier » ou « Ranger » |
 | Panier | Les lignes triées par rayon, le total courant, la correction d'une ligne, le passage en caisse |
+| Courses | Ouvrir une session (magasin en pastilles ou saisi) et clore celle en cours, en deux appuis |
 | Rangement | Les lignes en attente, groupées par emplacement, DLC au bouton |
 | Catalogue | Recherche, liste dense, édition d'un produit — c'est l'écran du PC |
 | Réglages | Ordre des rayons, emplacements, resynchronisation OFF |

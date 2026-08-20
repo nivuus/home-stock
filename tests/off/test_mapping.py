@@ -387,3 +387,13 @@ def test_the_sister_databases_map_too():
     for entry in _load("soeurs.json").values():
         mapped = map_article(entry["product"], entry["off_source"])
         assert mapped.off_source in ("products", "beauty", "petfood")
+
+
+def test_map_article_survives_a_malformed_categories_tags():
+    """The module's promise is that it never raises: a non-string inside
+    `categories_tags` must cost one ignored tag, not the whole scan."""
+    mapped = map_article({"code": "1", "product_name_fr": "Emmental râpé",
+                          "categories_tags": [None, "en:cheeses", 7]}, "food")
+
+    assert mapped.aisle == "Fromages"
+    assert mapped.label == "Emmental râpé"

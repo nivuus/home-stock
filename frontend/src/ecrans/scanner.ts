@@ -51,9 +51,12 @@ export class EcranScanner extends LitElement {
 
   private async lancerScan(): Promise<void> {
     const scanner = this.obtenirScanner();
-    if (scanner.constructor.name === 'ScannerClavier') {
+    if (scanner.voie === 'clavier') {
       // Ni appareil photo système, ni BarcodeDetector : la saisie manuelle
       // EST le scan, ici — pas la peine de demander un second appui.
+      // Le test porte sur `voie`, une donnée portée par l'objet, et jamais
+      // sur `constructor.name` : `terser` renomme les classes au build, ce
+      // qui rendait cette branche morte dans le bundle déployé.
       this.saisieOuverte = true;
       return;
     }

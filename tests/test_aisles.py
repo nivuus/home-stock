@@ -115,3 +115,13 @@ def test_non_food_sources_skip_tag_table_to_avoid_cross_contamination():
 )
 def test_known_tags_map_where_a_shopper_expects(tag, expected):
     assert resolve_aisle(["en:foods", tag], "food") == expected
+
+
+def test_a_tag_that_is_not_a_string_is_skipped_rather_than_crashing():
+    """Open Food Facts is collaborative: `categories_tags` has held a null.
+    `map_article` promises never to raise, and a crash here reached the
+    person scanning as Home Assistant's opaque "Unknown error", losing the
+    whole scan instead of one unusable tag."""
+    assert resolve_aisle([None, "en:cheeses", 42], "food") == "Fromages"
+    assert resolve_aisle([None, 42], "food") == "Épicerie salée"
+    assert resolve_aisle("pas une liste", "beauty") == "Hygiène et beauté"

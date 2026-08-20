@@ -49,6 +49,26 @@ def finite_float(value: Any) -> float:
     return number
 
 
+def non_negative_float(value: Any) -> float:
+    """A price: finite, and never below zero.
+
+    A negative price is nobody's observation. Left unchecked it reached the
+    append-only movement journal as a negative cost — `stock/add` with
+    `price_per_base_unit: -2.5` answered success, wrote -250 € against a
+    purchase, and `sensor.home_stock_stock_value` read -250. A wrong number
+    written there cannot be corrected, only offset.
+
+    Zero stays valid: a free item (a sample, a gift, a two-for-one second
+    pack) is a real observation, and that distinction is load-bearing
+    elsewhere in this lot — see off/open_prices._price, which rejects a
+    negative Open Prices figure and keeps a zero one for the same reason.
+    """
+    number = finite_float(value)
+    if number < 0:
+        raise vol.Invalid(f"expected a number of at least 0, got {number!r}")
+    return number
+
+
 def bounded_int(value: Any) -> int:
     """A whole number SQLite can actually store as an INTEGER (signed
     64-bit). `vol.Coerce(int)` (and Home Assistant's own `cv.positive_int`,

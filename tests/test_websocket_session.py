@@ -203,3 +203,119 @@ async def test_the_offline_queue_s_idempotency_key_is_accepted_on_every_line_wri
     removed = await _send(client, 8, "home_stock/session/remove_line",
                           line_id=second_line["result"]["id"], idempotency_key="remove-1")
     assert removed["success"] is True
+
+
+async def test_a_price_corrected_at_the_till_corrects_the_observation(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """add_line records the price seen in the aisle; update_line used to
+    record nothing at all. A suggestion accepted at 0,004 €/g and corrected
+    to 0,006 €/g at the checkout therefore left 0,004 recorded against that
+    shop, at rank 1 of the suggestion cascade, for every later trip."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=0.004, idempotency_key="scan-1")
+    await _send(client, 3, "home_stock/session/update_line",
+                line_id=added["result"]["id"], unit_price=0.006)
+
+    def latest() -> float | None:
+        return repo.latest_price_in_store(
+            entry.runtime_data.manager.db.read(), 1, "Leclerc")
+
+    assert await hass.async_add_executor_job(latest) == 0.006
+
+
+async def test_a_price_typed_only_at_the_till_is_recorded_at_all(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A line added without a price (nothing was suggested, nothing typed in
+    the aisle) and priced later in the cart used to record no observation
+    whatsoever — the shop's price history simply never learned it."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Lidl")
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=None, idempotency_key="scan-1")
+    await _send(client, 3, "home_stock/session/update_line",
+                line_id=added["result"]["id"], unit_price=0.003)
+
+    def rows() -> list[tuple]:
+        return [tuple(r) for r in entry.runtime_data.manager.db.read().execute(
+            "SELECT price_per_base_unit, store FROM price ORDER BY id").fetchall()]
+
+    assert await hass.async_add_executor_job(rows) == [(0.003, "Lidl")]
+
+
+async def test_re_sending_the_same_price_does_not_pile_up_observations(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The panel replays its offline queue in order, so the same update_line
+    can arrive twice. An unchanged price must not write a second row."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Lidl")
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=0.004, idempotency_key="scan-1")
+    line_id = added["result"]["id"]
+    await _send(client, 3, "home_stock/session/update_line", line_id=line_id,
+                unit_price=0.006, idempotency_key="edit-1")
+    await _send(client, 4, "home_stock/session/update_line", line_id=line_id,
+                unit_price=0.006, idempotency_key="edit-1")
+
+    def count() -> int:
+        return entry.runtime_data.manager.db.read().execute(
+            "SELECT COUNT(*) FROM price").fetchone()[0]
+
+    assert await hass.async_add_executor_job(count) == 2
+
+
+async def test_a_negative_price_is_refused_on_every_session_write(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    refused = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                          quantity=500, unit_price=-2.5, idempotency_key="scan-1")
+    assert refused["success"] is False
+
+    added = await _send(client, 3, "home_stock/session/add_line", article_id=1,
+                        quantity=500, unit_price=0.004, idempotency_key="scan-2")
+    corrected = await _send(client, 4, "home_stock/session/update_line",
+                            line_id=added["result"]["id"], unit_price=-1.0)
+    assert corrected["success"] is False
+
+    def prices() -> list[float]:
+        return [r[0] for r in entry.runtime_data.manager.db.read().execute(
+            "SELECT price_per_base_unit FROM price").fetchall()]
+
+    assert await hass.async_add_executor_job(prices) == [0.004]
+
+
+async def test_closing_a_session_stops_its_leftovers_blocking_a_conversion(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A shopping line never put away used to block its product's unit
+    conversion forever: the check counted every line with `stored_at IS
+    NULL`, whatever its session's state, and a line of a closed session can
+    never be removed. Giving up a trip is what `session/close` is for."""
+    await setup_entry(with_piece_product=True)
+    client = await hass_ws_client(hass)
+
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                quantity=6, unit_price=None, idempotency_key="scan-1")
+
+    blocked = await _send(client, 3, "home_stock/product/convert_unit", product_id=1,
+                          to_unit="g", reference_quantity=125, dry_run=True)
+    assert blocked["success"] is False
+    assert "ligne(s) de courses" in blocked["error"]["message"]
+
+    closed = await _send(client, 4, "home_stock/session/close")
+    assert closed["success"] is True
+    assert closed["result"]["state"] == "done"
+
+    after = await _send(client, 5, "home_stock/product/convert_unit", product_id=1,
+                        to_unit="g", reference_quantity=125, dry_run=True)
+    assert after["success"] is True

@@ -63,6 +63,12 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # rarely exercised in practice.
     "home_stock/product/update",
     "home_stock/aisles/reorder",
+    # Final fix wave: the « Courses » screen is what opens and closes a
+    # shopping session. Both writes go through the same offline queue as
+    # every other — the car park of a shop has no more signal than its
+    # aisles — so both schemas have to accept the key the queue stamps.
+    "home_stock/session/start",
+    "home_stock/session/close",
 }
 
 
@@ -152,8 +158,10 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     tested.add("home_stock/aisles/reorder")
 
     # --- the shopping-session lifecycle, exactly as the panel drives it -
-    started = await _send(client, _id(), "home_stock/session/start", store="Leclerc")
-    assert started["success"] is True
+    started = await _send(client, _id(), "home_stock/session/start", store="Leclerc",
+                          idempotency_key="contract-session-start")
+    assert started["success"] is True, started.get("error")
+    tested.add("home_stock/session/start")
 
     line_a = await _send(
         client, _id(), "home_stock/session/add_line", article_id=1, quantity=500,
@@ -198,6 +206,19 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert stored_line["success"] is True, stored_line.get("error")
     tested.add("home_stock/session/store_line")
+
+    # `close` needs a session to close, and the one above closed itself the
+    # moment its last line was put away (ShoppingService.store_line). So the
+    # next trip is opened and then abandoned — which is precisely what
+    # `close` is for, and the only way to reopen one afterwards.
+    reopened = await _send(client, _id(), "home_stock/session/start", store="Lidl",
+                           idempotency_key="contract-session-start-2")
+    assert reopened["success"] is True, reopened.get("error")
+
+    closed = await _send(client, _id(), "home_stock/session/close",
+                         idempotency_key="contract-session-close")
+    assert closed["success"] is True, closed.get("error")
+    tested.add("home_stock/session/close")
 
     # Every command the front end can actually queue was exercised — not a
     # subset the test author remembered to write a case for.

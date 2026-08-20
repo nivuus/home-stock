@@ -58,6 +58,10 @@ export class FileAttente {
    *  panne de transport n'y apparaît jamais : elle n'a pas encore de sort,
    *  elle est toujours en file. */
   private resultats = new Map<string, ResultatAction>();
+  /** Le rejeu en cours, s'il y en a un : c'est le verrou qui sérialise les
+   *  trois déclencheurs de `rejouer()` (voir sa documentation). `null` quand
+   *  rien n'est en vol. */
+  private enVol: Promise<void> | null = null;
 
   constructor(private stockage: Storage, private envoyer: Envoyeur, private surRefus?: SurRefus) {
     try {
@@ -84,14 +88,49 @@ export class FileAttente {
     return this.actions.length;
   }
 
-  /** Rejoue dans l'ordre. Une panne de transport arrête tout et garde la file
+  /** Rejoue dans l'ordre, **un rejeu à la fois**.
+   *
+   *  Trois déclencheurs appellent cette méthode : le `connectedCallback` du
+   *  panneau, l'écouteur `online`, et le `ecrire()` de chaque écran. Sans
+   *  sérialisation, deux boucles pouvaient lire toutes les deux
+   *  `actions[0]`, l'envoyer chacune, puis faire chacune un `shift()` — la
+   *  seconde retirant une action DIFFÉRENTE, ajoutée entre-temps, qui n'a
+   *  donc jamais été envoyée, alors que son appelant s'entend répondre
+   *  qu'elle est toujours en file. La victime concrète était la correction
+   *  de poids posée par la fiche (`article/update`), qui n'a aucun rejeu à
+   *  elle.
+   *
+   *  Un appel pendant un rejeu en cours attend donc son tour, puis rejoue à
+   *  son tour : quand il retombe, sa propre action a bien été tentée. C'est
+   *  aussi ce qui ferme la course entre `viderResultats()` et un
+   *  `resultatDe()` concurrent — les continuations s'exécutent dans l'ordre
+   *  où elles ont été posées, plus dans l'ordre où deux boucles se
+   *  bousculent. */
+  async rejouer(): Promise<void> {
+    const precedent = this.enVol;
+    const courant = (async () => {
+      // Un rejeu ne rejette jamais de lui-même ; le `catch` protège d'un
+      // stockage local qui lèverait, pour qu'une panne d'un rejeu n'empêche
+      // pas les suivants d'avoir lieu.
+      if (precedent) await precedent.catch(() => {});
+      await this.boucle();
+    })();
+    this.enVol = courant;
+    try {
+      await courant;
+    } finally {
+      if (this.enVol === courant) this.enVol = null;
+    }
+  }
+
+  /** Le rejeu lui-même. Une panne de transport arrête tout et garde la file
    *  intacte en tête (on réessaiera). Un refus du serveur, en revanche, ne
    *  changera jamais d'avis à un prochain essai : le garder en tête bloquerait
    *  tout ce qui le suit pour toujours — un seul `+` refusé au début d'un
    *  trajet couperait la totalité du panier. On le retire donc, on prévient
    *  l'appelant d'un message TOUJOURS montrable (voir `messageAffichable` —
    *  jamais le texte brut d'un refus de schéma), et on continue avec le reste. */
-  async rejouer(): Promise<void> {
+  private async boucle(): Promise<void> {
     while (this.actions.length) {
       const action = this.actions[0];
       const cle = action.charge.idempotency_key as string | undefined;
@@ -131,7 +170,11 @@ export class FileAttente {
    *  (un écran déjà démonté, une page précédente) ne lira donc jamais le
    *  sort. Sans ce nettoyage explicite ces entrées-là resteraient pour
    *  toujours : `resultatDe` ne les retire que si quelqu'un les demande, et
-   *  ici personne ne le fera jamais. */
+   *  ici personne ne le fera jamais.
+   *
+   *  Cet appel ne peut plus emporter le résultat d'un écran qui l'attendait :
+   *  `rejouer()` sérialise les rejeux, donc le `.then()` d'un écran s'exécute
+   *  toujours avant le rejeu suivant, jamais au milieu. */
   viderResultats(): void {
     this.resultats.clear();
   }

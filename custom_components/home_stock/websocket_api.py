@@ -4,7 +4,6 @@ changes."""
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from dataclasses import asdict
 from functools import partial
@@ -20,12 +19,16 @@ from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
 from .domain.units import UnitError
+from .messages import french_error
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
 from .off.mapping import map_article
 from .off.open_prices import latest_price
 from .shopping import ShoppingError
 from .storage import repositories as repo
-from .validators import MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date, preview
+from .validators import (
+    MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date,
+    non_negative_float, preview,
+)
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
 NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
@@ -46,6 +49,7 @@ NOT_LOADED_MESSAGE = "Le garde-manger n'est pas configuré."
 # the older surface must not be the weaker one. Aliased under their old
 # private names so none of this module's call sites needed to change.
 _finite_float = finite_float
+_non_negative_float = non_negative_float
 _bounded_int = bounded_int
 _bounded_text = bounded_text
 _iso_date = iso_date
@@ -93,9 +97,12 @@ def _strict_boolean(value: Any) -> bool:
 
 
 _BASE_UNIT: Final = vol.In(BASE_UNITS)
-_TEXT: Final = _bounded_text                                         # free, nullable text, capped
 # A quantity cannot be negative: a person never means "-5 g" or "-5 kcal".
-_NON_NEGATIVE_FLOAT: Final = vol.Any(vol.All(_finite_float, vol.Range(min=0)), None)
+# Nor can a PRICE, on any surface that writes one: a negative price reaches
+# the append-only journal as a negative cost, which can then only be offset,
+# never corrected. Zero stays valid on both counts — a free item is a real
+# observation.
+_NON_NEGATIVE_FLOAT: Final = vol.Any(_non_negative_float, None)
 _NON_NEGATIVE_INT: Final = vol.Any(vol.All(_bounded_int, vol.Range(min=0)), None)
 # category_id/aisle_id/default_location_id reference an INTEGER PRIMARY KEY,
 # which SQLite starts at 1: 0 or a negative id can never be a real row.
@@ -134,29 +141,6 @@ NEW_PRODUCT_SCHEMA: Final[dict[str, Callable[[Any], Any]]] = {
     "base_unit": _BASE_UNIT,
 }
 NEW_PRODUCT_REQUIRED: Final = ("name", "base_unit")
-
-# English message the domain/application layer raised, matched and turned
-# into the French sentence the panel actually shows. The domain is right to
-# raise in English (the code is English); this is the seam where it becomes
-# what a person reads — the same seam services._run already is for the
-# voice/service path, so the vocabulary below matches its wording rather
-# than inventing a second one.
-_DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Match], str]], ...]] = (
-    (re.compile(r"^unknown article (\d+)$"), "not_found",
-     lambda m: f"Article {m.group(1)} inconnu."),
-    (re.compile(r"^no article (\d+)$"), "not_found",
-     lambda m: f"Article {m.group(1)} inconnu."),
-    (re.compile(r"^no product (\d+)$"), "not_found",
-     lambda m: f"Produit {m.group(1)} inconnu."),
-    (re.compile(r"^unknown or closed batch (\d+)$"), "not_found",
-     lambda m: f"Lot {m.group(1)} inconnu ou déjà clôturé."),
-    (re.compile(r"^unknown batch (\d+)$"), "not_found",
-     lambda m: f"Lot {m.group(1)} inconnu."),
-    (re.compile(r"^quantity must not be negative, got (.+)$"), "invalid_value",
-     lambda m: f"La quantité ne peut pas être négative (reçu : {m.group(1)})."),
-    (re.compile(r"^packaging quantity must be positive, got (.+)$"), "invalid_value",
-     lambda m: f"Le conditionnement doit être positif (reçu : {m.group(1)})."),
-)
 
 
 def _runtime(hass: HomeAssistant):
@@ -223,14 +207,14 @@ def _validate_new_product(new_product: dict[str, Any],
 def _send_domain_error(connection: websocket_api.ActiveConnection, msg_id: int,
                        err: Exception) -> None:
     """Translate a LookupError/UnitError/ValueError from the domain or
-    application layer into a French websocket error."""
-    text = str(err)
-    for pattern, code, formatter in _DOMAIN_ERROR_PATTERNS:
-        match = pattern.match(text)
-        if match:
-            connection.send_error(msg_id, code, formatter(match))
-            return
-    connection.send_error(msg_id, "invalid_value", "Valeur invalide.")
+    application layer into a French websocket error.
+
+    The vocabulary itself lives in `messages.py`, shared with services._run:
+    the same English exception must not become two different French
+    sentences depending on whether it was the panel or a script that asked.
+    """
+    code, text = french_error(err)
+    connection.send_error(msg_id, code, text)
 
 
 def _send_integrity_error(connection: websocket_api.ActiveConnection, msg_id: int,
@@ -291,6 +275,26 @@ async def aisles_list(hass, connection, msg) -> None:
         return
     aisles = await _read(hass, partial(repo.list_aisles, runtime.manager.db.read()))
     connection.send_result(msg["id"], {"aisles": aisles})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "home_stock/stores/list"})
+@websocket_api.async_response
+async def stores_list(hass, connection, msg) -> None:
+    """The shops already used, most recent first — the chips the panel offers
+    when opening a shopping session (spec 11: « Le magasin se choisit parmi
+    ceux déjà utilisés, présentés en pastilles, ou se saisit »).
+
+    `home_stock/session/current` carries the very same list, but only when a
+    session exists — and it answers `null` when none does, which is exactly
+    the moment a shopper needs to pick a shop. Hence this read, alongside
+    locations/list and aisles/list.
+    """
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    stores = await _read(hass, partial(repo.list_stores, runtime.manager.db.read()))
+    connection.send_result(msg["id"], {"stores": stores})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "home_stock/batches/list"})
@@ -396,7 +400,7 @@ async def lookup(hass, connection, msg) -> None:
     if known is not None:
         product = await _read(hass, partial(
             repo.get_product, runtime.manager.db.read(), known["product_id"]))
-        price = await _suggest_price(hass, runtime, known, code)
+        price = await _suggest_price(hass, runtime, known, product, code)
         connection.send_result(msg["id"], {
             "code": code, "known": True, "article": known, "product": product,
             "off": None, "off_raw": None, "off_source": None,
@@ -430,7 +434,7 @@ async def lookup(hass, connection, msg) -> None:
         "off_source": result.record.off_source,
         "candidates": [asdict(c) for c in found],
         "preselected_product_id": chosen.product_id if chosen else None,
-        "price": await _open_prices_only(hass, runtime, code, mapped.net_quantity),
+        "price": await _open_prices_only(hass, runtime, code, mapped),
         "conversion_offer": None, "throttled": False, "timed_out": False,
     })
 
@@ -694,7 +698,7 @@ async def product_convert_unit(hass, connection, msg) -> None:
         connection.send_error(msg["id"], "conversion_refused",
                               _translate_conversion_error(err, product))
         return
-    except LookupError as err:
+    except LookupError:
         connection.send_error(msg["id"], "not_found",
                               f"produit {msg['product_id']} inconnu")
         return
@@ -716,7 +720,7 @@ async def product_convert_unit(hass, connection, msg) -> None:
     vol.Required("quantity"): _finite_float,
     vol.Required("location_id"): _bounded_int,
     vol.Optional("best_before"): _iso_date,
-    vol.Optional("price_per_base_unit"): vol.Any(_finite_float, None),
+    vol.Optional("price_per_base_unit"): _NON_NEGATIVE_FLOAT,
     vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
@@ -804,6 +808,13 @@ def _shopping_error(connection: websocket_api.ActiveConnection, msg: dict[str, A
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/session/start",
     vol.Optional("store"): _bounded_text,
+    # See session/update_line: accepted and ignored. The panel's offline
+    # queue stamps this key on EVERY action uniformly (FileAttente.ajouter),
+    # opening a session included — a schema that refused it here would make
+    # the queue treat a bad-request refusal exactly like being offline and
+    # never get past it. Nothing to deduplicate: the partial unique index
+    # already makes a second open session impossible.
+    vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
 async def session_start(hass, connection, msg) -> None:
@@ -835,7 +846,7 @@ async def session_current(hass, connection, msg) -> None:
     vol.Required("type"): "home_stock/session/add_line",
     vol.Required("article_id"): _bounded_int,
     vol.Required("quantity"): _finite_float,
-    vol.Optional("unit_price"): vol.Any(_finite_float, None),
+    vol.Optional("unit_price"): _NON_NEGATIVE_FLOAT,
     vol.Optional("idempotency_key"): _bounded_text,
 })
 @websocket_api.async_response
@@ -872,7 +883,7 @@ async def session_add_line(hass, connection, msg) -> None:
     vol.Required("type"): "home_stock/session/update_line",
     vol.Required("line_id"): _bounded_int,
     vol.Optional("quantity"): vol.Any(_finite_float, None),
-    vol.Optional("unit_price"): vol.Any(_finite_float, None),
+    vol.Optional("unit_price"): _NON_NEGATIVE_FLOAT,
     # Accepted like every other write, and ignored: an edit is last-write-win,
     # nothing here to deduplicate. But the panel's offline queue stamps this
     # key onto EVERY action uniformly (see FileAttente.ajouter) — a schema
@@ -980,7 +991,13 @@ async def session_store_line(hass, connection, msg) -> None:
     connection.send_result(msg["id"], result)
 
 
-@websocket_api.websocket_command({vol.Required("type"): "home_stock/session/close"})
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/session/close",
+    # See session/start: the queue stamps this key on every action, closing
+    # a session included. Accepted and ignored — closing an already closed
+    # session simply finds none open and answers a French refusal.
+    vol.Optional("idempotency_key"): _bounded_text,
+})
 @websocket_api.async_response
 async def session_close(hass, connection, msg) -> None:
     runtime = _runtime(hass)
@@ -1026,13 +1043,18 @@ def _translate_conversion_error(err: ConversionError, product: dict[str, Any]) -
     return "Conversion refusée : configuration invalide."
 
 
-async def _suggest_price(hass, runtime, article, code) -> dict[str, Any]:
+async def _suggest_price(hass, runtime, article, product, code) -> dict[str, Any]:
     """The price cascade for an article already in the catalogue.
 
     `code` is passed explicitly rather than read off `article`:
     repo.find_article_by_barcode's `SELECT a.*` never returns a `code`
     column, so reading `article.get("code")` would silently skip Open
     Prices for every known article.
+
+    `product` is passed for its `base_unit`: an Open Prices figure is the
+    price of a PACK, and only a `g`/`ml` product divides it by a net weight
+    (see off/open_prices.latest_price). Without the product there is no way
+    to know which, so Open Prices is skipped rather than guessed at.
     """
     conn = runtime.manager.db.read()
     session = await _read(hass, partial(repo.current_session, conn))
@@ -1041,19 +1063,27 @@ async def _suggest_price(hass, runtime, article, code) -> dict[str, Any]:
                                           article["id"], store))) if store else None
     last_known = await _read(hass, partial(repo.latest_price, conn, article["id"]))
     from_open_prices = None
-    if in_store is None:
+    if in_store is None and product is not None:
         from_open_prices = await latest_price(
-            runtime.transport, code,
+            runtime.transport, code, base_unit=product["base_unit"],
             net_quantity=article.get("net_quantity"), user_agent=runtime.user_agent)
     return asdict(suggest_price(in_store=in_store, open_prices=from_open_prices,
                                 last_known=last_known, store=store))
 
 
-async def _open_prices_only(hass, runtime, code, net_quantity) -> dict[str, Any]:
-    """An article that does not exist yet has no history: only Open Prices can help."""
+async def _open_prices_only(hass, runtime, code, mapped) -> dict[str, Any]:
+    """An article that does not exist yet has no history: only Open Prices can help.
+
+    The product does not exist yet either, so the unit it would be created
+    in is the one spec section 8.4 deduces from OFF's own unit — `g` -> `g`,
+    `ml` -> `ml`, anything else (including no usable net quantity at all) ->
+    `piece`. That is the same deduction the panel pre-selects on the
+    creation form, so the suggested price matches the unit the field is
+    labelled in.
+    """
     from_open_prices = await latest_price(
-        runtime.transport, code,
-        net_quantity=net_quantity, user_agent=runtime.user_agent)
+        runtime.transport, code, base_unit=mapped.net_unit or "piece",
+        net_quantity=mapped.net_quantity, user_agent=runtime.user_agent)
     return asdict(suggest_price(in_store=None, open_prices=from_open_prices,
                                 last_known=None, store=None))
 
@@ -1061,7 +1091,7 @@ async def _open_prices_only(hass, runtime, code, net_quantity) -> dict[str, Any]
 def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the read and write commands once."""
     for command in (products_list, product_get, locations_list, aisles_list,
-                    batches_list, movements_list, subscribe, lookup,
+                    stores_list, batches_list, movements_list, subscribe, lookup,
                     article_create, article_update, product_update,
                     product_convert_unit, stock_add, aisles_reorder,
                     session_start, session_current, session_add_line,

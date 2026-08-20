@@ -24,9 +24,29 @@ OPEN_PRICES_TIMEOUT = 5.0
 CURRENCY = "EUR"
 
 
-async def latest_price(transport: OffTransport, code: str, *, net_quantity: float | None,
-                       user_agent: str, timeout: float = OPEN_PRICES_TIMEOUT) -> float | None:
-    """The most recent euro price for this barcode, per base unit."""
+async def latest_price(transport: OffTransport, code: str, *, base_unit: str,
+                       net_quantity: float | None, user_agent: str,
+                       timeout: float = OPEN_PRICES_TIMEOUT) -> float | None:
+    """The most recent euro price for this barcode, per base unit.
+
+    Open Prices records the price of a PACK. What one base unit of it costs
+    therefore depends on how the product is tracked here, exactly as it does
+    for the panel's own price field (see the rule at the top of
+    frontend/src/ecrans/fiche.ts):
+
+    - `g`/`ml`: the pack price divided by the pack's net quantity. Without a
+      usable quantity there is no way to know what one gram costs, and
+      nothing is suggested.
+    - `piece`: the pack IS the unit — no divisor. Dividing here by a net
+      weight turned 2,50 € of yoghurts (`net_quantity` 125) into a suggested
+      0,02 € per pot, and accepting that suggestion wrote a cost 125 times
+      too small into the append-only journal.
+
+    `base_unit` is required rather than defaulted on purpose: a caller that
+    does not know how the product is tracked cannot bring a pack price down
+    to a base unit at all, and must say so instead of getting a plausible
+    wrong answer.
+    """
     url = f"{OPEN_PRICES_URL}?product_code={code}&order_by=-date&size=5"
     try:
         status, payload = await transport.get_json(
@@ -51,6 +71,10 @@ async def latest_price(transport: OffTransport, code: str, *, net_quantity: floa
         price = _price(item)
         if price is None:
             continue
+        if base_unit == "piece":
+            # The pack is the unit: the figure Open Prices holds is already
+            # the price per base unit.
+            return price
         quantity = _pack_quantity(item, net_quantity)
         if quantity is None:
             continue

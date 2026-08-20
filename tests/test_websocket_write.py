@@ -1214,3 +1214,117 @@ async def test_updating_an_unknown_product_is_refused_instead_of_answering_succe
 
     assert answer["success"] is False
     assert answer["error"]["code"] == "not_found"
+
+
+async def test_open_prices_is_not_divided_by_the_net_weight_of_a_piece_product(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """Piece-tracked yoghurts, `net_quantity` 125, an Open Prices record of
+    2,50 € the pack: the suggestion under « Prix payé (€ / unité) » must be
+    2,50, not 0,02. Accepting 0,02 wrote a cost 125 times too small into the
+    append-only journal, where it can only be offset, never corrected."""
+    entry = await setup_entry(with_piece_product=True)
+    entry.runtime_data.transport = FakeTransport(payload={"items": [
+        {"price": 2.5, "currency": "EUR", "date": "2026-08-10",
+         "product": {"product_quantity": 125}},
+    ]})
+
+    def _link() -> None:
+        with entry.runtime_data.manager.db.write() as conn:
+            repo.link_barcode(conn, "3033490004743", 1)
+
+    await hass.async_add_executor_job(_link)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/lookup",
+                            "code": "3033490004743"})
+    result = (await client.receive_json())["result"]
+
+    assert result["known"] is True
+    assert result["product"]["base_unit"] == "piece"
+    assert result["price"]["source"] == "open_prices"
+    assert result["price"]["price_per_base_unit"] == pytest.approx(2.5)
+
+
+async def test_open_prices_still_divides_for_a_weighed_product(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The other half of the same rule: a `g` product keeps its divisor, so
+    the fix above cannot have been "stop dividing everywhere"."""
+    entry = await setup_entry(with_article=True)
+    entry.runtime_data.transport = FakeTransport(payload={"items": [
+        {"price": 2.0, "currency": "EUR", "date": "2026-08-10",
+         "product": {"product_quantity": 1000}},
+    ]})
+
+    def _link() -> None:
+        with entry.runtime_data.manager.db.write() as conn:
+            repo.link_barcode(conn, "3017620422003", 1)
+
+    await hass.async_add_executor_job(_link)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/lookup",
+                            "code": "3017620422003"})
+    result = (await client.receive_json())["result"]
+
+    assert result["product"]["base_unit"] == "g"
+    assert result["price"]["price_per_base_unit"] == pytest.approx(0.002)
+
+
+async def test_storing_stock_refuses_a_negative_price(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """A negative price used to answer success and write a cost of -250 into
+    the append-only journal, which sensor.home_stock_stock_value then read
+    as -250. It cannot be corrected there, only offset."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "price_per_base_unit": -2.5})
+    answer = await client.receive_json()
+
+    assert answer["success"] is False
+
+    def batches() -> int:
+        return entry.runtime_data.database.read().execute(
+            "SELECT COUNT(*) FROM batch").fetchone()[0]
+
+    assert await hass.async_add_executor_job(batches) == 0
+
+
+async def test_storing_stock_still_accepts_a_free_item(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """Zero is a real observation — a sample, a gift, a second pack for
+    free — and the distinction is load-bearing elsewhere in this lot."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stock/add", "article_id": 1,
+                            "quantity": 100, "location_id": 1,
+                            "price_per_base_unit": 0})
+    answer = await client.receive_json()
+
+    assert answer["success"] is True
+
+
+async def test_the_shops_already_used_can_be_read_without_an_open_session(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """The chips the session-start screen offers. `session/current` carries
+    the same list but answers null when no session exists — which is exactly
+    when a shopper has to pick a shop."""
+    entry = await setup_entry(with_article=True)
+
+    def _seed() -> None:
+        with entry.runtime_data.manager.db.write() as conn:
+            repo.insert_price(conn, article_id=1, observed_on="2026-08-01",
+                              price_per_base_unit=0.004, source="manual", store="Lidl")
+            repo.insert_price(conn, article_id=1, observed_on="2026-08-12",
+                              price_per_base_unit=0.005, source="manual", store="Leclerc")
+
+    await hass.async_add_executor_job(_seed)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/stores/list"})
+    result = (await client.receive_json())["result"]
+
+    assert result["stores"] == ["Leclerc", "Lidl"]

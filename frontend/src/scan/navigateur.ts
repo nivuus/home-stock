@@ -5,6 +5,8 @@ import type { Scanner } from './index';
 const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'];
 
 export class ScannerNavigateur implements Scanner {
+  readonly voie = 'navigateur' as const;
+
   private flux?: MediaStream;
   private video?: any;
 

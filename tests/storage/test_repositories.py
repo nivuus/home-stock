@@ -184,3 +184,32 @@ def test_barcodes_to_resync_with_nothing_selected_returns_nothing(conn):
 
     assert repo.barcodes_to_resync(conn, article_id=None, product_id=None,
                                    everything=False) == []
+
+
+def test_insert_product_keeps_the_default_shelf_life(conn):
+    """`default_shelf_life_days` is added by this lot's own m002 migration and
+    accepted by the creation schema, but was missing from PRODUCT_FIELDS —
+    the whitelist insert_product filters against. It was therefore writable
+    on an edit and silently dropped on a creation, with a success answer."""
+    product_id = repo.insert_product(
+        conn, name="Yaourts nature", base_unit="piece", default_shelf_life_days=21)
+
+    assert repo.get_product(conn, product_id)["default_shelf_life_days"] == 21
+
+
+def test_pending_lines_of_a_closed_session_no_longer_count(conn):
+    """A line never put away used to block its product's unit conversion for
+    good: it cannot be deleted once its session is closed, and the count
+    ignored the session's state. Closing a session is how a trip is given up."""
+    product_id = repo.insert_product(conn, name="Yaourts nature", base_unit="piece")
+    article_id = repo.insert_article(conn, product_id=product_id)
+    session_id = repo.open_session(conn, started_at="2026-08-19T10:00:00", store="Lidl")
+    repo.add_line(conn, session_id=session_id, article_id=article_id, quantity=6,
+                  unit_price=None, scanned_at="2026-08-19T10:01:00",
+                  idempotency_key=None)
+
+    assert repo.count_pending_lines_for_product(conn, product_id) == 1
+
+    repo.set_session_state(conn, session_id, "done", closed_at="2026-08-19T12:00:00")
+
+    assert repo.count_pending_lines_for_product(conn, product_id) == 0

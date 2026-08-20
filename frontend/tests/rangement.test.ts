@@ -3,6 +3,19 @@ import '../src/ecrans/rangement';
 import { grouperParEmplacement, type Emplacement, type LigneRangement,
          type LigneRangementAutonome, type LigneRangementSession } from '../src/ecrans/rangement';
 import type { Connexion } from '../src/connexion';
+import { FileAttente } from '../src/file-attente';
+
+/** Le `localStorage` de la file, en mémoire — jsdom en fournit un, mais un
+ *  stockage propre au test évite qu'un cas laisse une action derrière lui. */
+class StockageFactice implements Storage {
+  private donnees = new Map<string, string>();
+  get length() { return this.donnees.size; }
+  clear() { this.donnees.clear(); }
+  getItem(cle: string) { return this.donnees.get(cle) ?? null; }
+  key(index: number) { return [...this.donnees.keys()][index] ?? null; }
+  removeItem(cle: string) { this.donnees.delete(cle); }
+  setItem(cle: string, valeur: string) { this.donnees.set(cle, valeur); }
+}
 
 function ligneSession(partiel: Partial<LigneRangementSession> & { id: number }): LigneRangementSession {
   return {
@@ -127,6 +140,10 @@ describe('<home-stock-rangement>', () => {
 
     expect(ajouter).toHaveBeenCalledWith('home_stock/stock/add', {
       article_id: 7, quantity: 2, location_id: 1, best_before: null, price_per_base_unit: 1.5,
+      // Clé STABLE, dérivée de l'identité locale de la ligne : c'est elle
+      // qui rend un réessai identique au premier envoi (voir le test
+      // « deux appuis hors ligne… » plus bas).
+      idempotency_key: 'rangement:auto-1',
     });
     expect(recu).toHaveBeenCalledWith({ id: 'auto-1' });
   });
@@ -324,5 +341,66 @@ describe('<home-stock-rangement>', () => {
     await element.updateComplete;
 
     expect(appeler).not.toHaveBeenCalled();
+  });
+});
+
+describe('rangement d’un article rapporté seul, hors ligne', () => {
+  it('deux appuis sans réseau ne créent qu’un seul lot et un seul mouvement', async () => {
+    // Au sous-sol : on appuie sur « +3 j », rien ne part, on réappuie. Sans
+    // clé d'idempotence stable, `FileAttente.ajouter` en tirait une nouvelle
+    // au hasard à chaque appel, le contrôle d'idempotence d'`add_stock` ne
+    // reconnaissait rien, et le retour du réseau créait DEUX lots et deux
+    // mouvements d'achat — dans un journal en ajout seul, où un chiffre faux
+    // ne se corrige pas, il se compense.
+    const lots: string[] = [];
+    const mouvements: string[] = [];
+    const clesVues = new Map<string, number>();
+    let horsLigne = true;
+
+    // Le serveur, tel qu'il se comporte vraiment : `manager.add_stock`
+    // retrouve le mouvement déjà écrit sous cette clé et rend SON lot,
+    // au lieu d'en créer un second.
+    const envoyer = async (type: string, charge: Record<string, unknown>) => {
+      if (horsLigne) throw new Error('réseau coupé');   // panne de transport : aucun `code`
+      const cle = String(charge.idempotency_key);
+      if (clesVues.has(cle)) return { batch_id: clesVues.get(cle) };
+      const id = lots.length + 1;
+      lots.push(cle);
+      mouvements.push(cle);
+      clesVues.set(cle, id);
+      return { batch_id: id };
+    };
+
+    const file = new FileAttente(new StockageFactice(), envoyer as any);
+    const element = monter({
+      lignes: [ligneAutonome({ id: 'auto-9', article_id: 7, quantity: 2,
+                               default_location_id: 1, unit_price: 1.5 })],
+      connexion: connexionFactice(),
+      file: file as any,
+    });
+    await element.updateComplete;
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const appuyer = async () => {
+      const bouton = Array.from(element.shadowRoot!.querySelectorAll('.raccourci-dlc'))
+        .find((b) => b.textContent?.includes('+3 j')) as HTMLButtonElement;
+      bouton.click();
+      await laisserPasserLesMicrotaches();
+      await element.updateComplete;
+    };
+
+    await appuyer();                 // rien ne part
+    expect(lots).toHaveLength(0);
+    await appuyer();                 // on réessaie, toujours rien
+
+    horsLigne = false;               // le réseau revient
+    await file.rejouer();
+
+    expect(lots).toHaveLength(1);
+    expect(mouvements).toHaveLength(1);
+    expect(file.taille()).toBe(0);
+
+    document.body.innerHTML = '';
   });
 });

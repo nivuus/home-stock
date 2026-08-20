@@ -199,3 +199,58 @@ describe('file d’attente hors ligne : le sort d’une action ne s’accumule p
     expect(file.resultatDe(cle)).toBeUndefined();
   });
 });
+
+describe('file d’attente : un seul rejeu à la fois', () => {
+  it('n’avale jamais une action ajoutée pendant qu’un rejeu est en vol', async () => {
+    // Trois déclencheurs appellent `rejouer()` : le connectedCallback du
+    // panneau, l'écouteur `online`, et le `ecrire()` de chaque écran. Deux
+    // boucles concurrentes lisaient toutes les deux `actions[0]`, puis
+    // faisaient chacune un `shift()` — la seconde retirant une action
+    // DIFFÉRENTE, ajoutée entre-temps, jamais envoyée. La victime concrète
+    // était la correction de poids posée par la fiche, qui n'a aucun rejeu
+    // à elle.
+    const stockage = new StockageFactice();
+    const envoyes: string[] = [];
+    let debloquerLaPremiere: () => void = () => {};
+    const premiereEnVol = new Promise<void>((resolve) => { debloquerLaPremiere = resolve; });
+
+    const file = new FileAttente(stockage, async (type) => {
+      envoyes.push(type);
+      if (type === 'lent') await premiereEnVol;
+    });
+
+    file.ajouter('lent', {});
+    const premier = file.rejouer();            // bloqué dans l'envoi de « lent »
+    await Promise.resolve();
+
+    file.ajouter('home_stock/article/update', { article_id: 1 });
+    const second = file.rejouer();             // arrive pendant que « lent » est en vol
+
+    debloquerLaPremiere();
+    await Promise.all([premier, second]);
+
+    expect(envoyes).toEqual(['lent', 'home_stock/article/update']);
+    expect(file.taille()).toBe(0);
+  });
+
+  it('rend la main seulement quand l’action de l’appelant a été tentée', async () => {
+    const stockage = new StockageFactice();
+    let debloquer: () => void = () => {};
+    const bloquee = new Promise<void>((resolve) => { debloquer = resolve; });
+    const file = new FileAttente(stockage, async (type) => {
+      if (type === 'lent') await bloquee;
+    });
+
+    file.ajouter('lent', {});
+    const premier = file.rejouer();
+    await Promise.resolve();
+
+    const cle = file.ajouter('t', {});
+    const second = file.rejouer().then(() => file.resultatDe(cle));
+
+    debloquer();
+    await premier;
+
+    expect(await second).toBe('envoyee');
+  });
+});

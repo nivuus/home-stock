@@ -78,11 +78,12 @@ const FORMATS = [
 
 // --- construction du bundle, en mémoire ------------------------------------
 
-async function bundlerApplication() {
+async function bundlerApplication({ minifier = false } = {}) {
   const resultat = await esbuild.build({
     entryPoints: [join(SRC, 'panneau.ts')],
     bundle: true,
     write: false,
+    minify: minifier,
     format: 'esm',
     target: 'es2022',
     tsconfig: TSCONFIG,
@@ -154,6 +155,10 @@ const RAYONS = [
   { id: 4, name: 'Surgelés', position: 3 },
   { id: 5, name: 'Hygiène et entretien', position: 4 },
 ];
+
+// Des enseignes réelles et de longueur variable : les pastilles doivent
+// passer à la ligne plutôt que déborder, sur les deux formats.
+const MAGASINS = ['Carrefour', 'Leclerc', 'Lidl', 'Grand Frais', 'Biocoop Les Quatre Chemins'];
 
 const EMPLACEMENTS = [
   { id: 1, name: 'Placard cuisine', kind: 'cupboard', position: 0 },
@@ -329,6 +334,35 @@ const SCENARIOS = [
     ecranAttendu: 'home-stock-rangement',
   },
   {
+    nom: 'Courses (ouverture : pastilles de magasins et saisie libre)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/stores/list': { stores: MAGASINS },
+      },
+    },
+    actions: [{ type: 'click-nav', texte: 'Courses' }],
+    ecranAttendu: 'home-stock-session',
+    elementAttendu: { enfant: 'home-stock-session', selector: '.ouvrir-session' },
+  },
+  {
+    nom: 'Courses (clôture armée : session à ranger, lignes abandonnées)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': sessionOuverte('to_store', 'Carrefour', LIGNES_RANGEMENT),
+        'home_stock/stores/list': { stores: MAGASINS },
+      },
+    },
+    actions: [
+      { type: 'click-nav', texte: 'Courses' },
+      { type: 'click-in-child', enfant: 'home-stock-session', selector: '.clore-session' },
+    ],
+    ecranAttendu: 'home-stock-session',
+    // Le second appui doit vraiment être proposé : sans ce contrôle, un
+    // armement qui ne rendrait aucun bouton passerait pour « rien à signaler ».
+    elementAttendu: { enfant: 'home-stock-session', selector: '.confirmer-cloture' },
+  },
+  {
     nom: 'Catalogue (quelques centaines de produits, édition ouverte)',
     fixture: {
       reponses: {
@@ -395,7 +429,7 @@ const SCENARIOS = [
 // Playwright sérialise cette fonction telle quelle et l'exécute dans le
 // navigateur : elle ne doit fermer sur rien d'extérieur, seulement sur son
 // argument.
-async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, ecranAttendu = null, elementAttendu = null }) {
+async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, ecranAttendu = null, elementAttendu = null, sansScannerNatif = false }) {
   function attendre(ms) { return new Promise((resolve) => { setTimeout(resolve, ms); }); }
 
   function reponsePour(msg) {
@@ -421,6 +455,15 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
       return Promise.resolve(reponse === undefined ? {} : reponse);
     },
   };
+
+  // Le repli clavier du scanner ne se déclenche que sans bus companion NI
+  // `BarcodeDetector`. Le premier est absent d'une page ordinaire ; le second
+  // dépend de la plateforme (absent de Chrome sous Linux, présent ailleurs),
+  // et un scénario qui ouvrirait vraiment la caméra ne finirait jamais. On
+  // le retire donc explicitement plutôt que d'en dépendre.
+  if (sansScannerNatif) {
+    Object.defineProperty(window, 'BarcodeDetector', { value: undefined, configurable: true });
+  }
 
   const panneau = document.createElement('home-stock-panel');
   panneau.hass = hass;
@@ -701,6 +744,7 @@ async function executerScenarios(navigateur, urlHarnais) {
         fixture: scenario.fixture, actions: scenario.actions,
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
         ecranAttendu: scenario.ecranAttendu ?? null, elementAttendu: scenario.elementAttendu ?? null,
+        sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
       await contexte.close();
 
@@ -714,6 +758,55 @@ async function executerScenarios(navigateur, urlHarnais) {
     }
   }
   return { fautes, total };
+}
+
+// --- le bundle tel qu'il est DÉPLOYÉ : minifié -----------------------------
+//
+// Tout le reste de ce script — et toute la suite vitest — construit sans
+// minification. Une branche qui dépendait du NOM d'une classe
+// (`scanner.constructor.name === 'ScannerClavier'`) passait donc partout et
+// ne marchait nulle part : `rollup.config.mjs` minifie avec `terser`, qui
+// renomme les classes. Sur un appareil sans bus companion ni
+// `BarcodeDetector` — le seul cas où cette branche compte — le plus gros
+// bouton de l'écran ne faisait alors rien du tout : ni erreur, ni pavé de
+// saisie. Ce contrôle-ci construit avec minification et pilote le repli
+// clavier pour de vrai.
+const SCENARIOS_MINIFIES = [
+  {
+    nom: 'Repli clavier du scanner (sans caméra système ni BarcodeDetector)',
+    fixture: { reponses: { 'home_stock/session/current': null } },
+    actions: [{ type: 'click-in-child', enfant: 'home-stock-scanner', selector: '.bouton-scan' }],
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: 'home-stock-scanner', selector: '.saisie-manuelle' },
+    sansScannerNatif: true,
+  },
+];
+
+async function verifierBundleMinifie(navigateur, urlMinifie) {
+  console.log('\n=== Bundle minifié (celui qui part en production) ===');
+  let fautes = 0;
+  for (const scenario of SCENARIOS_MINIFIES) {
+    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
+    const page = await contexte.newPage();
+    await page.goto(urlMinifie, { waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: scenario.fixture, actions: scenario.actions,
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      ecranAttendu: scenario.ecranAttendu, elementAttendu: scenario.elementAttendu,
+      sansScannerNatif: scenario.sansScannerNatif,
+    });
+    await contexte.close();
+
+    if (aDesDefauts(resultat)) {
+      fautes += 1;
+      console.log(`  ✗ ${scenario.nom}`);
+      for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+    } else {
+      console.log(`  ✓ ${scenario.nom}`);
+    }
+  }
+  return fautes;
 }
 
 // --- auto-vérification : le script sait-il vraiment échouer ? ---------------
@@ -739,7 +832,7 @@ const CASSURES = [
   },
   {
     nom: 'texte tronqué (ellipsis + overflow hidden)',
-    css: '.nav-bouton { max-width: 24px !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
+    css: '.nav-bouton { max-width: 24px !important; min-width: 0 !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
     verifie: (r) => r.texteTronque.length > 0,
   },
 ];
@@ -797,17 +890,26 @@ async function main() {
 
   console.log('Construction du bundle (esbuild, en mémoire — rien n’est écrit sur disque)…');
   const bundle = await bundlerApplication();
-  console.log(`Bundle : ${(bundle.length / 1024).toFixed(0)} ko.`);
+  const bundleMinifie = await bundlerApplication({ minifier: true });
+  console.log(`Bundle : ${(bundle.length / 1024).toFixed(0)} ko `
+    + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
 
   // Une seule page servie pour tout le run (127.0.0.1, port éphémère) : le
   // contenu ne change jamais d'un scénario à l'autre — seul ce qu'on y
   // injecte après coup (fixture, actions, cassure) varie. Voir
   // `servirPageStatique` pour pourquoi `page.setContent()` seul ne suffit pas.
   const { url: urlHarnais, fermer: fermerServeur } = await servirPageStatique(pageHtml(bundle));
+  // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
+  // celui que `npm run build` déploie réellement. Voir SCENARIOS_MINIFIES.
+  const { url: urlMinifie, fermer: fermerServeurMinifie } =
+    await servirPageStatique(pageHtml(bundleMinifie));
 
   const navigateur = await lancerNavigateur();
   try {
-    const { fautes, total } = await executerScenarios(navigateur, urlHarnais);
+    let { fautes, total } = await executerScenarios(navigateur, urlHarnais);
+    const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie);
+    fautes += fautesMinifie;
+    total += SCENARIOS_MINIFIES.length;
 
     let autoOk = true;
     if (!sansAutoVerification) {
@@ -827,6 +929,7 @@ async function main() {
   } finally {
     await navigateur.close();
     fermerServeur();
+    fermerServeurMinifie();
   }
 }
 

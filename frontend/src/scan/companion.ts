@@ -12,6 +12,8 @@ import type { Scanner } from './index';
 export const DELAI_REPONSE_MS = 60_000;
 
 export class ScannerCompanion implements Scanner {
+  readonly voie = 'companion' as const;
+
   constructor(private fenetre: any) {}
 
   disponible(): boolean {
