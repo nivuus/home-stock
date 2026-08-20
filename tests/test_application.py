@@ -703,6 +703,19 @@ def test_zero_parts_served_is_refused(manager):
                         parts_total=0, parts_mine=0)
 
 
+def test_too_many_parts_served_is_refused(manager):
+    """The symmetric case of test_zero_parts_served_is_refused: past
+    MAX_PARTS, `parts_total` is not a shared meal any more, it is a typo."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=25, parts_mine=1)
+
+    assert manager.db.read().execute("SELECT COUNT(*) FROM movement"
+                                     " WHERE reason = 'consumption'").fetchone()[0] == 0
+
+
 def test_parts_on_waste_are_refused(manager):
     """Nobody shares a bin: accepting parts here would write data that makes
     no sense, and that the day's totals ignore anyway."""
