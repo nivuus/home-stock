@@ -87,12 +87,10 @@ export class PanneauGardeManger extends LitElement {
     this.enAttente = this.file.taille();
     // Rejeu générique de ce qui traînait déjà dans le stockage local (une
     // page précédente, une reconnexion) : aucun appelant précis n'attend le
-    // sort d'une action en particulier ici, donc rien ne les réclamera
-    // jamais via `resultatDe` — sans ce nettoyage explicite, elles
-    // resteraient en mémoire pour toute la session du panneau.
+    // sort d'une action en particulier ici — chaque entrée porte désormais
+    // sa propre promesse (voir `FileAttente.ajouter`), donc rien à purger.
     void this.file.rejouer().then(() => {
       this.enAttente = this.file!.taille();
-      this.file!.viderResultats();
     });
     void this.actualiserSession();
     void this.connexion.abonner(() => {
@@ -124,10 +122,10 @@ export class PanneauGardeManger extends LitElement {
   private auRetourDuReseau = (): void => {
     // Même rejeu générique qu'au démarrage (voir connectedCallback) : ce
     // retour réseau peut faire partir des actions posées par un écran
-    // depuis longtemps démonté, personne ne réclamera leur sort.
+    // depuis longtemps démonté, personne ne réclamera leur sort — chacune
+    // le résout d'elle-même.
     void this.file?.rejouer().then(() => {
       this.enAttente = this.file!.taille();
-      this.file!.viderResultats();
     });
   };
 
@@ -170,18 +168,15 @@ export class PanneauGardeManger extends LitElement {
   private surArticlePret = (evenement: CustomEvent<ArticlePret>): void => {
     const { articleId, quantite, prixUnitaire, mode, offDroppedFields } = evenement.detail;
     if (mode === 'panier') {
-      const cle = this.file!.ajouter('home_stock/session/add_line', {
+      // Le refus (s'il y en a un) est déjà annoncé par la bannière French
+      // via `surRefus` : cet écran-ci n'a besoin de rien de plus, il ne lit
+      // pas le `sort` de `ajouter` — inutile de s'y accrocher pour rien.
+      this.file!.ajouter('home_stock/session/add_line', {
         article_id: articleId, quantity: quantite, unit_price: prixUnitaire,
       });
       this.enAttente = this.file!.taille();
-      // Le refus (s'il y en a un) est déjà annoncé par la bannière French
-      // via `surRefus` — `resultatDe` n'est appelé ici que pour réclamer
-      // (et donc libérer) l'entrée : cette action a un appelant précis,
-      // contrairement aux rejeux génériques ci-dessus, et sans ce réclamer
-      // explicite son entrée resterait en mémoire pour rien.
       void this.file!.rejouer().then(() => {
         this.enAttente = this.file!.taille();
-        this.file!.resultatDe(cle);
       });
       this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.', offDroppedFields);
       this.resultatCourant = null;

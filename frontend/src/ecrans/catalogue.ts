@@ -36,6 +36,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { analyserNombre } from '../nombres';
 import type { UniteBase } from './fiche';
 import type { Emplacement } from './rangement';
 
@@ -92,25 +93,6 @@ export function brouillonDepuis(produit: Produit): Brouillon {
 function idOuNull(saisie: string): number | null {
   const s = saisie.trim();
   return s === '' ? null : Number(s);
-}
-
-export type ResultatNombre = { ok: true; valeur: number | null } | { ok: false };
-
-/** Un champ numérique saisi à la main peut être vide (effacé exprès →
- *  `null`), un nombre valide, ou du texte qui n'en est pas — jamais un
- *  `NaN` silencieux : `Number('1,5')` vaut `NaN`, `NaN !== ancienneValeur`
- *  est toujours vrai, et `JSON.stringify(NaN)` vaut `'null'`. Un incident
- *  réel a montré qu'une simple virgule décimale suffisait ainsi à effacer
- *  un seuil de réapprovisionnement en silence tout en laissant croire à un
- *  enregistrement réussi. Accepte donc la virgule comme le point ; refuse
- *  explicitement (`{ok:false}`) tout le reste plutôt que de deviner un
- *  nombre dans du texte (« 7 jours » n'est pas 7). */
-export function analyserNombre(saisie: string): ResultatNombre {
-  const texte = saisie.trim();
-  if (texte === '') return { ok: true, valeur: null };
-  const nombre = Number(texte.replace(',', '.'));
-  if (!Number.isFinite(nombre)) return { ok: false };
-  return { ok: true, valeur: nombre };
 }
 
 const LIBELLE_CHAMP_NUMERIQUE = {
@@ -273,12 +255,10 @@ export class EcranCatalogue extends LitElement {
    *  n'existe plus de deuxième chemin par `connexion` directe. */
   private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
     if (!this.file) return Promise.resolve(false);
-    const cle = this.file.ajouter(type, charge);
+    const suivi = this.file.ajouter(type, charge);
     this.avertirFile();
-    return this.file.rejouer().then(() => {
-      this.avertirFile();
-      return this.file!.resultatDe(cle) === 'envoyee';
-    });
+    void this.file.rejouer().then(() => this.avertirFile());
+    return suivi.sort.then((sort) => sort === 'envoyee');
   }
 
   private avertirFile(): void {
