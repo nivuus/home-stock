@@ -753,10 +753,15 @@ Expected: PASS
 
 - [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
-Remplacer dans `bounds_of_food_day` le second appel par `_to_naive_utc(_start_of(day, tz)) + timedelta(hours=24)` — c'est-à-dire coder 24 h en dur. Le faire proprement :
+Coder 24 h en dur au lieu de calculer la seconde borne depuis la date locale
+suivante. **Attention au piège** : `start + timedelta(hours=24)` sur un
+`datetime` *aware* portant un `ZoneInfo` recalcule dynamiquement le décalage UTC
+pour la nouvelle heure murale, si bien que cette mutation-là ne mute rien du
+tout et laisse la suite verte. La mutation qui mord est celle qui fige le
+décalage **dans l'espace UTC** :
 
 ```python
-    start = _start_of(day, tz)
+    start = _start_of(day, tz).astimezone(UTC)
     return (_to_naive_utc(start), _to_naive_utc(start + timedelta(hours=24)))
 ```
 
