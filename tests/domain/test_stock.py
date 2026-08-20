@@ -134,7 +134,7 @@ def test_an_allocation_carries_the_macros_of_its_batch():
 
 
 def test_a_batch_view_without_macros_still_works():
-    """Toutes les constructions du lot 0 et du lot 1 en sont dépourvues."""
+    """Every lot 0 and lot 1 construction lacks them."""
     batch_view = BatchView(
         id=1, remaining=500.0, best_before=None,
         entered_at=datetime(2026, 8, 1), opened_at=None,

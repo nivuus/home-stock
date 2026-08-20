@@ -566,10 +566,38 @@ def test_the_unit_written_is_the_product_s_own(manager):
     assert row["base_unit"] == "ml"
 
 
+def test_add_stock_freezes_the_macros_of_the_moment(manager):
+    """The purchase movement must freeze macros too: add_stock is the third of
+    the three call sites this lot wires (add_stock, consume, consume_batch),
+    and only this one had no test reading `movement.proteins` back."""
+    article_id, _product_id = _seed_article(manager, base_unit="g",
+                                            kcal_per_base_unit=1.2, proteins=0.05)
+
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    with manager.db.write() as conn:
+        conn.execute("UPDATE article SET proteins = 99.0 WHERE id = ?", (article_id,))
+
+    row = manager.db.read().execute(
+        "SELECT proteins FROM movement WHERE reason = 'purchase'").fetchone()
+    assert row["proteins"] == pytest.approx(25.0)
+
+
+def test_add_stock_of_an_article_without_macros_writes_nulls(manager):
+    article_id, _product_id = _seed_article(manager, base_unit="g",
+                                            kcal_per_base_unit=None, proteins=None)
+
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    row = manager.db.read().execute(
+        "SELECT proteins FROM movement WHERE reason = 'purchase'").fetchone()
+    assert row["proteins"] is None
+
+
 def test_consuming_freezes_the_macros_of_the_moment(manager):
-    """Le test qui compte vraiment : resynchroniser l'article APRÈS coup ne
-    doit rien changer au mouvement déjà écrit. C'est la raison d'être des
-    colonnes, pas un détail d'implémentation."""
+    """The test that actually matters: resyncing the article AFTER the fact
+    must not change the movement already written. That is the whole point
+    of these columns, not an implementation detail."""
     article_id, product_id = _seed_article(manager, base_unit="g",
                                            kcal_per_base_unit=1.2, proteins=0.05)
     manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)

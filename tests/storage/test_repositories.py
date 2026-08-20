@@ -241,7 +241,7 @@ def test_insert_movement_freezes_the_eight_macros(seeded_conn):
         "SELECT * FROM movement WHERE id = ?", (movement_id,)).fetchone()
     assert row["proteins"] == 10.0
     assert row["salt"] == 0.2
-    # Une macro absente du dictionnaire reste NULL, pas 0.
+    # A macro absent from the dict stays NULL, not 0.
     assert row["fiber"] is None
 
 
@@ -262,7 +262,7 @@ def test_macro_rates_reads_the_eight_columns_of_a_row():
     assert set(rates) == set(MACRO_COLUMNS)
     assert rates["proteins"] == 0.05
     assert rates["carbohydrates"] is None
-    assert rates["fiber"] == 0.0       # mesuré à zéro, pas manquant
+    assert rates["fiber"] == 0.0       # measured at zero, not missing
     assert "kcal_per_base_unit" not in rates
 
 

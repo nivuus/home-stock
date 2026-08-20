@@ -1,8 +1,8 @@
-"""La journée alimentaire court de 4 h à 4 h, heure locale.
+"""The food day runs from 4 am to 4 am, local time.
 
-`occurred_at` est stocké en UTC naïf (décision du lot 0) : toutes les bornes
-rendues par ce module sont donc en UTC naïf elles aussi, pour que la
-comparaison SQL reste une comparaison de chaînes ISO.
+`occurred_at` is stored as naive UTC (a lot 0 decision): every bound this
+module renders is therefore naive UTC too, so the SQL comparison stays a
+plain comparison of ISO strings.
 """
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
@@ -31,7 +31,7 @@ def test_a_meal_at_four_starts_the_new_day():
 
 def test_bounds_are_utc_naive_iso():
     start, end = food_day_bounds(_paris("2026-08-20T12:00:00"), PARIS)
-    # Été : Paris est à UTC+2, donc 4 h locales valent 2 h UTC.
+    # Summer: Paris is at UTC+2, so 4 am local is 2 am UTC.
     assert start == "2026-08-20T02:00:00"
     assert end == "2026-08-21T02:00:00"
 
@@ -43,21 +43,21 @@ def test_bounds_in_winter_shift_with_the_offset():
 
 
 def test_the_spring_forward_day_is_twenty_three_hours_long():
-    """Paris avance ses horloges dans la nuit du 28 au 29 mars 2026 (02:00 →
-    03:00). La journée alimentaire raccourcie est donc celle du **28**, qui
-    commence à 4 h en heure d'hiver et finit à 4 h en heure d'été. Celle du 29
-    dure 24 heures pleines — se tromper de jour ici passerait inaperçu, et
-    c'est exactement l'erreur que ce test existe pour empêcher."""
+    """Paris moves its clocks forward on the night of March 28 to 29, 2026
+    (02:00 → 03:00). The shortened food day is therefore the **28th**, which
+    starts at 4 am winter time and ends at 4 am summer time. The 29th runs a
+    full 24 hours — getting the day wrong here would go unnoticed, and that
+    is exactly the mistake this test exists to catch."""
     start, end = bounds_of_food_day(date(2026, 3, 28), PARIS)
-    assert start == "2026-03-28T03:00:00"    # 4 h locales = UTC+1 ce matin-là
-    assert end == "2026-03-29T02:00:00"      # 4 h locales = UTC+2 le lendemain
+    assert start == "2026-03-28T03:00:00"    # 4 am local = UTC+1 that morning
+    assert end == "2026-03-29T02:00:00"      # 4 am local = UTC+2 the next day
     duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
     assert duration.total_seconds() == 23 * 3600
 
 
 def test_the_autumn_day_is_twenty_five_hours_long():
-    """Paris recule ses horloges dans la nuit du 24 au 25 octobre 2026
-    (03:00 → 02:00) : c'est la journée du **24** qui dure 25 heures."""
+    """Paris moves its clocks back on the night of October 24 to 25, 2026
+    (03:00 → 02:00): it is the **24th** whose food day runs 25 hours."""
     start, end = bounds_of_food_day(date(2026, 10, 24), PARIS)
     assert start == "2026-10-24T02:00:00"
     assert end == "2026-10-25T03:00:00"
@@ -66,8 +66,8 @@ def test_the_autumn_day_is_twenty_five_hours_long():
 
 
 def test_the_day_after_a_change_is_back_to_twenty_four_hours():
-    """Le garde-fou du test précédent : si les bornes étaient calculées depuis
-    une seule date locale, ces deux journées-ci sortiraient fausses aussi."""
+    """The previous test's safety net: if the bounds were computed from a
+    single local date, these two food days would come out wrong as well."""
     for day in (date(2026, 3, 29), date(2026, 10, 25)):
         start, end = bounds_of_food_day(day, PARIS)
         duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
@@ -75,9 +75,9 @@ def test_the_day_after_a_change_is_back_to_twenty_four_hours():
 
 
 def test_a_movement_stored_in_utc_lands_in_the_right_day_across_the_change():
-    """Le vrai piège : un repas à 03:30 locales le lendemain du changement.
-    Stocké en UTC naïf, il doit tomber dans la journée de la veille."""
-    stored = "2026-10-26T02:30:00"        # 03:30 à Paris, UTC+1 ce jour-là
+    """The real trap: a meal at 03:30 local time the day after the change.
+    Stored as naive UTC, it must land in the previous day's food day."""
+    stored = "2026-10-26T02:30:00"        # 03:30 in Paris, UTC+1 that day
     start, end = bounds_of_food_day(date(2026, 10, 25), PARIS)
     assert (start, end) == ("2026-10-25T03:00:00", "2026-10-26T03:00:00")
     assert start <= stored < end
@@ -92,7 +92,7 @@ def test_buckets_by_day_are_contiguous_and_ordered():
 
 
 def test_buckets_by_week_start_on_monday():
-    now = _paris("2026-08-20T12:00:00")           # un jeudi
+    now = _paris("2026-08-20T12:00:00")           # a thursday
     buckets = bucket_bounds("week", 2, now, PARIS)
     assert [b.label for b in buckets] == ["2026-08-10", "2026-08-17"]
 
@@ -119,5 +119,5 @@ def test_a_count_below_one_is_refused():
 
 
 def test_an_aware_utc_moment_is_accepted_as_well():
-    """Le coordinateur passe `dt_util.utcnow()`, qui porte UTC."""
+    """The coordinator passes `dt_util.utcnow()`, which carries UTC."""
     assert food_day_of(datetime(2026, 8, 20, 1, 0, tzinfo=UTC), PARIS) == date(2026, 8, 19)

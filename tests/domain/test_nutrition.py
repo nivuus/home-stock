@@ -58,16 +58,17 @@ def test_an_unknown_macro_stays_none_and_never_becomes_zero():
 
 
 def test_a_macro_measured_at_zero_stays_zero():
-    """Un aliment sans sel a bien 0 g de sel : ce n'est pas une valeur
-    manquante, et l'écraser en `None` perdrait une mesure réelle."""
+    """A food with no salt genuinely has 0 g of salt: that is not a
+    missing value, and overwriting it with `None` would lose a real
+    measurement."""
     values = movement_values(200.0, None, None, macro_rates={"salt": 0.0})
     assert values.macros["salt"] == 0.0
 
 
 def test_macros_are_keyed_by_every_column_even_when_the_rates_are_partial():
-    """Le dictionnaire rendu couvre TOUJOURS les huit colonnes : l'appelant
-    l'écrit directement dans `movement`, et une clé absente y deviendrait une
-    colonne muette au lieu d'un NULL explicite."""
+    """The returned dict ALWAYS covers the eight columns: the caller writes
+    it straight into `movement`, and a missing key there would become a
+    silent column instead of an explicit NULL."""
     values = movement_values(100.0, None, None, macro_rates={"proteins": 0.1})
     assert set(values.macros) == set(MACRO_COLUMNS)
     assert values.macros["fiber"] is None
@@ -80,7 +81,7 @@ def test_no_macro_rates_at_all_still_yields_eight_nulls():
 
 
 def test_macros_use_the_magnitude_like_kcal_does():
-    """Une sortie porte une quantité négative ; ses nutriments sont positifs."""
+    """An outflow carries a negative quantity; its nutrients are positive."""
     values = movement_values(-200.0, 1.2, None, macro_rates={"proteins": 0.05})
     assert values.macros["proteins"] == pytest.approx(10.0)
 
