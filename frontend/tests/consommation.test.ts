@@ -159,6 +159,21 @@ describe('<home-stock-consommation>', () => {
     expect(envoi).not.toHaveBeenCalled();
   });
 
+  it('refuse plus de 24 parts servies, sans aller au serveur', async () => {
+    const envoi = vi.fn();
+    const element = monter(PRODUIT_G);
+    element.file = fileEspionne(envoi);
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 100;
+    element.partage = true;
+    element.partsTotal = 25;
+    element.partsMoi = 1;
+    await element.enregistrer();
+    expect(envoi).not.toHaveBeenCalled();
+    expect(element.erreur).not.toBeNull();
+  });
+
   it('dit qu’il ne reste rien plutôt que de proposer une quantité', async () => {
     const element = monter({ ...PRODUIT_G, next_batch: null });
     await element.updateComplete;
@@ -167,16 +182,34 @@ describe('<home-stock-consommation>', () => {
     expect(element.shadowRoot.querySelectorAll('.raccourci').length).toBe(0);
   });
 
-  it('reste ouvert quand l’envoi n’est pas parti', async () => {
+  it('émet « consommation-enregistree » — et donc se referme — quand l’envoi part', async () => {
+    const element = monter(PRODUIT_G);
+    element.file = {
+      ajouter: () => ({ cle: 'k', sort: Promise.resolve('envoyee') }),
+      rejouer: async () => undefined,
+    };
+    const fermeture = vi.fn();
+    element.addEventListener('consommation-enregistree', fermeture);
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 80;
+    await element.enregistrer();
+    expect(fermeture).toHaveBeenCalledTimes(1);
+  });
+
+  it('reste ouvert — n’émet PAS « consommation-enregistree » — quand l’envoi n’est pas parti', async () => {
     const element = monter(PRODUIT_G);
     element.file = {
       ajouter: () => ({ cle: 'k', sort: Promise.resolve('en-attente') }),
       rejouer: async () => undefined,
     };
+    const fermeture = vi.fn();
+    element.addEventListener('consommation-enregistree', fermeture);
     await element.updateComplete;
     await element.updateComplete;
     element.quantite = 80;
     await element.enregistrer();
     expect(element.enAttenteEnvoi).toBe(true);
+    expect(fermeture).not.toHaveBeenCalled();
   });
 });

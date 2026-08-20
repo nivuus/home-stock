@@ -24,6 +24,13 @@ const LIBELLE_MOTIF: Record<Motif, string> = {
   consumption: 'Mangé', waste: 'Jeté', expired: 'Périmé',
 };
 
+/** `MAX_PARTS` côté serveur (`const.py`), validé par `_PARTS`
+ *  (`validators.py`) sur `parts_total` comme sur `parts_mine` : au-delà, le
+ *  serveur refuse. Dupliquée ici plutôt qu'importée — il n'existe aucun
+ *  canal qui partage une constante Python avec ce bundle TypeScript — pour
+ *  refuser AVANT l'aller-retour, comme le fait déjà le plancher à 1 part. */
+const PARTS_MAX = 24;
+
 /** Ce que reste d'un lot se lit en toutes lettres, jamais un chiffre nu :
  *  « 4 pièces », « 500 g ». Ne convertit jamais en kg/l ici — contrairement
  *  aux libellés de `raccourcisQuantite`, c'est une quantité brute de lot,
@@ -111,9 +118,11 @@ export class EcranConsommation extends LitElement {
       return;
     }
     const partage = this.partage && this.motif === 'consumption';
-    if (partage && !(this.partsTotal >= 1 && this.partsMoi >= 0
-                     && this.partsMoi <= this.partsTotal)) {
-      this.erreur = 'On ne mange pas plus de parts qu’il n’en a été servi.';
+    if (partage && !(this.partsTotal >= 1 && this.partsTotal <= PARTS_MAX
+                     && this.partsMoi >= 0 && this.partsMoi <= this.partsTotal)) {
+      this.erreur = this.partsTotal > PARTS_MAX
+        ? `On ne sert pas plus de ${PARTS_MAX} parts.`
+        : 'On ne mange pas plus de parts qu’il n’en a été servi.';
       return;
     }
     this.erreur = null;
@@ -168,7 +177,8 @@ export class EcranConsommation extends LitElement {
           <div class="compteurs">
             <label class="compteur">
               Parts servies
-              <input class="parts-total" type="number" inputmode="numeric" min="1" .value=${String(this.partsTotal)}
+              <input class="parts-total" type="number" inputmode="numeric" min="1" max=${PARTS_MAX}
+                .value=${String(this.partsTotal)}
                 @input=${(e: Event) => {
                   const valeur = Number.parseInt((e.target as HTMLInputElement).value, 10);
                   if (Number.isFinite(valeur)) this.partsTotal = valeur;
@@ -176,7 +186,8 @@ export class EcranConsommation extends LitElement {
             </label>
             <label class="compteur">
               Les miennes
-              <input class="parts-moi" type="number" inputmode="numeric" min="0" .value=${String(this.partsMoi)}
+              <input class="parts-moi" type="number" inputmode="numeric" min="0" max=${this.partsTotal}
+                .value=${String(this.partsMoi)}
                 @input=${(e: Event) => {
                   const valeur = Number.parseInt((e.target as HTMLInputElement).value, 10);
                   if (Number.isFinite(valeur)) this.partsMoi = valeur;
