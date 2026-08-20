@@ -139,7 +139,7 @@ def _checked_parts(reason: str, parts_total: int | None,
     return parts_total, parts_mine
 
 
-def _as_batch_view(row: dict[str, Any]) -> BatchView:
+def as_batch_view(row: dict[str, Any]) -> BatchView:
     return BatchView(
         id=row["id"],
         remaining=row["remaining"],
@@ -235,7 +235,7 @@ class StockManager:
             # Every batch of one product necessarily shares that product's unit:
             # read it once here rather than once per batch in the loop below.
             base_unit = repo.product_base_unit(conn, product_id)
-            batches = [_as_batch_view(row)
+            batches = [as_batch_view(row)
                        for row in repo.list_batches_for_product(conn, product_id)]
             allocations = allocate(batches, quantity)   # raises InsufficientStock
             movement_ids: list[int] = []
@@ -266,7 +266,8 @@ class StockManager:
                 )
             return movement_ids
 
-    def consume_batch(self, batch_id: int, *, quantity: float | None = None,
+    def consume_batch(self, batch_id: int, *, product_id: int | None = None,
+                      quantity: float | None = None,
                       reason: str = REASON_CONSUMPTION,
                       occurred_at: str | None = None,
                       idempotency_key: str | None = None,
@@ -274,6 +275,11 @@ class StockManager:
         """Take from one precise batch. Without a quantity, empties it.
 
         The expiry list checks off a batch, not a product: FIFO must not apply.
+
+        `product_id`, when given, is checked against the batch's own article:
+        the panel's "manger" screen always sends both, and the pair is
+        checked rather than one of the two being trusted — a batch of the
+        wrong product must be refused, not silently consumed.
         """
         moment = occurred_at or _now()
         stored_key = _namespaced_key("consume_batch", idempotency_key)
@@ -299,6 +305,9 @@ class StockManager:
             ).fetchone()
             if row is None:
                 raise ValueError(f"unknown or closed batch {batch_id}")
+            if product_id is not None and row["product_id"] != product_id:
+                raise ValueError(
+                    f"batch {batch_id} does not belong to product {product_id}")
             taken = row["remaining"] if quantity is None else float(quantity)
             if taken > row["remaining"] + QUANTITY_EPSILON:
                 raise InsufficientStock(requested=taken, available=row["remaining"])
@@ -386,11 +395,11 @@ class StockManager:
                 # `batch`), so inject the article's own values before handing
                 # them to the helper. Unused here in practice — the movement
                 # below is written with kcal and cost pinned to None because a
-                # correction is not a consumption (spec 7.5) — but _as_batch_view
+                # correction is not a consumption (spec 7.5) — but as_batch_view
                 # now always reads all eight macro columns off its row, so they
                 # must be present to avoid a KeyError.
                 views = [
-                    _as_batch_view({
+                    as_batch_view({
                         **dict(row),
                         "kcal_per_base_unit": article["kcal_per_base_unit"],
                         **repo.macro_rates(article),

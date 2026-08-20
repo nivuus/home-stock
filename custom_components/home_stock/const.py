@@ -23,6 +23,18 @@ REASONS: Final = (
     REASON_CONVERSION,
 )
 
+# Reasons a "consume" call may legitimately carry — offered by both the
+# services.yaml selector and the websocket schema. The other three reasons
+# (purchase, inventory, transfer) are written exclusively by
+# add_stock/adjust_inventory/transfer_batch; letting them through here would
+# tag a negative-quantity movement with a reason that repo.totals_between/
+# journal_entries/counted_movements do not track, silently under-counting
+# the kcal, cost or cost_waste totals for stock that really did leave the
+# pantry. Lives here, not in services.py, so the websocket surface can use
+# the exact same tuple without importing from the older module — the newer
+# surface must not be at the mercy of the older one.
+CONSUME_REASONS: Final = (REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED)
+
 DATABASE_FILENAME: Final = "home_stock.db"
 DEFAULT_EXPIRATION_ALERT_DAYS: Final = 3
 CONF_EXPIRATION_ALERT_DAYS: Final = "expiration_alert_days"

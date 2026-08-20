@@ -272,7 +272,7 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     """
     return _rows(conn.execute(
         f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit, {MACRO_RATE_SQL},"
-        "       a.product_id FROM batch b"
+        "       a.product_id, a.serving_quantity FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
         " WHERE a.product_id = ? AND b.closed_at IS NULL",

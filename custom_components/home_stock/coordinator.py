@@ -20,6 +20,31 @@ from .domain.foodday import food_day_bounds
 _LOGGER = logging.getLogger(__name__)
 
 
+async def async_resolve_time_zone(hass: HomeAssistant) -> ZoneInfo:
+    """Home Assistant's own configured time zone, resolved asynchronously.
+
+    Every caller that bounds a food day needs the same guard: a coordinator
+    refresh must not fail every 15 minutes just because the configured zone
+    string turned out unresolvable — `async_get_time_zone` can still return
+    `None` for that — so this falls back to UTC (loudly) instead of raising.
+    A hard error on a bad zone string belongs in HA's own config validation,
+    long before this ever runs.
+
+    Shared by the coordinator and by the websocket journal commands: a food
+    day must not be bounded by two different guesses depending on which of
+    the two asked.
+    """
+    tz = await dt_util.async_get_time_zone(hass.config.time_zone)
+    if tz is None:
+        _LOGGER.warning(
+            "Could not resolve configured time zone %r; the food day "
+            "falls back to UTC until this is fixed",
+            hass.config.time_zone,
+        )
+        tz = ZoneInfo("UTC")
+    return tz
+
+
 class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Reads the summary from SQLite, in the executor."""
 
@@ -56,21 +81,9 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         # The food day is bounded in Home Assistant's own configured time
         # zone, never a guessed default: that is exactly the kind of value
-        # that gets it wrong twice a year, silently. async_get_time_zone can
-        # still return None if the configured zone string is unresolvable;
-        # falling back to UTC (and logging it loudly) is chosen over raising
-        # here, because a coordinator refresh failing every 15 minutes would
-        # take down every home_stock sensor for a problem that a hard error
-        # elsewhere in HA's own config validation should already have caught
-        # long before this ever runs.
-        tz = await dt_util.async_get_time_zone(self.hass.config.time_zone)
-        if tz is None:
-            _LOGGER.warning(
-                "Could not resolve configured time zone %r; the food day "
-                "falls back to UTC until this is fixed",
-                self.hass.config.time_zone,
-            )
-            tz = ZoneInfo("UTC")
+        # that gets it wrong twice a year, silently. See
+        # async_resolve_time_zone for the guard.
+        tz = await async_resolve_time_zone(self.hass)
         data = await self.hass.async_add_executor_job(
             partial(self.manager.summary, expiration_alert_days=days, tz=tz)
         )

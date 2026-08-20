@@ -34,6 +34,10 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
      lambda m: f"La quantité doit être positive (reçu : {m.group(1)})."),
     (re.compile(r"^(.+) is not a base unit; expected one of .+$"), "invalid_value",
      lambda m: f"Unité inconnue : {m.group(1)}. Les unités possibles sont g, ml et pièce."),
+    (re.compile(r"^requested (.+), only (.+) available$"), "insufficient_stock",
+     lambda m: f"Stock insuffisant : {m.group(1)} demandé, {m.group(2)} disponible."),
+    (re.compile(r"^batch (\d+) does not belong to product (\d+)$"), "invalid_field",
+     lambda m: f"Le lot {m.group(1)} n'appartient pas au produit {m.group(2)}."),
 )
 
 GENERIC_CODE: Final = "invalid_value"

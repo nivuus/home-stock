@@ -12,7 +12,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, REASON_CONSUMPTION, REASON_EXPIRED, REASON_WASTE
+from .const import CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
@@ -25,15 +25,6 @@ from .validators import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Reasons a "consume" call may legitimately carry — the same three the
-# services.yaml selector offers. The other three reasons (purchase, inventory,
-# transfer) are written exclusively by add_stock/adjust_inventory/transfer_batch;
-# letting them through here would tag a negative-quantity movement with a
-# reason that repo.totals_between/journal_entries/counted_movements do not
-# track, silently under-counting the kcal, cost or cost_waste totals for
-# stock that really did leave the pantry.
-CONSUME_REASONS = (REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED)
 
 # Home Assistant's own cv.positive_int is vol.All(vol.Coerce(int),
 # vol.Range(min=0)): it truncates a float silently, accepts a bare JSON

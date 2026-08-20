@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from datetime import date
 from functools import partial
 from typing import Any, Callable, Final
 
@@ -14,10 +15,14 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .const import BASE_UNITS, DOMAIN
+from .application import PartsError, as_batch_view
+from .const import BASE_UNITS, CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
+from .coordinator import async_resolve_time_zone
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
+from .domain.foodday import GRANULARITIES
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
+from .domain.stock import InsufficientStock, sort_batches
 from .domain.units import UnitError
 from .messages import french_error
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
@@ -27,7 +32,7 @@ from .shopping import ShoppingError
 from .storage import repositories as repo
 from .validators import (
     MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date,
-    non_negative_float, preview,
+    non_negative_float, parts_count, preview,
 )
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
@@ -54,6 +59,11 @@ _bounded_int = bounded_int
 _bounded_text = bounded_text
 _iso_date = iso_date
 _preview = preview
+_PARTS: Final = parts_count
+
+# Twelve months of monthly bars, fourteen days of daily ones: past that the
+# panel is not drawing a graph, it is fetching a year of journal to throw away.
+MAX_SERIES_COUNT: Final = 60
 
 
 def _non_empty_text(value: Any) -> str:
@@ -314,18 +324,44 @@ async def batches_list(hass, connection, msg) -> None:
 })
 @websocket_api.async_response
 async def product_get(hass, connection, msg) -> None:
+    """The product, plus what the panel's "manger" screen needs in the same
+    round trip: the suggested portion (learned beats Open Food Facts' own
+    serving, per repo.learned_portion's docstring) and the batch FIFO would
+    pick next.
+    """
     runtime = _runtime(hass)
     if runtime is None:
         _send_not_loaded(connection, msg)
         return
-    product = await _read(hass, partial(
-        repo.get_product, runtime.manager.db.read(), msg["product_id"]
-    ))
+    conn = runtime.manager.db.read()
+    product = await _read(hass, partial(repo.get_product, conn, msg["product_id"]))
     if product is None:
         connection.send_error(msg["id"], "not_found",
                               f"produit {msg['product_id']} inconnu")
         return
-    connection.send_result(msg["id"], {"product": product})
+
+    learned = await _read(hass, partial(repo.learned_portion, conn, msg["product_id"]))
+    batches = await _read(hass, partial(
+        repo.list_batches_for_product, conn, msg["product_id"]))
+    next_batch = next(iter(sort_batches([as_batch_view(row) for row in batches])), None)
+    serving = None
+    if next_batch is not None:
+        serving = next(row["serving_quantity"] for row in batches
+                       if row["id"] == next_batch.id)
+    suggested, source = ((learned, "learned") if learned is not None
+                         else (serving, "serving") if serving is not None
+                         else (None, None))
+    connection.send_result(msg["id"], {
+        "product": product,
+        "suggested_portion": suggested,
+        "portion_source": source,
+        "serving_quantity": serving,
+        "next_batch": None if next_batch is None else {
+            "id": next_batch.id, "remaining": next_batch.remaining,
+            "best_before": next_batch.best_before.isoformat()
+                           if next_batch.best_before else None,
+        },
+    })
 
 
 @websocket_api.websocket_command({
@@ -754,6 +790,91 @@ async def stock_add(hass, connection, msg) -> None:
 
 
 @websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/stock/consume",
+    vol.Required("product_id"): _bounded_int,
+    vol.Required("quantity"): _finite_float,
+    vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
+    vol.Optional("batch_id"): _bounded_int,
+    vol.Optional("parts_total"): _PARTS,
+    vol.Optional("parts_mine"): _PARTS,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def stock_consume(hass, connection, msg) -> None:
+    """Declare that something was eaten, thrown away, or found expired.
+
+    With a batch_id, that precise batch is taken from — the panel's "manger"
+    screen always targets the batch FIFO would pick, and says so. Without one,
+    the consumption walks the batches in FIFO order and may span several.
+    product_id stays required either way: the pair is checked rather than one
+    of the two being trusted.
+    """
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+
+    parts = (msg.get("parts_total"), msg.get("parts_mine"))
+    try:
+        if "batch_id" in msg:
+            result = await hass.async_add_executor_job(partial(
+                runtime.manager.consume_batch, msg["batch_id"],
+                product_id=msg["product_id"], quantity=msg["quantity"],
+                reason=msg["reason"], parts_total=parts[0], parts_mine=parts[1],
+                idempotency_key=msg.get("idempotency_key")))
+            movement_ids = [result]
+        else:
+            movement_ids = await hass.async_add_executor_job(partial(
+                runtime.manager.consume, product_id=msg["product_id"],
+                quantity=msg["quantity"], reason=msg["reason"],
+                parts_total=parts[0], parts_mine=parts[1],
+                idempotency_key=msg.get("idempotency_key")))
+    except (LookupError, PartsError, InsufficientStock, UnitError, ValueError,
+            OverflowError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    except sqlite3.IntegrityError as err:
+        _send_integrity_error(connection, msg["id"], err)
+        return
+
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"movement_ids": movement_ids})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/journal/day",
+    vol.Optional("date"): _iso_date,
+})
+@websocket_api.async_response
+async def journal_day(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    day = date.fromisoformat(msg["date"]) if msg.get("date") else None
+    tz = await async_resolve_time_zone(hass)
+    result = await _read(hass, partial(runtime.manager.journal_day, day, tz=tz))
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/journal/series",
+    vol.Required("granularity"): vol.In(GRANULARITIES),
+    vol.Required("count"): vol.All(_bounded_int, vol.Range(min=1, max=MAX_SERIES_COUNT)),
+})
+@websocket_api.async_response
+async def journal_series(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    tz = await async_resolve_time_zone(hass)
+    result = await _read(hass, partial(
+        runtime.manager.journal_series, msg["granularity"], msg["count"], tz=tz))
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
     vol.Required("type"): "home_stock/aisles/reorder",
     vol.Required("aisle_ids"): [_bounded_int],
     # Same allowance as product/update above: the settings screen reorders
@@ -1100,7 +1221,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     for command in (products_list, product_get, locations_list, aisles_list,
                     stores_list, batches_list, movements_list, subscribe, lookup,
                     article_create, article_update, product_update,
-                    product_convert_unit, stock_add, aisles_reorder,
+                    product_convert_unit, stock_add, stock_consume, journal_day,
+                    journal_series, aisles_reorder,
                     session_start, session_current, session_add_line,
                     session_update_line, session_remove_line, session_checkout,
                     session_store_line, session_close):
