@@ -228,8 +228,10 @@ par la couche HA. Le domaine ne connaît pas `hass`.
 **Changements d'heure.** 04:00 n'est ni ambigu ni manquant à Paris : le saut de
 printemps va de 02:00 à 03:00, celui d'automne de 03:00 à 02:00. La frontière
 existe donc toujours exactement une fois — mais la journée dure 23 h ou 25 h,
-et c'est ce que les tests doivent épingler, aux deux dates de 2026
-(29 mars et 25 octobre).
+et c'est ce que les tests doivent épingler. Attention au décalage d'un jour :
+les changements d'heure de 2026 tombent dans les nuits du 28 au 29 mars et du
+24 au 25 octobre, donc les journées alimentaires anormales sont celles du
+**28 mars** (23 h) et du **24 octobre** (25 h), pas celles des dimanches.
 
 **Où se calculent les seaux.** SQLite ne connaît aucune base de fuseaux
 horaires : un `GROUP BY` sur une date locale décalée y serait faux deux jours

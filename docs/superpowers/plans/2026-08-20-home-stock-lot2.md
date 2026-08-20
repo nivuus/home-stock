@@ -534,22 +534,35 @@ def test_bounds_in_winter_shift_with_the_offset():
 
 
 def test_the_spring_forward_day_is_twenty_three_hours_long():
-    """29 mars 2026 : Paris passe de 02:00 à 03:00. 4 h existe une seule fois
-    ce jour-là, mais la journée alimentaire ne dure que 23 heures."""
-    start, end = bounds_of_food_day(date(2026, 3, 29), PARIS)
-    assert start == "2026-03-29T03:00:00"    # 4 h locales = UTC+1 ce matin-là
-    assert end == "2026-03-30T02:00:00"      # 4 h locales = UTC+2 le lendemain
+    """Paris avance ses horloges dans la nuit du 28 au 29 mars 2026 (02:00 →
+    03:00). La journée alimentaire raccourcie est donc celle du **28**, qui
+    commence à 4 h en heure d'hiver et finit à 4 h en heure d'été. Celle du 29
+    dure 24 heures pleines — se tromper de jour ici passerait inaperçu, et
+    c'est exactement l'erreur que ce test existe pour empêcher."""
+    start, end = bounds_of_food_day(date(2026, 3, 28), PARIS)
+    assert start == "2026-03-28T03:00:00"    # 4 h locales = UTC+1 ce matin-là
+    assert end == "2026-03-29T02:00:00"      # 4 h locales = UTC+2 le lendemain
     duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
     assert duration.total_seconds() == 23 * 3600
 
 
 def test_the_autumn_day_is_twenty_five_hours_long():
-    """25 octobre 2026 : Paris repasse de 03:00 à 02:00."""
-    start, end = bounds_of_food_day(date(2026, 10, 25), PARIS)
-    assert start == "2026-10-25T02:00:00"
-    assert end == "2026-10-26T03:00:00"
+    """Paris recule ses horloges dans la nuit du 24 au 25 octobre 2026
+    (03:00 → 02:00) : c'est la journée du **24** qui dure 25 heures."""
+    start, end = bounds_of_food_day(date(2026, 10, 24), PARIS)
+    assert start == "2026-10-24T02:00:00"
+    assert end == "2026-10-25T03:00:00"
     duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
     assert duration.total_seconds() == 25 * 3600
+
+
+def test_the_day_after_a_change_is_back_to_twenty_four_hours():
+    """Le garde-fou du test précédent : si les bornes étaient calculées depuis
+    une seule date locale, ces deux journées-ci sortiraient fausses aussi."""
+    for day in (date(2026, 3, 29), date(2026, 10, 25)):
+        start, end = bounds_of_food_day(day, PARIS)
+        duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
+        assert duration.total_seconds() == 24 * 3600, day
 
 
 def test_a_movement_stored_in_utc_lands_in_the_right_day_across_the_change():
@@ -557,6 +570,7 @@ def test_a_movement_stored_in_utc_lands_in_the_right_day_across_the_change():
     Stocké en UTC naïf, il doit tomber dans la journée de la veille."""
     stored = "2026-10-26T02:30:00"        # 03:30 à Paris, UTC+1 ce jour-là
     start, end = bounds_of_food_day(date(2026, 10, 25), PARIS)
+    assert (start, end) == ("2026-10-25T03:00:00", "2026-10-26T03:00:00")
     assert start <= stored < end
 
 
@@ -2946,8 +2960,13 @@ async def test_product_get_carries_the_portion_and_the_next_batch(hass, hass_ws_
     manager = entry.runtime_data.manager
     await hass.async_add_executor_job(
         lambda: manager.add_stock(article_id=1, quantity=500.0, location_id=1))
-    await hass.async_add_executor_job(lambda: manager.db.write().__enter__().execute(
-        "UPDATE article SET serving_quantity = 125 WHERE id = 1"))
+    def _poser_la_portion():
+        # `with`, pas `.__enter__()` : le verrou d'écriture de la base n'est pas
+        # réentrant, et une transaction laissée ouverte bloquerait la suite du
+        # test sans rien dire.
+        with manager.db.write() as conn:
+            conn.execute("UPDATE article SET serving_quantity = 125 WHERE id = 1")
+    await hass.async_add_executor_job(_poser_la_portion)
     client = await hass_ws_client(hass)
 
     await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
@@ -2977,7 +2996,13 @@ async def test_the_learned_portion_beats_the_open_food_facts_one(hass, hass_ws_c
     assert result["portion_source"] == "learned"
 ```
 
-Dans `tests/test_offline_queue_contract.py`, ajouter `"home_stock/stock/consume"` à `EXPECTED_QUEUED_COMMAND_TYPES`.
+> **Ne pas toucher à `tests/test_offline_queue_contract.py` dans cette tâche.**
+> Ce test dérive la liste des commandes mises en file **du source TypeScript**,
+> et compare le résultat du scan à `EXPECTED_QUEUED_COMMAND_TYPES`. À ce stade
+> le front n'appelle pas encore `home_stock/stock/consume` : ajouter la
+> commande à la constante ferait échouer le contrôle d'intégrité du scanner
+> lui-même. La mise à jour appartient à la tâche 14, où l'écran « manger »
+> met réellement la commande en file.
 
 - [ ] **Step 2: Lancer, vérifier l'échec**
 
@@ -3837,14 +3862,27 @@ Reprendre les styles de `ecrans/fiche.ts` : mêmes tailles de bouton, mêmes cou
 Run: `npm test -- consommation`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents (mutation)**
+- [ ] **Step 5: Fermer le contrat de la file hors-ligne**
 
-Remplacer `const partage = this.partage && this.motif === 'consumption';` par `const partage = this.partage;`. Relancer : `n’envoie jamais de parts sur un motif « jeté »` doit tomber. Remettre.
+Maintenant — et seulement maintenant — que le front met réellement la commande
+en file, ajouter `"home_stock/stock/consume"` à `EXPECTED_QUEUED_COMMAND_TYPES`
+dans `tests/test_offline_queue_contract.py`, avec un commentaire disant depuis
+quelle tâche elle y est.
 
-- [ ] **Step 6: Commit**
+Run: `./scripts/test.sh tests/test_offline_queue_contract.py -q`
+Expected: PASS — le scan du source TypeScript trouve la commande, et le schéma
+côté serveur accepte bien sa clé d'idempotence.
+
+- [ ] **Step 6: Vérifier que le test a des dents (mutation)**
+
+Remplacer `const partage = this.partage && this.motif === 'consumption';` par `const partage = this.partage;`. Relancer `npm test -- consommation` : `n’envoie jamais de parts sur un motif « jeté »` doit tomber. Remettre.
+
+Puis, dans `websocket_api.py`, retirer `vol.Optional("idempotency_key")` du schéma de `home_stock/stock/consume` et relancer `./scripts/test.sh tests/test_offline_queue_contract.py -q` : le contrat doit tomber. C'est le trou exact qui, au lot 1, a bloqué un panier entier sur un seul `+` refusé. Remettre.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add frontend/src/ecrans/consommation.ts frontend/tests/consommation.test.ts
+git add frontend/src/ecrans/consommation.ts frontend/tests/consommation.test.ts tests/test_offline_queue_contract.py
 git commit -m "feat: the eat screen, one tap for a piece"
 ```
 
@@ -3854,8 +3892,15 @@ git commit -m "feat: the eat screen, one tap for a piece"
 
 **Files:**
 - Create: `frontend/src/ecrans/journal.ts`
-- Modify: `frontend/src/panneau.ts`
-- Test: `frontend/tests/journal.test.ts` (créer), `frontend/tests/panneau.test.ts`
+- Modify: `frontend/src/panneau.ts`, `frontend/src/ecrans/fiche.ts`, `frontend/src/ecrans/catalogue.ts`
+- Test: `frontend/tests/journal.test.ts` (créer), `frontend/tests/panneau.test.ts`, `frontend/tests/fiche.test.ts`, `frontend/tests/catalogue.test.ts`
+
+**⚠️ Cette tâche est celle qui rend l'écran « manger » atteignable.** Sans
+elle, la tâche 14 livre un composant que rien n'ouvre — exactement le défaut
+qui a échappé aux dix-sept revues du lot 1, où `session/start` n'était appelé
+par personne et emportait avec lui le panier, deux capteurs et tout le parcours
+en magasin. Les points d'entrée font partie du livrable, au même titre que
+l'écran lui-même.
 
 **Interfaces:**
 - Consomme : `home_stock/journal/day`, `home_stock/journal/series` (tâche 11).
@@ -3993,11 +4038,23 @@ describe('<home-stock-journal>', () => {
 Ajouter à `frontend/tests/panneau.test.ts` :
 
 ```ts
-it('expose les deux nouveaux écrans dans la navigation', async () => {
+it('expose le journal dans la navigation, mais pas « manger »', async () => {
   const panneau = await monterPanneau();       // helper déjà présent dans ce fichier
   const libelles = [...panneau.shadowRoot.querySelectorAll('.nav-bouton')]
     .map((b: Element) => b.textContent?.trim());
   expect(libelles).toContain('Journal');
+  // « Manger » a besoin d'un produit : un bouton de navigation nu ouvrirait
+  // un écran qui n'a rien à montrer.
+  expect(libelles).not.toContain('Manger');
+});
+
+it('ouvre l’écran « manger » sur le produit qu’on lui désigne', async () => {
+  const panneau = await monterPanneau();
+  panneau.dispatchEvent(new CustomEvent('manger-produit',
+    { detail: { product_id: 42 }, bubbles: true, composed: true }));
+  await panneau.updateComplete;
+  expect(panneau.ecran).toBe('consommation');
+  expect(panneau.shadowRoot.querySelector('home-stock-consommation').productId).toBe(42);
 });
 
 it('revient au scanner quand une consommation est enregistrée', async () => {
@@ -4058,6 +4115,18 @@ Créer `frontend/src/ecrans/journal.ts`. Points imposés :
 - La part ne s'affiche (`.entree-parts`) que si `parts_total` n'est ni `null` ni égal à `parts_mine`.
 - Aucune dépendance nouvelle : les barres sont des `div`, pas une bibliothèque de graphes.
 
+**Les points d'entrée.** L'écran « manger » a besoin d'un produit : il ne
+s'ouvre donc pas depuis un bouton de navigation nu, qui n'en désignerait aucun.
+
+- `ecrans/fiche.ts` gagne un bouton « Manger » à côté de ceux qui existent,
+  visible quand la fiche connaît un produit rattaché, qui émet
+  `new CustomEvent('manger-produit', { detail: { product_id },
+  bubbles: true, composed: true })`.
+- `ecrans/catalogue.ts` gagne le même bouton sur chaque ligne de produit —
+  c'est le chemin du fond d'huile dont l'emballage n'est plus sous la main.
+- `panneau.ts` écoute `manger-produit`, retient `produitAManger` et bascule sur
+  `'consommation'`, qu'il rend en passant cette valeur en `productId`.
+
 Dans `panneau.ts` :
 
 ```ts
@@ -4065,7 +4134,36 @@ export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal';
 ```
 
-Ajouter les deux imports, les deux branches de rendu, un bouton « Journal » dans la navigation, et l'écoute de `consommation-enregistree` qui ramène à `'scanner'`. Le garde-fou existant du rangement (confirmation à deux appuis quand des lignes attendent) s'applique à ces deux cibles sans modification.
+Ajouter les deux imports, les deux branches de rendu, l'état `produitAManger`,
+l'écoute de `manger-produit`, un bouton **« Journal »** dans la navigation — et
+lui seul : « Manger » n'y figure pas — et l'écoute de
+`consommation-enregistree` qui ramène à `'scanner'`. Le garde-fou existant du
+rangement (confirmation à deux appuis quand des lignes attendent) s'applique à
+ces deux cibles sans modification.
+
+Ajouter aussi ces deux tests, aux fichiers de tests des écrans concernés :
+
+```ts
+// frontend/tests/fiche.test.ts
+it('offre de manger le produit rattaché', async () => {
+  const element = /* la fiche montée comme les autres tests de ce fichier */;
+  const vus: number[] = [];
+  element.addEventListener('manger-produit', (e: any) => vus.push(e.detail.product_id));
+  element.shadowRoot.querySelector('.manger')?.dispatchEvent(new Event('click'));
+  expect(vus).toEqual([1]);
+});
+```
+
+```ts
+// frontend/tests/catalogue.test.ts
+it('offre de manger un produit du catalogue', async () => {
+  const element = /* le catalogue monté comme les autres tests de ce fichier */;
+  const vus: number[] = [];
+  element.addEventListener('manger-produit', (e: any) => vus.push(e.detail.product_id));
+  element.shadowRoot.querySelector('.manger')?.dispatchEvent(new Event('click'));
+  expect(vus.length).toBe(1);
+});
+```
 
 - [ ] **Step 4: Lancer toute la suite front**
 
@@ -4112,8 +4210,10 @@ Dans `frontend/outils/verifier-rendu.mjs`, ajouter à `SCENARIOS` :
         },
       },
     },
+    // Pas de `click-nav` ici : « manger » n'est pas une destination de la
+    // barre de navigation, il s'ouvre sur un produit désigné (tâche 15).
     actions: [
-      { type: 'click-nav', texte: 'Manger' },
+      { type: 'dispatch-evenement', nom: 'manger-produit', detail: { product_id: 1 } },
       { type: 'click', selecteur: '.partage-bascule' },
     ],
     ecranAttendu: 'home-stock-consommation',
@@ -4131,6 +4231,10 @@ Dans `frontend/outils/verifier-rendu.mjs`, ajouter à `SCENARIOS` :
     ecranAttendu: 'home-stock-journal',
   },
 ```
+
+Le vérificateur doit connaître l'action `dispatch-evenement` : l'ajouter à son
+répertoire d'actions (à côté de `dispatch-code-lu`, qui fait déjà exactement
+cela pour le scan), en émettant l'événement sur le panneau.
 
 Définir `JOURNEE_CHARGEE` avec **douze** entrées — dont une jetée, une avec des parts 1/4, et une sans kcal — et `SERIE_QUATORZE_JOURS` avec quatorze seaux dont un à zéro et un maximum net. Une journée à trois lignes ne prouve rien sur le débordement : c'est une journée réaliste qui doit tenir dans le cadre.
 
