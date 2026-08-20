@@ -467,7 +467,24 @@ conteneur, pas de rechargement de l'intégration, pas de lecture du jeton. La
 vérification s'arrête à ce qui s'observe sans déranger la maison — règle posée
 au lot 1 après un redémarrage non demandé du Home Assistant du foyer.
 
-## 17. Points différés
+## 17. Dette du lot 1 reprise ici
+
+`frontend/src/file-attente.ts` porte un commentaire qui nomme une course
+restée ouverte et la reporte explicitement à ce lot : quand le rejeu générique
+du panneau démarre avant l'écriture d'un écran, son nettoyage efface le sort
+que l'écran attendait, et l'écran croit son action encore en file alors que le
+serveur l'a reçue.
+
+La correction est celle que ce commentaire décrit : **un passage de relais par
+clé**. `ajouter` rend une promesse que l'entrée de file résout elle-même au
+moment où son sort est connu ; `resultatDe` et `viderResultats` disparaissent,
+et avec eux la table partagée. Une panne de transport résout `en-attente` sans
+vider la file — sans quoi un écran resterait bloqué indéfiniment sur son bouton.
+
+Cette dette se solde **avant** l'écran « manger », qui s'appuie sur ce retour
+pour savoir s'il peut se refermer.
+
+## 18. Points différés
 
 - **Corriger un mouvement déjà écrit.** Le journal est append-only ; corriger
   demandera un motif `correction` et une migration. Regroupé avec la correction
