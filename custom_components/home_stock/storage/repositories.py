@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..const import (
-    COUNTED_REASONS,
     MACRO_COLUMNS,
     REASON_CONSUMPTION,
     REASON_EXPIRED,
@@ -396,21 +395,6 @@ def stock_rows(conn) -> list[dict[str, Any]]:
         " WHERE b.closed_at IS NULL"
         " ORDER BY p.name, b.best_before"
     ))
-
-
-def counted_totals(conn) -> dict[str, float]:
-    """Cumulative kcal and cost of everything that left the stock.
-
-    Purchases, inventory corrections and transfers are excluded: only the reasons
-    listed in COUNTED_REASONS feed the daily totals (spec 7.5).
-    """
-    marks = ", ".join("?" for _ in COUNTED_REASONS)
-    row = conn.execute(
-        f"SELECT COALESCE(SUM(kcal), 0) AS kcal, COALESCE(SUM(cost), 0) AS cost"
-        f" FROM movement WHERE reason IN ({marks})",
-        tuple(sorted(COUNTED_REASONS)),
-    ).fetchone()
-    return {"kcal": float(row["kcal"]), "cost": float(row["cost"])}
 
 
 # The personal share of a movement. The CAST is not decoration: parts_mine and

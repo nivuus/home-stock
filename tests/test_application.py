@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from custom_components.home_stock.application import PartsError, StockManager
@@ -296,7 +298,7 @@ def test_summary_reports_value_expirations_and_shortages(manager, pasta):
     manager.add_stock(article_id=pasta["article_id"], quantity=100,
                       location_id=pasta["location_id"], best_before="2026-08-19",
                       price_per_base_unit=0.004, occurred_at="2026-08-18T10:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.4)
     assert summary["batch_count"] == 1
     assert len(summary["expiring"]) == 1
@@ -316,7 +318,7 @@ def test_summary_breaks_the_stock_value_down_per_location(manager, pasta):
     manager.add_stock(article_id=pasta["article_id"], quantity=50,
                       location_id=freezer_id, price_per_base_unit=0.004,
                       occurred_at="2026-08-18T11:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.6)
     assert summary["stock_value_by_location"] == {
         "Placard": pytest.approx(0.4), "Congélateur": pytest.approx(0.2),
@@ -354,7 +356,7 @@ def test_summary_reports_a_shortage_when_stock_reaches_zero(manager, pasta):
                       location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
     manager.consume(product_id=pasta["product_id"], quantity=100,
                     occurred_at="2026-08-18T19:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-19")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-19")
     assert summary["batch_count"] == 0
     assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
 
@@ -435,7 +437,7 @@ def test_summary_excludes_unpriced_batches_from_stock_value(manager, pasta):
                       occurred_at="2026-08-18T10:00:00")
     manager.add_stock(article_id=pasta["article_id"], quantity=50,
                       location_id=pasta["location_id"], occurred_at="2026-08-18T11:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.4)   # only the priced batch
     assert summary["batch_count"] == 2
     assert summary["unpriced_batches"] == 1
@@ -526,10 +528,10 @@ def test_consume_batch_refuses_an_unknown_batch(manager):
         manager.consume_batch(999999, occurred_at="2026-08-18T19:00:00")
 
 
-def test_summary_totals_also_count_waste_and_expired(manager, pasta):
-    """Only consumption was exercised so far — waste and expired feed the same
-    cumulative totals (spec 7.5), which is the whole basis of the lot 2
-    per-day breakdown."""
+def test_summary_totals_keep_waste_and_expired_out_of_kcal_and_cost(manager, pasta):
+    """Lot 2, amendment A2: kcal_total and cost_total now count consumption
+    only, and cost_waste_total picks up waste and expiry instead, so that
+    cost_total + cost_waste_total gives back the former, single total."""
     batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
                                  location_id=pasta["location_id"], price_per_base_unit=0.004,
                                  occurred_at="2026-08-01T10:00:00")
@@ -537,10 +539,13 @@ def test_summary_totals_also_count_waste_and_expired(manager, pasta):
                     occurred_at="2026-08-02T10:00:00")
     manager.consume_batch(batch_id, quantity=50, reason="expired",
                           occurred_at="2026-08-03T10:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
-    # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each.
-    assert summary["kcal_total"] == pytest.approx(150 * 3.5, rel=1e-3)
-    assert summary["cost_total"] == pytest.approx(150 * 0.004, rel=1e-3)
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
+    # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each — none of
+    # it eaten, so kcal_total stays at zero and the money moves to
+    # cost_waste_total instead of cost_total.
+    assert summary["kcal_total"] == 0.0
+    assert summary["cost_total"] == 0.0
+    assert summary["cost_waste_total"] == pytest.approx(150 * 0.004, rel=1e-3)
 
 
 def test_every_movement_written_carries_its_unit(manager):

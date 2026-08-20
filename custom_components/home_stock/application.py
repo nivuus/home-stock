@@ -7,8 +7,10 @@ from __future__ import annotations
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from .const import (
+    MACRO_COLUMNS,
     MAX_PARTS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
@@ -18,6 +20,7 @@ from .const import (
     REASON_TRANSFER,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
@@ -30,6 +33,33 @@ NUTRITION_COLUMNS: Final = (
     "kcal_per_base_unit", "proteins", "carbohydrates", "sugars", "added_sugars",
     "fat", "saturated_fat", "fiber", "salt",
 )
+
+# The keys a bucket and a day both carry. One definition, so a series and a
+# day can never disagree about what "kcal" means.
+_TOTAL_KEYS: Final = ("kcal", *MACRO_COLUMNS, "cost", "waste_cost", "unvalued")
+
+
+def _empty_totals() -> dict[str, float]:
+    return {key: 0.0 for key in _TOTAL_KEYS}
+
+
+def _accumulate(totals: dict[str, float], row: dict[str, Any]) -> None:
+    """Add one movement to a bucket, applying the same rules as the SQL in
+    repo.totals_between — personal share on the nutrients, never on the money."""
+    reason = row["reason"]
+    if reason == REASON_CONSUMPTION:
+        share = ((row["parts_mine"] if row["parts_mine"] is not None else 1)
+                 / (row["parts_total"] if row["parts_total"] is not None else 1))
+        for key in ("kcal", *MACRO_COLUMNS):
+            value = row[key]
+            if value is not None:
+                totals[key] += value * share
+        if row["kcal"] is None:
+            totals["unvalued"] += 1
+        if row["cost"] is not None:
+            totals["cost"] += row["cost"]
+    elif row["cost"] is not None:
+        totals["waste_cost"] += row["cost"]
 
 
 def _now() -> str:
@@ -528,9 +558,14 @@ class StockManager:
             entry["display"] = format_quantity(entry["quantity"], entry["base_unit"])
         return sorted(result, key=lambda e: e["product_name"])
 
-    def summary(self, *, expiration_alert_days: int,
-                today: str | None = None) -> dict[str, Any]:
-        """The numbers the entities publish."""
+    def summary(self, *, expiration_alert_days: int, tz: ZoneInfo,
+                now: datetime | None = None, today: str | None = None) -> dict[str, Any]:
+        """The numbers the entities publish.
+
+        `today` and `now` serve two different clocks: `today` is a civil date
+        and only bounds the expiration window, while `now` is an instant and
+        only bounds the food day. Neither substitutes for the other.
+        """
         reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
         limit = reference + timedelta(days=expiration_alert_days)
         conn = self.db.read()
@@ -565,7 +600,9 @@ class StockManager:
              "display": format_quantity(row["quantity"], row["base_unit"])}
             for row in repo.shortage_rows(conn)
         ]
-        totals = repo.counted_totals(conn)
+        cumulative = repo.totals_between(conn)
+        day_start, day_end = food_day_bounds(now or datetime.now(UTC), tz)
+        today_totals = repo.totals_between(conn, day_start, day_end)
 
         # The cart: read on this same connection, like the rest of the
         # summary — a second, separate read here could race a concurrent
@@ -591,8 +628,20 @@ class StockManager:
             "open_batch_count": sum(1 for row in rows if row["opened_at"]),
             "expiring": sorted(expiring, key=lambda e: e["best_before"]),
             "shortages": shortages,
-            "kcal_total": round(totals["kcal"], 1),
-            "cost_total": round(totals["cost"], 2),
+            # Lot 2, amendment A2: these two counters now total consumption
+            # only. Waste has its own, cost_waste_total, so that
+            # cost_total + cost_waste_total gives back the former total.
+            "kcal_total": round(cumulative["kcal"], 1),
+            "cost_total": round(cumulative["cost"], 2),
+            "cost_waste_total": round(cumulative["waste_cost"], 2),
+            "today": {
+                "food_day": food_day_of(now or datetime.now(UTC), tz).isoformat(),
+                "kcal": round(today_totals["kcal"], 1),
+                **{column: round(today_totals[column], 3) for column in MACRO_COLUMNS},
+                "cost": round(today_totals["cost"], 2),
+                "waste_cost": round(today_totals["waste_cost"], 2),
+                "unvalued": int(today_totals["unvalued"]),
+            },
             # Rounded to 2 decimals like every other euro sensor
             # (stock_value, cost_total): session_totals() itself keeps 4,
             # for the websocket API's own precision needs.
@@ -602,6 +651,35 @@ class StockManager:
             "cart_store": session["store"] if session else None,
             "cart_to_store": awaiting_storage,
         }
+
+    def journal_day(self, day: date | None, *, tz: ZoneInfo,
+                    now: datetime | None = None) -> dict[str, Any]:
+        """One food day: its bounds, its entries, its totals."""
+        reference = day or food_day_of(now or datetime.now(UTC), tz)
+        start, end = bounds_of_food_day(reference, tz)
+        conn = self.db.read()
+        return {
+            "food_day": reference.isoformat(),
+            "start": start,
+            "end": end,
+            "entries": repo.journal_entries(conn, start, end),
+            "totals": repo.totals_between(conn, start, end),
+        }
+
+    def journal_series(self, granularity: str, count: int, *, tz: ZoneInfo,
+                       now: datetime | None = None) -> dict[str, Any]:
+        """The last `count` buckets, oldest first. Raises ValueError on a
+        granularity or a count the domain refuses."""
+        buckets = bucket_bounds(granularity, count, now or datetime.now(UTC), tz)
+        rows = repo.counted_movements(self.db.read(), buckets[0].start)
+        filled = []
+        for bucket in buckets:
+            totals = _empty_totals()
+            for row in rows:
+                if bucket.start <= row["occurred_at"] < bucket.end:
+                    _accumulate(totals, row)
+            filled.append({"label": bucket.label, **totals})
+        return {"granularity": granularity, "buckets": filled}
 
     def export_journal(self) -> list[dict[str, Any]]:
         """The whole append-only journal. It is enough to rebuild everything."""

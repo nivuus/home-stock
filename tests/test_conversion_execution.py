@@ -1,6 +1,7 @@
 """Executing a conversion: one transaction, an honest journal, no lost stock,
 and no lost money."""
 import sqlite3
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -88,25 +89,6 @@ def test_a_conversion_counts_neither_calories_nor_cost(manager):
     assert all(r["kcal"] is None and r["cost"] is None for r in rows)
 
 
-def test_a_conversion_does_not_move_the_counted_totals(manager):
-    """The exclusion is correct in the SQL (REASON_CONVERSION is absent from
-    COUNTED_REASONS) but that branch is worthless untested: exercise it with
-    a non-zero baseline from a real consumption, then convert and check the
-    totals really did not move."""
-    manager.add_stock(article_id=10, quantity=2, location_id=1, price_per_base_unit=1.20)
-    manager.consume(product_id=1, quantity=1)
-
-    with manager.db.write() as conn:
-        before = repo.counted_totals(conn)
-    assert before == {"kcal": 1750.0, "cost": 1.20}
-
-    manager.convert_product_unit(product_id=1, to_unit="g", reference_quantity=500)
-
-    with manager.db.write() as conn:
-        after = repo.counted_totals(conn)
-    assert after == before
-
-
 def test_nutrition_is_divided_by_the_weight_of_its_own_article(manager):
     # reference_quantity (400) deliberately differs from article 10's own net
     # weight (500): if the code rescaled by the reference instead of the
@@ -169,12 +151,12 @@ def test_converting_preserves_the_value_of_the_stock_in_euros(manager):
     the stock's total value in euros must not move."""
     manager.add_stock(article_id=10, quantity=2, location_id=1, price_per_base_unit=1.20)
 
-    before = manager.summary(expiration_alert_days=7)["stock_value"]
+    before = manager.summary(expiration_alert_days=7, tz=ZoneInfo("UTC"))["stock_value"]
     assert before == pytest.approx(2.40)
 
     manager.convert_product_unit(product_id=1, to_unit="g", reference_quantity=500)
 
-    after = manager.summary(expiration_alert_days=7)["stock_value"]
+    after = manager.summary(expiration_alert_days=7, tz=ZoneInfo("UTC"))["stock_value"]
     assert after == pytest.approx(before)
     assert after == pytest.approx(2.40)
 
