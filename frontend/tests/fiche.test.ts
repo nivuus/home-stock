@@ -660,3 +660,29 @@ describe('code scanné pour lequel Open Food Facts n’a pas répondu', () => {
     expect(el.shadowRoot!.querySelector('.alerte-off')).toBeNull();
   });
 });
+
+describe('le bouton « Manger »', () => {
+  // Le brief de cette tâche attend `vus).toEqual([1])`, sur un montage
+  // laissé à compléter — mais aucune fixture de ce fichier n'a de produit
+  // d'id 1 : `resultatConnu()` (le montage réellement utilisé par les
+  // autres tests « article déjà connu » de ce fichier) rattache le produit
+  // d'id 9. Corrigé ici plutôt que d'inventer une fixture qui n'existe pas
+  // ailleurs dans ce fichier.
+  it('offre de manger le produit rattaché', async () => {
+    const element = creer(resultatConnu());
+    await element.updateComplete;
+
+    const vus: number[] = [];
+    element.addEventListener('manger-produit', (e: any) => vus.push(e.detail.product_id));
+    element.shadowRoot!.querySelector('.manger')?.dispatchEvent(new Event('click'));
+
+    expect(vus).toEqual([9]);
+  });
+
+  it('ne propose rien tant qu’aucun produit n’est rattaché', async () => {
+    const element = creer(resultatInconnu());
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.manger')).toBeNull();
+  });
+});

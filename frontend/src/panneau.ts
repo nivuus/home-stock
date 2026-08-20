@@ -9,12 +9,15 @@ import './ecrans/session';
 import './ecrans/rangement';
 import './ecrans/catalogue';
 import './ecrans/reglages';
+import './ecrans/consommation';
+import './ecrans/journal';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
 
-export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session' | 'catalogue' | 'reglages';
+export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
+  | 'catalogue' | 'reglages' | 'consommation' | 'journal';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -71,6 +74,11 @@ export class PanneauGardeManger extends LitElement {
    *  rangement avec des articles autonomes encore en attente — `null` tant
    *  qu'aucun départ n'est armé (voir `demanderNavigation`). */
   @state() private navigationArmee: Ecran | null = null;
+  /** Le produit visé par l'écran « manger », posé par la fiche ou le
+   *  catalogue via `manger-produit` — `null` tant qu'aucun n'a été désigné,
+   *  ce qui est aussi pourquoi ce n'est jamais un bouton de navigation nu :
+   *  il n'aurait aucun produit à passer. */
+  @state() private produitAManger: number | null = null;
 
   private connexion?: Connexion;
   private file?: FileAttente;
@@ -110,6 +118,11 @@ export class PanneauGardeManger extends LitElement {
       }
     });
     window.addEventListener('online', this.auRetourDuReseau);
+    // `manger-produit` peut venir de la fiche comme du catalogue — deux
+    // écrans différents, jamais montés ensemble — donc écouté ici, sur
+    // l'hôte, plutôt que câblé à chaque enfant qui pourrait l'émettre.
+    this.addEventListener('manger-produit', this.surMangerProduit as EventListener);
+    this.addEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
 
   disconnectedCallback(): void {
@@ -117,6 +130,8 @@ export class PanneauGardeManger extends LitElement {
     this.desabonner?.();
     this.desabonner = undefined;
     window.removeEventListener('online', this.auRetourDuReseau);
+    this.removeEventListener('manger-produit', this.surMangerProduit as EventListener);
+    this.removeEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
 
   private auRetourDuReseau = (): void => {
@@ -195,6 +210,22 @@ export class PanneauGardeManger extends LitElement {
    *  n'a qu'un but, scanner en rayon ; la clore n'en laisse plus aucun. */
   private surSessionChangee = async (): Promise<void> => {
     await this.actualiserSession();
+    this.ecran = 'scanner';
+  };
+
+  /** La fiche ou le catalogue désignent un produit à manger : on le retient
+   *  et on bascule dessus — via `demanderNavigation`, pour que quitter un
+   *  rangement en attente prévienne d'abord, comme pour toute autre cible. */
+  private surMangerProduit = (evenement: CustomEvent<{ product_id: number }>): void => {
+    this.produitAManger = evenement.detail.product_id;
+    this.demanderNavigation('consommation');
+  };
+
+  /** La déclaration est enregistrée (ou en file, hors ligne) : l'écran
+   *  « manger » l'a déjà dit lui-même, il ne reste qu'à revenir au scanner —
+   *  comme l'ajout au panier depuis la fiche. */
+  private surConsommationEnregistree = (): void => {
+    this.produitAManger = null;
     this.ecran = 'scanner';
   };
 
@@ -301,6 +332,9 @@ export class PanneauGardeManger extends LitElement {
         ${this.ecran !== 'catalogue' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('catalogue')}>Catalogue</button>
         ` : nothing}
+        ${this.ecran !== 'journal' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('journal')}>Journal</button>
+        ` : nothing}
         ${this.ecran !== 'reglages' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('reglages')}>Réglages</button>
         ` : nothing}
@@ -392,6 +426,16 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-reglages .connexion=${this.connexion} .file=${this.file} .enAttente=${this.enAttente}
           @file-changee=${this.surFileChangee}>
         </home-stock-reglages>`;
+    }
+    if (this.ecran === 'consommation') {
+      return html`
+        <home-stock-consommation .connexion=${this.connexion} .file=${this.file}
+          .productId=${this.produitAManger}>
+        </home-stock-consommation>`;
+    }
+    if (this.ecran === 'journal') {
+      return html`
+        <home-stock-journal .connexion=${this.connexion}></home-stock-journal>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}

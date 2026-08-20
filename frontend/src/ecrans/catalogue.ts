@@ -265,6 +265,16 @@ export class EcranCatalogue extends LitElement {
     this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
   }
 
+  /** Le chemin du fond d'huile dont l'emballage n'est plus sous la main :
+   *  déclarer une consommation sans repasser par un scan. Comme la fiche,
+   *  cet écran ne l'ouvre jamais lui-même — il n'a ni FIFO ni file dédiée
+   *  pour `stock/consume`, c'est le panneau qui bascule sur l'écran
+   *  « manger ». */
+  private mangerProduit(produit: Produit): void {
+    this.dispatchEvent(new CustomEvent('manger-produit',
+                                       { detail: { product_id: produit.id }, bubbles: true, composed: true }));
+  }
+
   private async enregistrer(): Promise<void> {
     const produit = this.produitEnEdition;
     const brouillon = this.brouillon;
@@ -371,6 +381,7 @@ export class EcranCatalogue extends LitElement {
             · emplacement : ${this.nomEmplacement(produit.default_location_id)}
           </p>
         </div>
+        <button class="manger" @click=${() => this.mangerProduit(produit)}>Manger</button>
         <button class="modifier" @click=${() => this.ouvrirEdition(produit)}>Modifier</button>
         ${this.produitEditeId === produit.id ? this.rendreEdition(this.produitEnEdition ?? produit) : nothing}
       </article>
@@ -425,6 +436,10 @@ export class EcranCatalogue extends LitElement {
     .modifier {
       min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
       background: var(--primary-color); color: var(--text-primary-color, #fff); flex-shrink: 0;
+    }
+    .manger {
+      min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
+      background: var(--secondary-background-color); color: var(--primary-text-color); flex-shrink: 0;
     }
     .edition {
       flex: 1 0 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 8px;

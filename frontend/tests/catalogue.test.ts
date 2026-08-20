@@ -421,4 +421,18 @@ describe('<home-stock-catalogue>', () => {
 
     expect(element.shadowRoot!.querySelector('.en-attente')!.textContent).toContain('2');
   });
+
+  it('offre de manger un produit du catalogue', async () => {
+    const connexion = connexionFactice(reponsesParDefaut);
+    const element = monter({ connexion });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const vus: number[] = [];
+    element.addEventListener('manger-produit', (e: any) => vus.push(e.detail.product_id));
+    element.shadowRoot!.querySelector('.manger')?.dispatchEvent(new Event('click'));
+
+    expect(vus.length).toBe(1);
+    expect(vus).toEqual([1]);
+  });
 });
