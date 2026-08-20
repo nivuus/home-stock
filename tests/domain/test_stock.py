@@ -120,3 +120,25 @@ def test_a_shortfall_within_the_epsilon_is_served_not_refused():
         (1, 300, True),
         (2, 100, True),
     ]
+
+
+def test_an_allocation_carries_the_macros_of_its_batch():
+    batch_view = BatchView(
+        id=1, remaining=500.0, best_before=None,
+        entered_at=datetime(2026, 8, 1), opened_at=None,
+        price_per_base_unit=0.004, kcal_per_base_unit=1.2,
+        macros={"proteins": 0.05, "salt": 0.001},
+    )
+    [allocation] = allocate([batch_view], 200.0)
+    assert allocation.macros == {"proteins": 0.05, "salt": 0.001}
+
+
+def test_a_batch_view_without_macros_still_works():
+    """Toutes les constructions du lot 0 et du lot 1 en sont dépourvues."""
+    batch_view = BatchView(
+        id=1, remaining=500.0, best_before=None,
+        entered_at=datetime(2026, 8, 1), opened_at=None,
+        price_per_base_unit=None, kcal_per_base_unit=None,
+    )
+    [allocation] = allocate([batch_view], 200.0)
+    assert allocation.macros == {}

@@ -5,8 +5,8 @@ are the ones Grocy got wrong, so they are tested on their own.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from ..const import QUANTITY_EPSILON
@@ -23,6 +23,10 @@ class BatchView:
     opened_at: datetime | None
     price_per_base_unit: float | None
     kcal_per_base_unit: float | None
+    # The eight macros of the article behind this batch, per base unit. Empty
+    # by default so every construction written before lot 2 stays valid; the
+    # movement it produces then freezes eight NULLs, which is the truth.
+    macros: Mapping[str, float | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,8 @@ class Allocation:
     kcal_per_base_unit: float | None
     remaining_after: float
     closes_batch: bool
+    # The eight macros of the article behind this batch, per base unit.
+    macros: Mapping[str, float | None] = field(default_factory=dict)
 
 
 class InsufficientStock(Exception):
@@ -88,6 +94,7 @@ def allocate(batches: Sequence[BatchView], quantity: float) -> list[Allocation]:
                 kcal_per_base_unit=candidate.kcal_per_base_unit,
                 remaining_after=0.0 if closes else remaining_after,
                 closes_batch=closes,
+                macros=candidate.macros,
             )
         )
         left -= taken
