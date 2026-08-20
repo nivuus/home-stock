@@ -261,9 +261,9 @@ def _migrated(tmp_path) -> sqlite3.Connection:
 
 
 def _migrated_to(tmp_path, *, version: int):
-    """Une base arrêtée à une version donnée, pour observer ce que la
-    suivante fait d'un contenu déjà présent."""
-    conn = _open(tmp_path)                    # helper d'ouverture déjà présent
+    """A database stopped at a given version, to observe what the next
+    one does with content already present."""
+    conn = _open(tmp_path)                    # opening helper already defined above
     for migration in MIGRATIONS:
         if migration.VERSION > version:
             break
@@ -289,7 +289,7 @@ def _seed_one_movement(conn) -> None:
 
 
 def test_m003_adds_the_journal_columns(tmp_path):
-    conn = _migrated(tmp_path)                       # helper déjà présent dans ce fichier
+    conn = _migrated(tmp_path)                       # helper already defined earlier in this file
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(movement)")}
     assert {"parts_total", "parts_mine", "proteins", "carbohydrates", "sugars",
             "added_sugars", "fat", "saturated_fat", "fiber", "salt"} <= columns
@@ -298,11 +298,11 @@ def test_m003_adds_the_journal_columns(tmp_path):
 
 
 def test_m003_keeps_the_movement_triggers(tmp_path):
-    """m003 ne touche pas aux triggers — mais un mouvement doit rester
-    inmodifiable après elle, sinon la migration a cassé l'append-only sans
-    que rien d'autre ne le dise."""
+    """m003 does not touch the triggers — but a movement must still stay
+    unmodifiable after it, or the migration broke append-only with
+    nothing else around to say so."""
     conn = _migrated(tmp_path)
-    _seed_one_movement(conn)                          # helper à ajouter, voir Step 7
+    _seed_one_movement(conn)                          # helper to add, see Step 7
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("UPDATE movement SET quantity = 999 WHERE id = 1")
     with pytest.raises(sqlite3.IntegrityError):
@@ -310,7 +310,7 @@ def test_m003_keeps_the_movement_triggers(tmp_path):
 
 
 def test_m003_backfills_serving_quantity_from_off_raw(tmp_path):
-    conn = _migrated_to(tmp_path, version=2)          # helper à ajouter, voir Step 7
+    conn = _migrated_to(tmp_path, version=2)          # helper to add, see Step 7
     conn.execute("INSERT INTO location (name, kind) VALUES ('Placard', 'cupboard')")
     conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
     conn.execute("INSERT INTO product (name, base_unit) VALUES ('Pomme', 'piece')")
@@ -322,7 +322,7 @@ def test_m003_backfills_serving_quantity_from_off_raw(tmp_path):
         ('{"serving_quantity": "100"}',))
     conn.execute(
         "INSERT INTO article (product_id, net_quantity, off_raw) VALUES (1, 125, ?)",
-        ('{"serving_quantity": "500"}',))     # plus gros que le paquet : refusé
+        ('{"serving_quantity": "500"}',))     # bigger than the pack: rejected
     conn.execute("INSERT INTO article (product_id, off_raw) VALUES (1, '{tronqu')")
     conn.commit()
 
@@ -334,8 +334,8 @@ def test_m003_backfills_serving_quantity_from_off_raw(tmp_path):
 
 
 def test_m003_is_replayable(tmp_path):
-    """Rejouer la migration sur une base déjà migrée ne doit rien changer —
-    et surtout ne pas écraser une portion corrigée à la main."""
+    """Replaying the migration on an already-migrated database must change
+    nothing — and especially must not overwrite a hand-corrected serving."""
     conn = _migrated(tmp_path)
     conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
     conn.execute(

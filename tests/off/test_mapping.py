@@ -409,8 +409,8 @@ def test_plausible_serving_accepts_a_number_and_a_numeric_string():
 
 
 def test_plausible_serving_refuses_a_piece_product():
-    # Une portion d'un produit suivi à la pièce vaut une pièce : la colonne
-    # n'a rien à dire, et un chiffre en grammes y serait un piège.
+    # A serving of a product tracked by the piece is one piece: the column
+    # has nothing to say, and a number in grams would be a trap there.
     assert plausible_serving(30, base_unit="piece", net_quantity=None) is None
 
 
@@ -423,7 +423,7 @@ def test_plausible_serving_refuses_zero_and_the_absurd():
 
 def test_plausible_serving_refuses_a_serving_bigger_than_the_pack():
     assert plausible_serving(300, base_unit="g", net_quantity=250) is None
-    # Exactement le paquet reste plausible : une conserve individuelle.
+    # Exactly the pack size stays plausible: a single-serving tin.
     assert plausible_serving(250, base_unit="g", net_quantity=250) == 250.0
 
 

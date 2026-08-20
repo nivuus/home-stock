@@ -157,9 +157,9 @@ def build_article_values(product: dict[str, Any], off_source: str, base_unit: st
     # skipping this renaming would silently drop the calories.
     values.update(to_article_columns(per_base))
 
-    # La portion vient de la MEME fonction que le remplissage retroactif de
-    # m003 : deux copies de ces bornes divergeraient, et la divergence ne se
-    # verrait nulle part.
+    # The serving comes from the SAME function as m003's retroactive
+    # backfill: two copies of these bounds would drift apart, and that
+    # drift would show up nowhere.
     values["serving_quantity"] = plausible_serving(
         product.get("serving_quantity"), base_unit=base_unit,
         net_quantity=mapped.net_quantity)
