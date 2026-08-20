@@ -2,6 +2,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from freezegun import freeze_time
 
 
 async def test_a_batch_entering_the_window_is_announced_once(hass, setup_entry):
@@ -128,6 +129,62 @@ async def test_the_entity_fires_one_event_for_several_batches(hass, setup_entry)
     state = hass.states.get("event.home_stock_expiration")
     assert state.attributes["event_type"] == "approaching"
     assert state.attributes["count"] == 3
+
+
+async def test_two_stages_in_one_refresh_fire_two_distinct_events(hass, setup_entry):
+    """A stock with mixed dates — something approaching, something already
+    overdue and never announced — is the ordinary case, and exactly what a
+    Home Assistant restart after a few days off produces: the entity catches
+    up on the whole backlog in a single refresh. claim_expiry_announcements
+    returns both stages together whenever that happens, so the entity's
+    per-stage loop runs twice in the same _announce() call, writing state
+    twice. This is exactly the situation grouping exists to protect against:
+    two state writes that could land in the same wall-clock second.
+
+    The refresh is wrapped in a frozen instant on purpose: without it, two
+    executor round-trips are almost certainly microseconds apart on their
+    own, which would prove nothing about a genuine collision. Freezing time
+    forces both _trigger_event calls to read the exact same raw clock value,
+    the one scenario where a naive implementation (or a regression that
+    dropped Home Assistant's own monotonic-timestamp floor) would produce two
+    identical states — one silently overwriting the other before anything
+    ever observed it.
+    """
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    today = datetime.now(UTC).date()
+    approaching_date = (today + timedelta(days=1)).isoformat()
+    overdue_date = (today - timedelta(days=1)).isoformat()
+    await hass.async_add_executor_job(lambda: manager.add_stock(
+        article_id=1, quantity=100.0, location_id=1, best_before=approaching_date))
+    await hass.async_add_executor_job(lambda: manager.add_stock(
+        article_id=1, quantity=200.0, location_id=1, best_before=overdue_date))
+
+    state_changes = async_capture_events(hass, "state_changed")
+    frozen_instant = datetime.now(UTC)
+    with freeze_time(frozen_instant):
+        await entry.runtime_data.coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    fires = [event for event in state_changes
+             if event.data["entity_id"] == "event.home_stock_expiration"]
+    assert len(fires) == 2
+
+    first, second = (event.data["new_state"] for event in fires)
+    assert first.attributes["event_type"] == "approaching"
+    assert first.attributes["count"] == 1
+    assert [b["display"] for b in first.attributes["batches"]] == ["100 g"]
+    assert second.attributes["event_type"] == "expired"
+    assert second.attributes["count"] == 1
+    assert [b["display"] for b in second.attributes["batches"]] == ["200 g"]
+
+    # The two writes landed on the exact same frozen instant: only a strictly
+    # increasing state proves the second did not silently overwrite the
+    # first before anyone could observe it.
+    assert first.state != second.state
+    assert first.state < second.state
 
 
 async def test_a_batch_with_no_date_is_never_announced(hass, setup_entry):
