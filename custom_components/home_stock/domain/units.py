@@ -6,7 +6,24 @@ compute in base units. Grocy stored both and had to keep them in sync; it did no
 """
 from __future__ import annotations
 
+from typing import Final
+
 from ..const import BASE_UNITS
+
+
+# Everything a source may express a mass or a volume in, and what one unit is
+# worth in our base unit. Anything else — "unité", "pcs", "portions" — is a
+# count, not a weight, and is refused.
+#
+# It lives in the domain and not in `off/` because recipes need it too, and
+# the domain may not import a data provider: it knows neither the network nor
+# who supplies the numbers. Copying the table into a second place would give
+# two truths about what a decilitre is worth, and the second one would drift.
+UNIT_TO_BASE: Final = {
+    "g": ("g", 1.0), "gr": ("g", 1.0), "gram": ("g", 1.0), "grammes": ("g", 1.0),
+    "kg": ("g", 1000.0), "mg": ("g", 0.001),
+    "ml": ("ml", 1.0), "cl": ("ml", 10.0), "dl": ("ml", 100.0), "l": ("ml", 1000.0),
+}
 
 
 class UnitError(ValueError):
@@ -52,3 +69,27 @@ def format_quantity(quantity: float, base_unit: str) -> str:
     if quantity >= 1000:
         return f"{_french_number(quantity / 1000)} l"
     return f"{_french_number(quantity)} ml"
+
+
+def convertible_amount(amount: float, unit: str | None,
+                       product_base_unit: str) -> float | None:
+    """`amount` expressed in `unit`, converted into `product_base_unit` —
+    or None when the two do not measure the same thing.
+
+    None means "no usable quantity", never "roughly this much". A recipe
+    asking for 100 g of honey against a product stocked in millilitres does
+    not become 100 ml: that would be a density, and nobody gave us one. The
+    caller must treat None exactly as it treats a missing quantity — the same
+    rule lot 1 already applies to a missing divisor (spec 7.4).
+
+    No `strip()` and no `lower()` on purpose. Normalising the text of a source
+    is the job of whoever knows where the string came from
+    (`recipes/mapping`, `off/mapping`). A function that guesses twice can no
+    longer tell you where the guess happened.
+    """
+    if not isinstance(unit, str) or unit not in UNIT_TO_BASE:
+        return None
+    dimension, factor = UNIT_TO_BASE[unit]
+    if dimension != product_base_unit:
+        return None
+    return float(amount) * factor

@@ -793,3 +793,160 @@ def test_consume_batch_accepts_parts_and_an_idempotency_key(manager):
     assert first == second
     assert manager.db.read().execute(
         "SELECT COUNT(*) FROM movement WHERE reason = 'consumption'").fetchone()[0] == 1
+
+
+# --- lot 3 (amendement A2) : manger un plat compte les valeurs DU PLAT -------
+
+def test_consume_batch_counts_the_batch_nutrition_over_the_article(manager, pasta):
+    """Ce que le plan demandait de vérifier par un test plutôt qu'à la lecture.
+
+    L'article « Panzani 500 g » titre 3,5 kcal/g. Le lot, lui, est une part de
+    lasagnes cuisinée : il porte ses propres 1,8 kcal/g. Manger ce lot doit
+    inscrire 1,8 dans le mouvement — sinon une assiette de restes serait
+    comptée au tarif de ses pâtes crues.
+    """
+    with manager.db.write() as conn:
+        batch_id = repo.insert_batch(
+            conn, article_id=pasta["article_id"], location_id=pasta["location_id"],
+            quantity=300.0, entered_at="2026-08-21T18:00:00",
+            nutrition={"kcal_per_base_unit": 1.8, "proteins": 0.09})
+
+    manager.consume_batch(batch_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT kcal, proteins FROM movement WHERE batch_id = ?", (batch_id,)
+    ).fetchone()
+    assert row["kcal"] == pytest.approx(180.0)      # 100 g x 1,8 — pas 350
+    assert row["proteins"] == pytest.approx(9.0)
+
+
+def test_consume_batch_still_reads_the_article_when_the_batch_is_silent(manager, pasta):
+    """La cascade ne casse rien : un lot ordinaire compte comme avant."""
+    with manager.db.write() as conn:
+        batch_id = repo.insert_batch(
+            conn, article_id=pasta["article_id"], location_id=pasta["location_id"],
+            quantity=300.0, entered_at="2026-08-21T18:00:00")
+
+    manager.consume_batch(batch_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT kcal FROM movement WHERE batch_id = ?", (batch_id,)).fetchone()
+    assert row["kcal"] == pytest.approx(350.0)      # 100 g x 3,5
+
+
+# --- lot 3 (amendement A3) : add_stock reste le seul chemin d'entrée ---------
+
+def _one(manager, sql, params=()):
+    return manager.db.read().execute(sql, params).fetchone()
+
+
+def test_add_stock_still_writes_purchase_by_default(manager):
+    article_id, _ = _seed_article(manager)
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+    assert _one(manager, "SELECT reason FROM movement")["reason"] == "purchase"
+
+
+def test_add_stock_can_write_another_reason(manager):
+    article_id, _ = _seed_article(manager)
+    manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                      reason="cooked")
+    assert _one(manager, "SELECT reason FROM movement")["reason"] == "cooked"
+
+
+def test_add_stock_freezes_the_nutrition_on_the_batch(manager):
+    article_id, _ = _seed_article(manager)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0, "proteins": 9.0})
+    row = _one(manager, "SELECT * FROM batch WHERE id = ?", (batch_id,))
+    assert (row["kcal_per_base_unit"], row["proteins"]) == (180.0, 9.0)
+    assert row["fiber"] is None          # non dit reste inconnu, pas zéro
+
+
+def test_the_entry_movement_uses_the_frozen_nutrition_not_the_article(manager):
+    """Le mouvement d'entrée du plat vaut ce que le plat vaut, pas ce que
+    l'article générique dirait."""
+    article_id, _ = _seed_article(manager, kcal_per_base_unit=3.5)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0})
+    assert _one(manager, "SELECT kcal FROM movement WHERE batch_id = ?",
+                (batch_id,))["kcal"] == pytest.approx(540.0)
+
+
+def test_a_frozen_null_macro_still_reads_the_article(manager):
+    """La cascade de la tâche 2 vaut aussi à l'entrée : le plat sait ses
+    calories, il ne sait pas ses protéines, l'article les connaît."""
+    article_id, _ = _seed_article(manager, kcal_per_base_unit=3.5, proteins=0.09)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0})
+    row = _one(manager, "SELECT kcal, proteins FROM movement WHERE batch_id = ?",
+               (batch_id,))
+    assert row["kcal"] == pytest.approx(540.0)
+    assert row["proteins"] == pytest.approx(0.27)      # 3 x 0,09, pris sur l'article
+
+
+def test_cooked_is_a_reason_but_never_a_counted_one():
+    from custom_components.home_stock.const import CONSUME_REASONS, REASONS
+    assert "cooked" in REASONS
+    assert "cooked" not in CONSUME_REASONS
+
+
+def test_add_stock_stays_idempotent_with_the_new_arguments(manager):
+    article_id, _ = _seed_article(manager)
+    first = manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                              reason="cooked", idempotency_key="k",
+                              nutrition={"kcal_per_base_unit": 180.0})
+    second = manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                               reason="cooked", idempotency_key="k",
+                               nutrition={"kcal_per_base_unit": 180.0})
+    assert first == second
+    assert _one(manager, "SELECT COUNT(*) c FROM movement")["c"] == 1
+
+
+def test_add_stock_refuses_a_reason_it_does_not_know(manager):
+    """Un motif inconnu atteindrait `movement.reason`, que le CHECK du schéma
+    refuse — autant le dire ici, avec le nom du motif fautif."""
+    article_id, _ = _seed_article(manager)
+    with pytest.raises(ValueError, match="grignotage"):
+        manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                          reason="grignotage")
+
+
+# --- lot 3 : le verrou n'est pas réentrant, et c'est prouvé ici -------------
+
+def test_two_writes_in_one_transaction_do_not_deadlock(manager):
+    """Preuve directe : `Database._lock` est un `threading.Lock` simple.
+
+    Sans les méthodes `_within`, ce test ne finirait JAMAIS — pas d'exception,
+    pas de trace, juste un processus figé. Il est lancé avec un délai maximum
+    précisément pour que l'échec se voie au lieu de bloquer la suite entière.
+    C'est la contrainte structurante de la validation d'un repas, qui doit
+    écrire trois choses en une seule transaction.
+    """
+    article_id, product_id = _seed_article(manager, kcal_per_base_unit=2.0)
+    with manager.db.write() as conn:
+        batch_id = manager._add_stock_within(
+            conn, article_id=article_id, quantity=3.0, location_id=1,
+            moment="2026-08-21T20:00:00", reason="cooked")
+        movement_ids = manager._consume_within(
+            conn, product_id=product_id, quantity=1.0, reason="cooked",
+            moment="2026-08-21T20:00:00")
+        one_more = manager._consume_batch_within(
+            conn, batch_id, quantity=1.0, reason="consumption",
+            moment="2026-08-21T20:00:00")
+    assert batch_id and movement_ids and one_more
+
+    remaining = manager.db.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert remaining["remaining"] == pytest.approx(1.0)
+
+
+def test_the_public_wrappers_still_validate_before_taking_the_lock(manager):
+    """L'extraction ne doit pas avoir fait glisser la validation des parts À
+    L'INTÉRIEUR de la transaction : un enregistrement incohérent ne prend pas
+    le verrou d'écriture juste pour être refusé dedans."""
+    _seed_article(manager)
+    with pytest.raises(Exception):
+        manager.consume(product_id=1, quantity=1.0, parts_total=99, parts_mine=1)

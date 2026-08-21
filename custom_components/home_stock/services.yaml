@@ -169,3 +169,135 @@ resync_off:
         Resynchronise tous les articles ayant un code-barres. Laisser vide pour
         cibler un article ou un produit précis à la place.
       selector: { boolean: }
+
+plan_meal:
+  name: Poser un repas
+  description: >-
+    Place une recette, un produit ou une simple note sur un jour et un créneau.
+    Le jour est une journée alimentaire : elle court de 4 h à 4 h.
+  fields:
+    day:
+      name: Jour
+      description: Journée alimentaire, au format AAAA-MM-JJ.
+      required: true
+      selector: { text: }
+    slot_key:
+      name: Créneau
+      required: true
+      selector:
+        select:
+          options:
+            - { value: breakfast, label: Petit-déjeuner }
+            - { value: lunch, label: Déjeuner }
+            - { value: dinner, label: Dîner }
+            - { value: snack, label: En-cas }
+    recipe_id:
+      name: Recette
+      description: L'une des trois natures possibles — jamais deux à la fois.
+      selector: { number: { min: 1, mode: box } }
+    product_id:
+      name: Produit
+      description: Un repas qui est simplement un produit, par exemple un yaourt.
+      selector: { number: { min: 1, mode: box } }
+    amount:
+      name: Quantité
+      description: Pour un repas « produit », dans l'unité de base du produit.
+      selector: { number: { min: 0, step: 0.01, mode: box } }
+    note:
+      name: Note
+      description: Un repas libre, par exemple « Restaurant avec Anne ».
+      selector: { text: }
+    servings:
+      name: Nombre de parts
+      description: >-
+        Combien de parts on prépare. La recette est mise à l'échelle depuis les
+        siennes.
+      default: 1
+      selector: { number: { min: 0.25, step: 0.25, mode: box } }
+
+validate_meal:
+  name: Valider un repas
+  description: >-
+    Cuisine puis mange, en une seule transaction : les ingrédients sortent, le
+    plat entre en stock avec sa date limite, la part mangée est comptée.
+    SIMULE par défaut — décochez pour écrire réellement. La validation n'est pas
+    annulable.
+  fields:
+    meal_id:
+      name: Repas
+      required: true
+      selector: { number: { min: 1, mode: box } }
+    portions_eaten:
+      name: Parts mangées
+      description: "Zéro est valide : on cuisine parfois pour la semaine."
+      required: true
+      selector: { number: { min: 0, step: 0.25, mode: box } }
+    servings:
+      name: Parts préparées
+      description: Remplace le nombre de parts prévu au moment de poser le repas.
+      selector: { number: { min: 0.25, step: 0.25, mode: box } }
+    parts_total:
+      name: Parts servies
+      description: Combien de parts ont été servies à table, pour le partage.
+      selector: { number: { min: 1, max: 24, mode: box } }
+    parts_mine:
+      name: Mes parts
+      description: Combien de ces parts sont les miennes.
+      selector: { number: { min: 0, max: 24, mode: box } }
+    skip_ingredient_ids:
+      name: Ingrédients à ne pas décrémenter
+      description: >-
+        Les lignes qu'on sort à la main ou qu'on n'utilise pas cette fois.
+      selector: { object: }
+    dry_run:
+      name: Simuler seulement
+      description: >-
+        Coché, rien n'est écrit : le service rend le plan de décrément. C'est le
+        comportement par défaut, pour qu'un premier appel exploratoire ne
+        décrémente pas le garde-manger.
+      default: true
+      selector: { boolean: }
+
+import_recipe:
+  name: Importer une recette
+  description: >-
+    Importe une fiche depuis TheMealDB, par référence ou par recherche. Si un
+    agent conversationnel est configuré, la recette est traduite et découpée en
+    étapes ; sinon elle existe quand même, en anglais et marquée à relire.
+  fields:
+    source_ref:
+      name: Référence de la source
+      description: L'identifiant TheMealDB, par exemple 52772.
+      selector: { text: }
+    query:
+      name: Recherche
+      description: >-
+        À défaut de référence, cherche et importe la première fiche trouvée.
+      selector: { text: }
+
+adapt_recipe:
+  name: Adapter une recette importée
+  description: >-
+    Relance la traduction et le découpage en étapes d'une recette importée sans
+    agent conversationnel. Sans effet sur les lignes déjà confirmées à la main.
+  fields:
+    recipe_id:
+      name: Recette
+      required: true
+      selector: { number: { min: 1, mode: box } }
+
+query_meals:
+  name: Consulter le planning
+  description: >-
+    Ce qui est prévu sur une plage de journées alimentaires. Ne modifie rien.
+  fields:
+    start:
+      name: Du
+      description: Première journée alimentaire, au format AAAA-MM-JJ.
+      required: true
+      selector: { text: }
+    end:
+      name: Au
+      description: Dernière journée alimentaire, incluse.
+      required: true
+      selector: { text: }

@@ -209,6 +209,97 @@ class CostWasteTotalSensor(HomeStockEntity, SensorEntity):
         return self.coordinator.data["cost_waste_total"]
 
 
+# --- lot 3 -----------------------------------------------------------------
+
+class NextMealSensor(HomeStockEntity, SensorEntity):
+    """The name of the next meal still to come.
+
+    No meal at all leaves the state empty rather than `0`: a zero here would
+    read as a meal named zero, and template authors would have to know which
+    of the two it was.
+    """
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "next_meal", ENTITY_ID_FORMAT)
+
+    @property
+    def _meal(self) -> dict[str, Any] | None:
+        return (self.coordinator.data.get("meals") or {}).get("next")
+
+    @property
+    def native_value(self) -> str | None:
+        meal = self._meal
+        if meal is None:
+            return None
+        return meal["recipe_name"] or meal["product_name"] or meal["note"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        meal = self._meal
+        if meal is None:
+            return {"day": None, "slot": None, "recipe_id": None,
+                    "missing_ingredients": 0}
+        missing = (self.coordinator.data.get("meals") or {}).get("missing", [])
+        return {
+            "day": meal["day"],
+            "slot": meal["slot_key"],
+            "recipe_id": meal["recipe_id"],
+            "missing_ingredients": len(missing),
+        }
+
+
+class RecipesSensor(HomeStockEntity, SensorEntity):
+    """How many active recipes there are, and how much work they still need."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "recipes", ENTITY_ID_FORMAT)
+
+    @property
+    def _recipes(self) -> dict[str, Any]:
+        return (self.coordinator.data.get("meals") or {}).get("recipes", {})
+
+    @property
+    def native_value(self) -> int:
+        return self._recipes.get("total", 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "reviewable": self._recipes.get("to_review", 0),
+            "unmatched_ingredients": self._recipes.get("unmatched", 0),
+        }
+
+
+class MissingIngredientsSensor(HomeStockEntity, SensorEntity):
+    """How many products the next seven days of meals are short of.
+
+    A COUNTER, not a tickable list. A `todo` entity here would already be the
+    shopping list, which is lot 4: ticking one would mean "bought", and that
+    means a session, a price and a put-away — a whole mechanism that does not
+    exist yet. The sensor carries the information; lot 4 will turn it into a
+    list.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "missing_ingredients", ENTITY_ID_FORMAT)
+
+    @property
+    def _missing(self) -> list[dict[str, Any]]:
+        return (self.coordinator.data.get("meals") or {}).get("missing", [])
+
+    @property
+    def native_value(self) -> int:
+        return len(self._missing)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"products": self._missing}
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -223,4 +314,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
           for key, field, unit, enabled in DAILY_NUTRIENTS),
         DailyTotalSensor(coordinator, "cost_today", "cost", "EUR"),
         CostWasteTotalSensor(coordinator),
+        NextMealSensor(coordinator),
+        RecipesSensor(coordinator),
+        MissingIngredientsSensor(coordinator),
     ])

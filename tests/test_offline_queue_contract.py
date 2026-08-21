@@ -76,6 +76,21 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # one refused button in lot 1's round 1 (see this file's module
     # docstring) if its schema didn't accept the queue's idempotency key.
     "home_stock/stock/consume",
+    # Lot 3, task 18: the recipe list marks an imported recipe as reviewed.
+    # It is a write like any other and goes through the same queue — the
+    # kitchen's network is no better than a shop aisle's.
+    "home_stock/recipe/update",
+    # Lot 3, task 20: the validation screen. Cooking then eating is the
+    # heaviest write the panel makes, and it is made standing in a kitchen —
+    # the queue must be able to hold it and replay it exactly once.
+    "home_stock/meal/validate",
+    # Lot 3, task 21: the planning posts, moves and cancels meals, and the
+    # recipe screen settles an ingredient onto a product. Four more writes
+    # made from a tablet on the kitchen wall.
+    "home_stock/meal/plan",
+    "home_stock/meal/move",
+    "home_stock/meal/cancel",
+    "home_stock/recipe/ingredient/match",
 }
 
 
@@ -173,6 +188,73 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert reordered_aisles["success"] is True, reordered_aisles.get("error")
     tested.add("home_stock/aisles/reorder")
+
+    # --- lot 3: recipes ------------------------------------------------
+    created_recipe = await _send(
+        client, _id(), "home_stock/recipe/create", name="Recette du contrat",
+        ingredients=[{"raw_text": "une gousse d'ail"}],
+        idempotency_key="contract-recipe-create",
+    )
+    assert created_recipe["success"] is True, created_recipe.get("error")
+
+    updated_recipe = await _send(
+        client, _id(), "home_stock/recipe/update",
+        recipe_id=created_recipe["result"]["recipe_id"],
+        fields={"needs_review": 0}, idempotency_key="contract-recipe-update",
+    )
+    assert updated_recipe["success"] is True, updated_recipe.get("error")
+    tested.add("home_stock/recipe/update")
+
+    planned_meal = await _send(
+        client, _id(), "home_stock/meal/plan", day="2026-08-21",
+        slot_key="dinner", note="Repas du contrat",
+        idempotency_key="contract-meal-plan",
+    )
+    assert planned_meal["success"] is True, planned_meal.get("error")
+    tested.add("home_stock/meal/plan")
+
+    moved_meal = await _send(
+        client, _id(), "home_stock/meal/move",
+        meal_id=planned_meal["result"]["meal_id"], day="2026-08-22",
+        slot_key="lunch", idempotency_key="contract-meal-move",
+    )
+    assert moved_meal["success"] is True, moved_meal.get("error")
+    tested.add("home_stock/meal/move")
+
+    # The recipe created above carries one ingredient line; read its id back
+    # rather than assuming it, so this contract does not depend on how many
+    # rows earlier tests happened to insert.
+    recipe_view = await _send(
+        client, _id(), "home_stock/recipe/get",
+        recipe_id=created_recipe["result"]["recipe_id"],
+    )
+    assert recipe_view["success"] is True, recipe_view.get("error")
+    matched_ingredient = await _send(
+        client, _id(), "home_stock/recipe/ingredient/match",
+        ingredient_id=recipe_view["result"]["ingredients"][0]["id"],
+        state="ignored", idempotency_key="contract-ingredient-match",
+    )
+    assert matched_ingredient["success"] is True, matched_ingredient.get("error")
+    tested.add("home_stock/recipe/ingredient/match")
+
+    # A note meal decrements nothing, which is exactly what this contract
+    # needs: the point is the SCHEMA's acceptance of the queue's key, not the
+    # arithmetic — that is proven in test_websocket_meals.py.
+    validated_meal = await _send(
+        client, _id(), "home_stock/meal/validate",
+        meal_id=planned_meal["result"]["meal_id"], portions_eaten=0,
+        idempotency_key="contract-meal-validate",
+    )
+    assert validated_meal["success"] is True, validated_meal.get("error")
+    tested.add("home_stock/meal/validate")
+
+    cancelled_meal = await _send(
+        client, _id(), "home_stock/meal/cancel",
+        meal_id=planned_meal["result"]["meal_id"],
+        idempotency_key="contract-meal-cancel",
+    )
+    assert cancelled_meal["success"] is True, cancelled_meal.get("error")
+    tested.add("home_stock/meal/cancel")
 
     # --- the shopping-session lifecycle, exactly as the panel drives it -
     started = await _send(client, _id(), "home_stock/session/start", store="Leclerc",

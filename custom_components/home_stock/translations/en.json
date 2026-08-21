@@ -15,40 +15,98 @@
       "init": {
         "title": "Pantry options",
         "data": {
-          "expiration_alert_days": "How many days before the best-before date to alert"
+          "expiration_alert_days": "How many days before the best-before date to alert",
+          "recipe_agent": "Conversation agent that translates and adapts imported recipes (optional)",
+          "recipe_source_key": "TheMealDB API key (\"1\" is the public test key)"
         }
       }
     }
   },
   "entity": {
     "sensor": {
-      "stock_value": { "name": "Stock value" },
-      "batches": { "name": "Batches in stock" },
-      "kcal_total": { "name": "Kilocalories out of stock" },
-      "cost_total": { "name": "Cost of stock consumed" },
-      "cart_total": { "name": "Current cart" },
-      "to_store": { "name": "To put away" },
-      "kcal_today": { "name": "Today's kilocalories" },
-      "proteins_today": { "name": "Today's protein" },
-      "carbohydrates_today": { "name": "Today's carbohydrates" },
-      "sugars_today": { "name": "Today's sugars" },
-      "added_sugars_today": { "name": "Today's added sugars" },
-      "fat_today": { "name": "Today's fat" },
-      "saturated_fat_today": { "name": "Today's saturated fat" },
-      "fiber_today": { "name": "Today's fiber" },
-      "salt_today": { "name": "Today's salt" },
-      "cost_today": { "name": "Today's food spending" },
-      "cost_waste_total": { "name": "Cost of waste" }
+      "stock_value": {
+        "name": "Stock value"
+      },
+      "batches": {
+        "name": "Batches in stock"
+      },
+      "kcal_total": {
+        "name": "Kilocalories out of stock"
+      },
+      "cost_total": {
+        "name": "Cost of stock consumed"
+      },
+      "cart_total": {
+        "name": "Current cart"
+      },
+      "to_store": {
+        "name": "To put away"
+      },
+      "kcal_today": {
+        "name": "Today's kilocalories"
+      },
+      "proteins_today": {
+        "name": "Today's protein"
+      },
+      "carbohydrates_today": {
+        "name": "Today's carbohydrates"
+      },
+      "sugars_today": {
+        "name": "Today's sugars"
+      },
+      "added_sugars_today": {
+        "name": "Today's added sugars"
+      },
+      "fat_today": {
+        "name": "Today's fat"
+      },
+      "saturated_fat_today": {
+        "name": "Today's saturated fat"
+      },
+      "fiber_today": {
+        "name": "Today's fiber"
+      },
+      "salt_today": {
+        "name": "Today's salt"
+      },
+      "cost_today": {
+        "name": "Today's food spending"
+      },
+      "cost_waste_total": {
+        "name": "Cost of waste"
+      },
+      "next_meal": {
+        "name": "Next meal"
+      },
+      "recipes": {
+        "name": "Recipes"
+      },
+      "missing_ingredients": {
+        "name": "Missing ingredients"
+      }
     },
     "binary_sensor": {
-      "expirations": { "name": "Expiring soon" },
-      "shortages": { "name": "Shortages" }
+      "expirations": {
+        "name": "Expiring soon"
+      },
+      "shortages": {
+        "name": "Shortages"
+      }
     },
     "event": {
-      "expiration": { "name": "Expiration" }
+      "expiration": {
+        "name": "Expiration"
+      }
     },
     "todo": {
-      "expirations": { "name": "To eat" }
+      "expirations": {
+        "name": "To eat"
+      }
+    },
+    "calendar": {
+      "meals": {
+        "name": "Meals"
+      }
     }
   }
 }

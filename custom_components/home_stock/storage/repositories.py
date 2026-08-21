@@ -6,14 +6,16 @@ service can write a batch and its movement atomically.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 
 from ..const import (
     CONSUME_REASONS,
     MACRO_COLUMNS,
+    NUTRITION_COLUMNS,
     REASON_CONSUMPTION,
 )
+from ..domain.matching import normalise
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -28,20 +30,55 @@ ARTICLE_FIELDS = (
     "is_generic", "external_ref", "serving_quantity",
 )
 
-# The kcal rate to price a movement with: the article's own kcal_per_base_unit,
-# or lacking that, its product's reference_kcal (spec 7.4) — generic and
-# fresh-produce articles usually carry no rate of their own. Named once here so
-# the SQL call sites (list_batches_for_product, stock_rows) and the Python call
-# sites (resolve_kcal_rate, used by application.add_stock/consume_batch) cannot
-# drift apart.
-KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
+# The kcal rate to price a movement with, in the only order that makes sense:
+# the BATCH's own rate first (lot 3, amendment A2 — a cooked dish's calories
+# belong to that pan of lasagne, not to every future one), then the article's
+# own kcal_per_base_unit, then its product's reference_kcal (spec 7.4) —
+# generic and fresh-produce articles usually carry no rate of their own.
+# Named once here so the SQL call sites (list_batches_for_product, stock_rows)
+# and the Python call sites (resolve_kcal_rate, used by
+# application.add_stock/consume_batch) cannot drift apart.
+#
+# Every query using this MUST join `batch` as `b`, `article` as `a` and
+# `product` as `p`. All three do today.
+KCAL_RATE_SQL = (
+    "COALESCE(b.kcal_per_base_unit, a.kcal_per_base_unit, p.reference_kcal)"
+)
 
-# The eight macro rates, read straight off the article. Unlike the kcal rate
-# above, there is NO product-level fallback: `product.reference_kcal` exists
-# because a generic article (loose apples) still has a known calorie count,
-# but nobody maintains a reference protein content per product. No value on
-# the article means no value, and the movement freezes NULL.
-MACRO_RATE_SQL = ", ".join(f"a.{column}" for column in MACRO_COLUMNS)
+# The eight macro rates: the batch's own value when it has one, the article's
+# otherwise. Unlike the kcal rate above, there is NO product-level fallback:
+# `product.reference_kcal` exists because a generic article (loose apples)
+# still has a known calorie count, but nobody maintains a reference protein
+# content per product. No value on either means no value, and the movement
+# freezes NULL.
+#
+# The cascade is per COLUMN, not per row: a dish whose protein content is
+# known and whose fibre content is not must read the known protein off the
+# batch and still fall through to the article for the fibre. A row-level
+# choice would throw away eight known values to punish one missing one.
+# And COALESCE only skips NULL, never 0.0 — a dish measured at zero salt
+# says zero, it does not say "ask the article".
+MACRO_RATE_SQL = ", ".join(
+    f"COALESCE(b.{column}, a.{column}) AS {column}" for column in MACRO_COLUMNS
+)
+
+# The batch's OWN columns, spelled out, MINUS the nine nutrition ones.
+#
+# Lot 3 (amendment A2) gave `batch` its own kcal_per_base_unit and eight macro
+# columns, so `batch` and `article` now share those nine names. `SELECT b.*`
+# used to be safe next to KCAL_RATE_SQL/MACRO_RATE_SQL because the names never
+# collided; now the row would carry each of those names TWICE and
+# `dict(sqlite3.Row)` keeps the FIRST — the raw batch column, ahead of the
+# resolved cascade. Every calorie in the stock would read NULL, with no
+# exception raised and no test the wiser.
+#
+# So the batch's nutrition never travels under its own name: it reaches
+# callers only through the cascade above, which already reads it first. A
+# test forbids `SELECT b.*` across the component so this cannot come back.
+BATCH_COLUMNS_SQL = (
+    "b.id, b.article_id, b.location_id, b.remaining, b.initial, b.best_before,"
+    " b.entered_at, b.opened_at, b.price_per_base_unit, b.session_id, b.closed_at"
+)
 
 
 def macro_rates(row: Mapping[str, Any]) -> dict[str, float | None]:
@@ -130,16 +167,36 @@ def get_article(conn, article_id: int) -> dict[str, Any] | None:
     return _row(conn.execute("SELECT * FROM article WHERE id = ?", (article_id,)).fetchone())
 
 
-def resolve_kcal_rate(conn, article: dict[str, Any]) -> float | None:
-    """The kcal rate to price a movement with (spec 7.4): the article's own
-    kcal_per_base_unit, or lacking that, its product's reference_kcal. Python-side
-    twin of KCAL_RATE_SQL, for call sites that already hold the article row in
-    hand instead of joining kcal in SQL (application.add_stock/consume_batch)."""
+def resolve_kcal_rate(conn, article: Mapping[str, Any],
+                      batch: Mapping[str, Any] | None = None) -> float | None:
+    """The kcal rate to price a movement with: the batch's own rate (lot 3),
+    then the article's own kcal_per_base_unit, then its product's
+    reference_kcal (spec 7.4). Python-side twin of KCAL_RATE_SQL, for call
+    sites that already hold their rows in hand instead of joining kcal in SQL
+    (application.add_stock/consume_batch). The two must always agree."""
+    if batch is not None and batch["kcal_per_base_unit"] is not None:
+        return batch["kcal_per_base_unit"]
     rate = article["kcal_per_base_unit"]
     if rate is not None:
         return rate
     product = get_product(conn, article["product_id"])
     return product["reference_kcal"] if product else None
+
+
+def batch_macro_rates(batch: Mapping[str, Any] | None,
+                      article: Mapping[str, Any]) -> dict[str, float | None]:
+    """The eight macro rates, batch first then article, column by column.
+    Python-side twin of MACRO_RATE_SQL.
+
+    `is not None` and not a truth test: a macro measured at 0.0 is a
+    measurement, and falling through to the article on a zero would quietly
+    replace "this dish has no salt" with "this ingredient has some".
+    """
+    return {
+        column: (batch[column] if batch is not None
+                 and batch[column] is not None else article[column])
+        for column in MACRO_COLUMNS
+    }
 
 
 def find_article_by_barcode(conn, code: str) -> dict[str, Any] | None:
@@ -242,12 +299,29 @@ def latest_price(conn, article_id: int) -> float | None:
 
 def insert_batch(conn, *, article_id: int, location_id: int, quantity: float,
                  entered_at: str, best_before: str | None = None,
-                 price_per_base_unit: float | None = None) -> int:
-    return _insert(conn, "batch", {
+                 price_per_base_unit: float | None = None,
+                 nutrition: Mapping[str, float | None] | None = None) -> int:
+    """Open a batch. `nutrition` freezes this batch's own values (lot 3): a pan
+    of lasagne knows its calories, and the next pan made from the same recipe
+    with different tomatoes will know its own.
+
+    Filtered on NUTRITION_COLUMNS on the way in. The mapping is computed from a
+    recipe, not typed into a form, but an unknown key here would reach an
+    INSERT and could overwrite `remaining` — the filter is what makes the
+    parameter safe to hand a computed dict.
+    """
+    values = {
         "article_id": article_id, "location_id": location_id,
         "remaining": quantity, "initial": quantity, "entered_at": entered_at,
         "best_before": best_before, "price_per_base_unit": price_per_base_unit,
-    })
+    }
+    if nutrition:
+        values.update({
+            column: nutrition[column]
+            for column in NUTRITION_COLUMNS
+            if column in nutrition
+        })
+    return _insert(conn, "batch", values)
 
 
 def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:
@@ -257,8 +331,8 @@ def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:
 
 def list_open_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     return _rows(conn.execute(
-        """
-        SELECT b.* FROM batch b JOIN article a ON a.id = b.article_id
+        f"""
+        SELECT {BATCH_COLUMNS_SQL} FROM batch b JOIN article a ON a.id = b.article_id
         WHERE a.product_id = ? AND b.closed_at IS NULL ORDER BY b.id
         """,
         (product_id,)))
@@ -270,7 +344,8 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     (spec 7.4 — generic/produce articles usually carry no rate of their own).
     """
     return _rows(conn.execute(
-        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit, {MACRO_RATE_SQL},"
+        f"SELECT {BATCH_COLUMNS_SQL}, {KCAL_RATE_SQL} AS kcal_per_base_unit,"
+        f" {MACRO_RATE_SQL},"
         "       a.product_id, a.serving_quantity FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
@@ -749,3 +824,385 @@ def list_stores(conn) -> list[str]:
         """
     ).fetchall()
     return [row["store"] for row in rows]
+
+
+# =============================================================================
+# Lot 3 — recipes, steps, ingredients, measures, aliases, slots and meals.
+#
+# `conn` is positional everywhere and no transaction is opened here: the caller
+# owns it. That is what lets `application` compose several of these into ONE
+# `db.write()` — `Database._lock` is not reentrant, so a repository that opened
+# its own transaction would deadlock the process the day it was called from
+# inside another one.
+# =============================================================================
+
+# Column whitelists, same pattern as PRODUCT_FIELDS/ARTICLE_FIELDS above: a
+# column name interpolated into SQL is never taken from a raw payload.
+RECIPE_FIELDS: Final = (
+    "name", "servings", "total_minutes", "utensils", "summary", "image_url",
+    "source", "source_ref", "source_url", "language", "adapted_at",
+    "needs_review", "leftover_product_id", "leftover_shelf_life_days", "active",
+    "external_ref",
+)
+INGREDIENT_FIELDS: Final = (
+    "product_id", "amount", "packaging_id", "measure_id", "raw_text",
+    "group_name", "optional", "match_state", "match_score", "external_ref",
+)
+MEAL_FIELDS: Final = (
+    "day", "slot_key", "position", "recipe_id", "product_id", "amount",
+    "packaging_id", "note", "servings", "portions_eaten", "parts_total",
+    "parts_mine", "state", "validated_at", "skipped_ingredient_ids",
+    "external_ref",
+)
+
+
+def _filtered(fields: Mapping[str, Any], allowed: Sequence[str]) -> dict[str, Any]:
+    return {key: value for key, value in fields.items() if key in allowed}
+
+
+# --- recipes ----------------------------------------------------------------
+
+def insert_recipe(conn, *, name: str, source: str, created_at: str, **fields) -> int:
+    values = {"name": name, "source": source, "created_at": created_at}
+    values.update(_filtered(fields, RECIPE_FIELDS))
+    return _insert(conn, "recipe", values)
+
+
+def get_recipe(conn, recipe_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM recipe WHERE id = ?", (recipe_id,)).fetchone())
+
+
+def find_recipe_by_source(conn, source: str, source_ref: str) -> dict[str, Any] | None:
+    """The lookup that makes an import replayable: importing the same source
+    reference twice must find the first one rather than make a second."""
+    return _row(conn.execute(
+        "SELECT * FROM recipe WHERE source = ? AND source_ref = ?",
+        (source, source_ref)).fetchone())
+
+
+def list_recipes(conn, *, search: str | None = None,
+                 only_reviewable: bool = False) -> list[dict[str, Any]]:
+    """Active recipes, each with the number of ingredients still unmatched.
+
+    The count is computed here rather than in the panel: the "n unmatched"
+    badge and the screen that fixes them must agree, and they only can if one
+    query is the source of both.
+
+    `search` is matched on the NORMALISED name (accent-, case- and
+    punctuation-free), using the same `normalise` the ingredient matching
+    uses. SQLite's LIKE only folds ASCII case, so "bœuf" would not find
+    "Boeuf" and "à l'ancienne" would not find "ancienne". Recipes number in
+    the dozens, so folding in Python costs nothing and keeps one definition
+    of "the same word".
+    """
+    rows = _rows(conn.execute(
+        """
+        SELECT r.*, (
+            SELECT COUNT(*) FROM recipe_ingredient ri
+            WHERE ri.recipe_id = r.id AND ri.match_state = 'unmatched'
+        ) AS unmatched_count
+        FROM recipe r
+        WHERE r.active = 1
+        ORDER BY r.name
+        """
+    ))
+    if only_reviewable:
+        rows = [row for row in rows if row["needs_review"]]
+    if search:
+        needle = normalise(search)
+        rows = [row for row in rows if needle in normalise(row["name"])]
+    return rows
+
+
+def update_recipe_fields(conn, recipe_id: int, fields: Mapping[str, Any]) -> None:
+    _update_fields(conn, "recipe", recipe_id, _filtered(fields, RECIPE_FIELDS))
+
+
+def delete_recipe(conn, recipe_id: int) -> None:
+    """Remove the recipe and everything that only exists to describe it.
+
+    Bullets before steps before the recipe: SQLite does not enforce the
+    foreign keys here by default, but deleting in dependency order means the
+    same call is correct whether or not `PRAGMA foreign_keys` is on.
+    """
+    conn.execute(
+        "DELETE FROM recipe_instruction WHERE step_id IN"
+        " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
+    conn.execute("DELETE FROM recipe_step WHERE recipe_id = ?", (recipe_id,))
+    conn.execute("DELETE FROM recipe_ingredient WHERE recipe_id = ?", (recipe_id,))
+    # Meals that merely PLANNED this recipe go with it. They are intentions,
+    # not history: nothing was ever written to the journal for them, and a
+    # planned meal pointing at a deleted recipe would be an orphan the
+    # calendar could not render. A `done` meal is another matter entirely and
+    # is refused a layer above, before we ever get here.
+    conn.execute("DELETE FROM meal WHERE recipe_id = ? AND state != 'done'",
+                 (recipe_id,))
+    conn.execute("DELETE FROM recipe WHERE id = ?", (recipe_id,))
+
+
+def recipe_is_referenced_by_a_done_meal(conn, recipe_id: int) -> bool:
+    """Whether a validated meal points at this recipe.
+
+    The refusal to delete lives above (spec §17); the repository only tells
+    the truth. A `done` meal is history — deleting what it names would leave
+    the journal pointing at nothing.
+    """
+    return conn.execute(
+        "SELECT 1 FROM meal WHERE recipe_id = ? AND state = 'done' LIMIT 1",
+        (recipe_id,)).fetchone() is not None
+
+
+# --- steps and bullets ------------------------------------------------------
+
+def insert_step(conn, *, recipe_id: int, position: int, title: str | None = None,
+                image_url: str | None = None) -> int:
+    return _insert(conn, "recipe_step", {
+        "recipe_id": recipe_id, "position": position,
+        "title": title, "image_url": image_url,
+    })
+
+
+def insert_instruction(conn, *, step_id: int, position: int, text: str,
+                       timer_label: str | None = None,
+                       timer_seconds: int | None = None) -> int:
+    return _insert(conn, "recipe_instruction", {
+        "step_id": step_id, "position": position, "text": text,
+        "timer_label": timer_label, "timer_seconds": timer_seconds,
+    })
+
+
+def list_steps(conn, recipe_id: int) -> list[dict[str, Any]]:
+    """The cooking view's pages, each with its bullets already nested.
+
+    One query per level rather than a join flattened back out in Python: a
+    step with no bullet must still appear as a page, which an inner join
+    would drop and an outer join would make the caller re-group.
+    """
+    steps = _rows(conn.execute(
+        "SELECT * FROM recipe_step WHERE recipe_id = ? ORDER BY position",
+        (recipe_id,)))
+    if not steps:
+        return []
+    bullets = _rows(conn.execute(
+        "SELECT * FROM recipe_instruction WHERE step_id IN"
+        f" ({', '.join('?' for _ in steps)}) ORDER BY step_id, position",
+        tuple(step["id"] for step in steps)))
+    by_step: dict[int, list[dict[str, Any]]] = {step["id"]: [] for step in steps}
+    for bullet in bullets:
+        by_step[bullet["step_id"]].append(bullet)
+    for step in steps:
+        step["instructions"] = by_step[step["id"]]
+    return steps
+
+
+# --- ingredients, measures, aliases -----------------------------------------
+
+def insert_ingredient(conn, *, recipe_id: int, position: int, raw_text: str,
+                      **fields) -> int:
+    values = {"recipe_id": recipe_id, "position": position, "raw_text": raw_text}
+    values.update(_filtered(fields, INGREDIENT_FIELDS))
+    return _insert(conn, "recipe_ingredient", values)
+
+
+def list_ingredients(conn, recipe_id: int) -> list[dict[str, Any]]:
+    """Every column `domain.recipes.IngredientLine` needs, joined once.
+
+    LEFT JOIN throughout: an unmatched line has no product, and it is exactly
+    the line the matching screen exists to fix — an inner join would hide the
+    work from the person meant to do it.
+
+    Building the IngredientLine stays in `application`, but the query is
+    written once here so no two screens can read a measure differently.
+    """
+    return _rows(conn.execute(
+        """
+        SELECT ri.*,
+               p.name AS product_name, p.base_unit AS product_base_unit,
+               pk.name AS packaging_name, pk.base_quantity AS packaging_base_quantity,
+               cm.id AS measure_id_joined, cm.name AS measure_name,
+               cm.base_unit AS measure_base_unit,
+               cm.base_quantity AS measure_base_quantity
+        FROM recipe_ingredient ri
+        LEFT JOIN product p ON p.id = ri.product_id
+        LEFT JOIN packaging pk ON pk.id = ri.packaging_id
+        LEFT JOIN culinary_measure cm ON cm.id = ri.measure_id
+        WHERE ri.recipe_id = ?
+        ORDER BY ri.position
+        """,
+        (recipe_id,)))
+
+
+def update_ingredient_match(conn, ingredient_id: int, *, product_id: int | None,
+                            state: str, score: float | None) -> None:
+    conn.execute(
+        "UPDATE recipe_ingredient SET product_id = ?, match_state = ?,"
+        " match_score = ? WHERE id = ?",
+        (product_id, state, score, ingredient_id))
+
+
+def list_measures(conn) -> list[dict[str, Any]]:
+    return _rows(conn.execute("SELECT * FROM culinary_measure ORDER BY id"))
+
+
+def find_alias(conn, normalised: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM ingredient_alias WHERE normalised = ?",
+        (normalised,)).fetchone())
+
+
+def upsert_alias(conn, *, normalised: str, product_id: int, created_at: str) -> None:
+    """Record what a human decided once and for all.
+
+    Re-teaching the same alias must not pile up rows, and re-teaching it
+    towards a DIFFERENT product must move it: the last human decision is the
+    one that counts, otherwise a correction would be silently ignored.
+    """
+    conn.execute(
+        "INSERT INTO ingredient_alias (normalised, product_id, created_at)"
+        " VALUES (?, ?, ?)"
+        " ON CONFLICT(normalised) DO UPDATE SET product_id = excluded.product_id,"
+        " created_at = excluded.created_at",
+        (normalised, product_id, created_at))
+
+
+# --- slots and meals --------------------------------------------------------
+
+def list_slots(conn) -> list[dict[str, Any]]:
+    return _rows(conn.execute("SELECT * FROM meal_slot ORDER BY position"))
+
+
+def get_slot(conn, key: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM meal_slot WHERE key = ?", (key,)).fetchone())
+
+
+def insert_meal(conn, *, uid: str, day: str, slot_key: str, created_at: str,
+                **fields) -> int:
+    values = {"uid": uid, "day": day, "slot_key": slot_key, "created_at": created_at}
+    values.update(_filtered(fields, MEAL_FIELDS))
+    return _insert(conn, "meal", values)
+
+
+def get_meal(conn, meal_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute("SELECT * FROM meal WHERE id = ?", (meal_id,)).fetchone())
+
+
+def get_meal_by_uid(conn, uid: str) -> dict[str, Any] | None:
+    return _row(conn.execute("SELECT * FROM meal WHERE uid = ?", (uid,)).fetchone())
+
+
+# What a meal row carries once joined with what names it. Written once so the
+# calendar, the planning screen and the sensors cannot disagree about a meal.
+_MEAL_SELECT: Final = """
+    SELECT m.*, s.position AS slot_position, s.default_time AS slot_default_time,
+           s.duration_minutes AS slot_duration_minutes,
+           r.name AS recipe_name, r.servings AS recipe_servings,
+           r.image_url AS recipe_image_url, r.total_minutes AS recipe_total_minutes,
+           p.name AS product_name, p.base_unit AS product_base_unit
+    FROM meal m
+    JOIN meal_slot s ON s.key = m.slot_key
+    LEFT JOIN recipe r ON r.id = m.recipe_id
+    LEFT JOIN product p ON p.id = m.product_id
+"""
+
+
+def list_meals(conn, start: str, end: str) -> list[dict[str, Any]]:
+    """Meals over a range of FOOD days, both bounds included.
+
+    Ordered by day, then by the slot's own position, then by the meal's
+    position within the slot — so the planning always reads breakfast, lunch,
+    dinner, snack, and a meal added to a slot after the fact lands after the
+    ones already there rather than ahead of them.
+    """
+    return _rows(conn.execute(
+        _MEAL_SELECT + " WHERE m.day BETWEEN ? AND ?"
+        " ORDER BY m.day, s.position, m.position, m.id",
+        (start, end)))
+
+
+def next_meal(conn, day: str) -> dict[str, Any] | None:
+    """The first meal still to come on or after `day`.
+
+    `done` and `skipped` are behind us: a meal already eaten is not the next
+    one, and one deliberately skipped never will be.
+    """
+    return _row(conn.execute(
+        _MEAL_SELECT + " WHERE m.day >= ? AND m.state = 'planned'"
+        " ORDER BY m.day, s.position, m.position, m.id LIMIT 1",
+        (day,)).fetchone())
+
+
+def update_meal_fields(conn, meal_id: int, fields: Mapping[str, Any]) -> None:
+    _update_fields(conn, "meal", meal_id, _filtered(fields, MEAL_FIELDS))
+
+
+def delete_meal(conn, meal_id: int) -> None:
+    conn.execute("DELETE FROM meal WHERE id = ?", (meal_id,))
+
+
+def next_meal_position(conn, day: str, slot_key: str) -> int:
+    """The position a meal added to this slot should take: after the last one."""
+    row = conn.execute(
+        "SELECT MAX(position) AS last FROM meal WHERE day = ? AND slot_key = ?",
+        (day, slot_key)).fetchone()
+    return 0 if row["last"] is None else int(row["last"]) + 1
+
+
+# The base-unit factor of an ingredient line, resolved in the same order as
+# `domain.recipes.base_amount`: the product's own packaging first, then the
+# culinary measure but ONLY when its dimension matches the product's base
+# unit, then the number as written. A measure whose dimension does not match
+# resolves to NULL and the line drops out below — never to 1.0, which would
+# turn "2 tbsp of yoghurt" into "2 yoghurts". No divisor is ever guessed.
+_INGREDIENT_FACTOR_SQL: Final = """
+    CASE
+        WHEN ri.packaging_id IS NOT NULL THEN pk.base_quantity
+        WHEN ri.measure_id IS NOT NULL THEN
+            CASE WHEN cm.base_unit = p.base_unit THEN cm.base_quantity END
+        ELSE 1.0
+    END
+"""
+
+
+def missing_products_between(conn, start: str, end: str) -> list[dict[str, Any]]:
+    """Products the planned meals need more of than the stock holds.
+
+    Only lines that name a product and are actually going to be decremented
+    count: `unmatched` lines are not claimed, because asking someone to buy
+    what we failed to identify would be a false shopping list — and the real
+    list is lot 4's job. `ignored` lines are the ones a human already ruled
+    out. `done` and `skipped` meals are behind us.
+
+    Needs are scaled by each meal's own servings against its recipe's, so
+    cooking a two-person recipe for four asks for twice as much.
+    """
+    return _rows(conn.execute(
+        f"""
+        SELECT product_id, product_name, base_unit, needed, available
+        FROM (
+            SELECT p.id AS product_id, p.name AS product_name, p.base_unit AS base_unit,
+                   SUM(ri.amount * {_INGREDIENT_FACTOR_SQL}
+                       * (m.servings / r.servings)) AS needed,
+                   COALESCE((
+                       SELECT SUM(b.remaining) FROM batch b
+                       JOIN article a ON a.id = b.article_id
+                       WHERE a.product_id = p.id AND b.closed_at IS NULL
+                   ), 0.0) AS available
+            FROM meal m
+            JOIN recipe r ON r.id = m.recipe_id
+            JOIN recipe_ingredient ri ON ri.recipe_id = r.id
+            JOIN product p ON p.id = ri.product_id
+            LEFT JOIN packaging pk ON pk.id = ri.packaging_id
+            LEFT JOIN culinary_measure cm ON cm.id = ri.measure_id
+            WHERE m.day BETWEEN ? AND ?
+              AND m.state = 'planned'
+              AND ri.match_state IN ('auto', 'confirmed')
+              AND ri.amount IS NOT NULL
+              AND {_INGREDIENT_FACTOR_SQL} IS NOT NULL
+            GROUP BY p.id
+        )
+        WHERE needed > available
+        ORDER BY product_name
+        """,
+        (start, end)))

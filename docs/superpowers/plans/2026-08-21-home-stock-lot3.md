@@ -151,7 +151,7 @@ DEFAULT_RECIPE_SOURCE_KEY: Final = "1"
 
 **Décision de plan — la contiguïté est un test, pas une consigne.** `apply_migrations()` n'applique que les migrations dont la `VERSION` dépasse `MAX(version)` de `schema_version`. Un trou est sans conséquence ; un **dépassement** est fatal et silencieux. Le test de contiguïté ajouté ici est ce qui empêche le lot 5 (qui vise `m006`) d'atterrir sur `master` avant le lot 4 sans renuméroter. Il manque aujourd'hui ; le lot 3 le pose parce qu'il est le premier des deux à écrire une migration.
 
-- [ ] **Step 1: Écrire les tests de la migration et de la contiguïté**
+- [x] **Step 1: Écrire les tests de la migration et de la contiguïté**
 
 Dans `tests/storage/test_migrations.py`, à la fin du fichier. **Lire d'abord le haut du fichier** et reprendre le helper d'ouverture/migration déjà présent (noté `_migrated(tmp_path)` ci-dessous) plutôt que d'en écrire un autre.
 
@@ -281,12 +281,12 @@ def test_m004_servings_and_timer_bounds(tmp_path):
         _insert_instruction(conn, timer_label="Repos", timer_seconds=0)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: FAIL — `ImportError` sur `m004_recipes`, puis `no such table: recipe`.
 
-- [ ] **Step 3: Écrire `m004_recipes.py`**
+- [x] **Step 3: Écrire `m004_recipes.py`**
 
 Recopier le DDL de la spec § 6 **tel quel** — il a été relu, ses `CHECK` sont des décisions et non de la décoration. Le module suit le contrat des trois précédents : docstring de tête, `VERSION = 4`, `SQL = """…"""` passé à `executescript`, puis `apply(conn)` pour ce qui demande du Python.
 
@@ -328,17 +328,17 @@ Dans `storage/migrations/__init__.py` : ajouter `m004_recipes` à l'import **et 
 
 Dans `const.py` : ajouter le bloc du lot en fin de fichier, et `REASON_COOKED` **à la fin** de `REASONS` — jamais au milieu.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Lancer toute la suite Python**
+- [x] **Step 5: Lancer toute la suite Python**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS — aucune régression. Un test du lot 0 épingle `REASONS` : s'il échoue, c'est que `cooked` a été inséré au milieu.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/migrations custom_components/home_stock/const.py tests/storage/test_migrations.py
@@ -371,7 +371,7 @@ SELECT b.*, COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_un
 
 Dès que `batch` porte ces neuf colonnes, `b.*` les ramène **aussi**, et la ligne rendue contient deux colonnes du même nom. `dict(sqlite3.Row)` garde alors la **première** — c'est-à-dire la colonne brute de `batch`, `NULL` pour tout le stock existant — et non le `COALESCE`. Résultat : toutes les kcal et toutes les macros du stock passent silencieusement à `NULL` le jour où la migration s'applique. **`SELECT b.*` doit donc être remplacé par une liste explicite de colonnes** dans les deux requêtes concernées. C'est le seul changement de cette tâche qui n'est pas une addition.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/storage/test_repositories.py`, à la fin :
 
@@ -436,12 +436,12 @@ def test_insert_batch_without_nutrition_is_unchanged(conn):
     assert all(row[column] is None for column in NUTRITION_COLUMNS)
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/storage/test_repositories.py -q`
 Expected: FAIL — `insert_batch() got an unexpected keyword argument 'nutrition'`.
 
-- [ ] **Step 3: Étendre la cascade et l'insertion**
+- [x] **Step 3: Étendre la cascade et l'insertion**
 
 Dans `repositories.py` : les deux constantes, la liste explicite de colonnes à la place de `b.*` dans `list_batches_for_product` **et** dans `stock_rows` si elle sélectionne `b.*`, l'argument `nutrition` de `insert_batch` (filtré sur `NUTRITION_COLUMNS`, importé de `application`… non : **déplacer `NUTRITION_COLUMNS` de `application.py` vers `const.py`** pour que `repositories` puisse l'utiliser sans importer la couche du dessus — `application` continue de le réexporter pour ne casser aucun appelant).
 
@@ -449,7 +449,7 @@ Dans `repositories.py` : les deux constantes, la liste explicite de colonnes à 
 
 Dans `application.py`, `consume_batch` lit déjà sa ligne de lot jointe : lui faire prendre les taux du lot en priorité (`repo.macro_rates` reçoit une ligne déjà cascadée par `list_batches_for_product`, donc rien à changer si la requête est bien corrigée — **le vérifier par le test ci-dessous plutôt que par lecture**).
 
-- [ ] **Step 4: Lancer, vérifier le vert, puis la suite entière**
+- [x] **Step 4: Lancer, vérifier le vert, puis la suite entière**
 
 ```bash
 ./scripts/test.sh tests/storage/test_repositories.py -q
@@ -457,7 +457,7 @@ Dans `application.py`, `consume_batch` lit déjà sa ligne de lot jointe : lui f
 ```
 Expected: PASS des deux. La suite entière est obligatoire ici : cette tâche touche la lecture de **tout** le stock.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/repositories.py custom_components/home_stock/const.py custom_components/home_stock/application.py tests/storage/test_repositories.py
@@ -477,7 +477,7 @@ git commit -m "feat: a batch may carry its own nutrition, and the cascade reads 
 
 **Pourquoi ici et pas un second chemin.** `add_stock` est le seul chemin d'entrée en stock du composant. En ouvrir un second pour les plats cuisinés reviendrait à entretenir deux comportements d'entrée — exactement la dette que le lot 0 a refusée sur la sortie. Les deux nouveaux arguments ont des défauts qui laissent **tous** les appelants existants strictement inchangés.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_application.py` :
 
@@ -525,21 +525,21 @@ def test_add_stock_stays_idempotent_with_the_new_arguments(manager):
     assert _count(manager, "SELECT COUNT(*) c FROM movement") == 1
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/test_application.py -q`
 Expected: FAIL — `add_stock() got an unexpected keyword argument 'reason'`.
 
-- [ ] **Step 3: Étendre `add_stock`**
+- [x] **Step 3: Étendre `add_stock`**
 
 Deux arguments nommés en fin de signature ; `nutrition` filtré sur `NUTRITION_COLUMNS` et passé à `repo.insert_batch` ; les valeurs du mouvement d'entrée calculées depuis la nutrition figée quand elle existe, sinon depuis `repo.resolve_kcal_rate` / `repo.macro_rates(article)` comme aujourd'hui. Documenter dans la docstring que `reason` par défaut vaut `purchase` **et pourquoi** on n'a pas ouvert un second chemin.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/test_application.py -q && ./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/application.py tests/test_application.py
@@ -563,7 +563,7 @@ git commit -m "feat: add_stock takes a reason and a nutrition to freeze on the b
 
 **Pourquoi déplacer plutôt que dupliquer.** `domain/recipes.py` doit ramener « 2 tbsp » et « 250 g » à l'unité de base d'un produit, et il n'a pas le droit d'importer `off/` — le domaine ne connaît ni le réseau ni les fournisseurs de données. Recopier la table donnerait deux vérités sur ce que vaut un décilitre, et la seconde dériverait. Le domaine est l'endroit où elle aurait dû naître.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/domain/test_units.py` :
 
@@ -620,21 +620,21 @@ def test_off_mapping_still_exposes_the_unit_table():
     assert reexport is source
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/domain/test_units.py tests/off/test_mapping.py -q`
 Expected: FAIL — `ImportError: cannot import name 'UNIT_TO_BASE' from …domain.units`.
 
-- [ ] **Step 3: Déplacer la table et écrire `convertible_amount`**
+- [x] **Step 3: Déplacer la table et écrire `convertible_amount`**
 
 `convertible_amount` : `unit` non `str` ou absent de `UNIT_TO_BASE` → `None` ; dimension rendue par la table différente de `product_base_unit` → `None` ; sinon `amount * facteur`. Aucun `strip()`, aucun `lower()` : la normalisation du texte de la source est le travail de `recipes/mapping.py`, pas du domaine — une fonction qui devine deux fois ne dit plus où la devinette a eu lieu.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/domain tests/off -q && ./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/units.py custom_components/home_stock/off/mapping.py tests/domain/test_units.py tests/off/test_mapping.py
@@ -702,7 +702,7 @@ def per_part_values(frozen: Sequence[Mapping[str, float | None]],
 3. `plan_decrement` ne lève **jamais** `InsufficientStock`. Elle le voit venir : quand le besoin dépasse le disponible, elle rend `status="short"`, `allocations` réduites au disponible, et laisse l'arbitrage à l'appelant. C'est la simulation, et une simulation qui lève ne montre rien.
 4. `per_part_values` traite **chaque clé indépendamment** : si un seul élément de `frozen` porte `None` sur une clé, le résultat porte `None` **pour cette clé**. Sinon, somme ÷ `parts`. Aucun arrondi.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/domain/test_recipes.py`. Le module est pur : aucun `hass`, aucun SQLite, aucun réseau. Il se teste en `pytest` nu.
 
@@ -861,21 +861,21 @@ def test_zero_parts_is_refused_rather_than_dividing():
         per_part_values([{"kcal": 1.0}], 0)
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/domain/test_recipes.py -q`
 Expected: FAIL — `ModuleNotFoundError: …domain.recipes`
 
-- [ ] **Step 3: Écrire `domain/recipes.py`**
+- [x] **Step 3: Écrire `domain/recipes.py`**
 
 Pur, docstrings en anglais, messages d'erreur en français (ils traversent `messages.py`). `plan_decrement` alloue en séquence sur une **copie mutable** du disponible par produit, pour que deux lignes du même produit ne se servent pas deux fois du même lot. `display_amount` pluralise en français (`≥ 2` → pluriel), replie sur `format_quantity` quand il n'y a ni mesure ni conditionnement, et sur `raw_text` quand il n'y a pas de quantité du tout.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/domain/test_recipes.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/recipes.py tests/domain/test_recipes.py
@@ -933,7 +933,7 @@ def missing_products_between(conn, start: str, end: str) -> list[dict]
 
 **Décision de plan — `list_ingredients` fait la jointure une fois.** Elle rend, par ligne, tout ce dont `domain.recipes.IngredientLine` a besoin : `product_base_unit`, `packaging_base_quantity`, `packaging_name`, et les quatre colonnes de la mesure préfixées `measure_*`. La construction de l'`IngredientLine` reste dans `application.py`, mais la requête est écrite une seule fois — c'est ce qui évite qu'un écran lise la mesure autrement qu'un autre.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/storage/test_repositories_recipes.py`. Reprendre le helper de base migrée déjà utilisé par `tests/storage/test_repositories.py`.
 
@@ -964,16 +964,16 @@ def test_missing_products_between_ignores_unmatched_and_ignored_lines(conn):
 def test_missing_products_between_scales_by_the_meal_servings(conn): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 Run: `./scripts/test.sh tests/storage/test_repositories_recipes.py -q` → FAIL (`AttributeError: … insert_recipe`).
 
-- [ ] **Step 3: Écrire les dépôts**
+- [x] **Step 3: Écrire les dépôts**
 Section commentée en fin de `repositories.py`. Réutiliser `_insert`, `_update_fields`, `_row`, `_rows`. Les listes blanches de champs (`RECIPE_FIELDS`, `INGREDIENT_FIELDS`, `MEAL_FIELDS`) suivent le motif de `PRODUCT_FIELDS` / `ARTICLE_FIELDS` : un nom de colonne interpolé dans du SQL ne se prend jamais dans une charge utile brute.
 
-- [ ] **Step 4: Vert, puis suite entière**
+- [x] **Step 4: Vert, puis suite entière**
 Run: `./scripts/test.sh tests/storage -q && ./scripts/test.sh -q` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/storage/repositories.py tests/storage/test_repositories_recipes.py
 git commit -m "feat: repositories for recipes, ingredients, measures, aliases and meals"
@@ -1012,11 +1012,11 @@ class StockManager:
 - **Un `auto` n'écrit jamais d'alias.** Seul `match_ingredient` avec `create_alias=True` en crée un. Sans cette règle, un appariement automatique faux deviendrait permanent et contaminerait toutes les recettes suivantes — c'est le ré-appariement par nom qui a produit 35 doublons dans Grocy en avril 2026.
 - **`ignored` est un état de plein droit.** Sel, poivre, eau. Une ligne `ignored` s'affiche, ne décrémente rien, et ne réapparaît jamais dans les manques.
 
-- [ ] **Step 1: Fabriquer les fixtures**
+- [x] **Step 1: Fabriquer les fixtures**
 
 `tests/fixtures/recipes/products.json` : les 299 produits réels (id, `name`), extraits **d'une copie** de la base ou du catalogue déjà utilisé par `tests/fixtures/off/catalogue.json`. `tests/fixtures/recipes/ingredients.json` : les 420 `raw_text` réels de `recipes_pos`, extraits **d'une copie** de `grocy.db`, en lecture seule, une fois. Aucun script de génération n'est versionné et rien n'est écrit ailleurs que dans ces deux fichiers. Si la copie n'est pas disponible au moment de l'implémentation, **réduire l'échantillon plutôt que d'inventer des lignes** : un taux mesuré sur 60 lignes vraies vaut mieux qu'un taux mesuré sur 420 lignes imaginaires, et le test le dit dans son message.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 ```python
 """L'appariement rejoué sur les lignes réelles, avec les seuils du lot 1."""
@@ -1058,15 +1058,15 @@ def test_the_replay_is_deterministic(conn):
 
 **Note pour l'implémenteur :** le plancher de `test_the_automatic_match_rate_on_the_real_lines` s'écrit **après** la première mesure, arrondi vers le bas au multiple de 5 %. Ne pas inventer 0,45 s'il mesure 0,72 ; ne pas non plus baisser le plancher pour faire passer une régression.
 
-- [ ] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_ingredient_matching.py -q`
+- [x] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_ingredient_matching.py -q`
 
-- [ ] **Step 4: Écrire la résolution et `match_ingredient`**
+- [x] **Step 4: Écrire la résolution et `match_ingredient`**
 
 `resolve_ingredient_match` est une fonction module-level de `application.py` (elle prend `conn`, elle n'ouvre rien). `match_ingredient` ouvre une transaction, valide `state` contre `MATCH_STATES`, refuse `state != 'unmatched'` sans `product_id` avec une phrase française, écrit la ligne, et n'écrit l'alias que si `create_alias` **et** `state == 'confirmed'`.
 
-- [ ] **Step 5: Vert** — `./scripts/test.sh tests/test_ingredient_matching.py -q && ./scripts/test.sh -q`
+- [x] **Step 5: Vert** — `./scripts/test.sh tests/test_ingredient_matching.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/fixtures/recipes tests/test_ingredient_matching.py
 git commit -m "feat: ingredient matching with learned aliases, on the real 420 lines"
@@ -1108,11 +1108,11 @@ class MealDbClient:
 
 **Le contrat réseau est celui du lot 1, mot pour mot.** Transport injecté, **timeout 10 s, une seule tentative, aucune reprise**. **Aucune méthode ne lève jamais** : elle rend une liste vide ou `None`, et l'appelant affiche un message. Un import en lot respecte `BULK_INTERVAL`, comme l'ingestion Open Food Facts.
 
-- [ ] **Step 1: Capturer les fixtures**
+- [x] **Step 1: Capturer les fixtures**
 
 Deux fichiers, capturés une fois puis versionnés : la réponse de `lookup.php?i=52772` (une fiche complète, avec ses `strIngredient1..20` et `strMeasure1..20` dont la plupart sont vides) et celle de `search.php?s=chicken`. Les capturer **hors du composant**, à la main ; le dépôt ne versionne pas de script d'appel.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 Créer `tests/recipes/test_source.py`. Le double de transport suit `_InertTransport` de `conftest.py` : `async def get_json(self, url, headers, timeout)`.
 
@@ -1162,15 +1162,15 @@ async def test_the_real_contract_has_not_moved():
 
 Déclarer le marqueur dans `pytest.ini` (`markers = network: touche le réseau réel`) et l'exclure par défaut (`addopts = -m "not network"`) — **en vérifiant d'abord** qu'ajouter `addopts` ne casse aucune invocation existante de `scripts/test.sh`.
 
-- [ ] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_source.py -q`
+- [x] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_source.py -q`
 
-- [ ] **Step 4: Écrire `recipes/source.py`**
+- [x] **Step 4: Écrire `recipes/source.py`**
 
 Motif recopié de `off/client.py` : budget de temps, `except Exception: return []` autour de l'appel de transport, statut non-200 → vide, charge non-`dict` → vide, `meals` absent ou `null` → vide. Aucun `hass`, aucun import de `homeassistant`.
 
-- [ ] **Step 5: Vert** — `./scripts/test.sh tests/recipes -q`
+- [x] **Step 5: Vert** — `./scripts/test.sh tests/recipes -q`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add custom_components/home_stock/recipes tests/recipes tests/fixtures/recipes pytest.ini
 git commit -m "feat: a TheMealDB client that never blocks and never retries"
@@ -1230,7 +1230,7 @@ class StockManager:
 - **La ré-écriture ne touche jamais une ligne `confirmed`**, ni une étape corrigée à la main. Même règle que `article.manual_fields` protégeant une valeur saisie d'une resynchronisation OFF.
 - Une ligne dont la mesure ne se ramène pas à l'unité de base du produit garde `amount = NULL` et son `raw_text`. Le mapping **n'écrit jamais** de `measure_id` d'une dimension incompatible : il consulte `units.convertible_amount` d'abord, puis les mesures culinaires, et renonce sinon.
 
-- [ ] **Step 1: Écrire les tests du mapping**
+- [x] **Step 1: Écrire les tests du mapping**
 
 ```python
 @pytest.mark.parametrize("text, expected", [
@@ -1256,7 +1256,7 @@ def test_the_raw_text_is_the_source_verbatim_and_nothing_computed():
     """`raw_text` a le statut d'`article.off_raw` : provenance, jamais calcul."""
 ```
 
-- [ ] **Step 2: Écrire les tests d'écriture** dans `tests/test_recipes_write.py`
+- [x] **Step 2: Écrire les tests d'écriture** dans `tests/test_recipes_write.py`
 
 ```python
 def test_a_source_recipe_lands_with_its_ingredients(manager): ...
@@ -1281,13 +1281,13 @@ def test_create_recipe_writes_nothing_when_one_ingredient_is_invalid(manager):
     """Transaction unique : jamais une demi-recette."""
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec, écrire, revérifier**
+- [x] **Step 3: Lancer, vérifier l'échec, écrire, revérifier**
 
 ```bash
 ./scripts/test.sh tests/recipes/test_mapping.py tests/test_recipes_write.py -q   # FAIL puis PASS
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 ```bash
 git add custom_components/home_stock/recipes/mapping.py custom_components/home_stock/application.py tests/recipes/test_mapping.py tests/test_recipes_write.py
 git commit -m "feat: map a TheMealDB card onto recipe rows, replayably"
@@ -1338,7 +1338,7 @@ async def adapt(hass, *, agent_id: str | None, recipe: SourceRecipe) -> AdaptedR
 
 **Décision de plan — la lecture est défensive de bout en bout.** Un agent conversationnel a le droit d'écrire « Voici la recette adaptée : » devant son JSON, c'est même son métier. `extract_json` cherche d'abord la charge telle quelle, puis le premier bloc délimité par des **accolades équilibrées** (compteur, pas d'expression régulière — une regex non gloutonne coupe au premier `}` interne). Chaque champ passe par `bounded_text` / `finite_float` / `bounded_int`. **Toute anomalie fait échouer l'adaptation entière** ; la recette est alors écrite telle quelle depuis la source, `language = 'en'`, `needs_review = 1`, `adapted_at = NULL`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # --- l'invite ---------------------------------------------------------------
@@ -1396,17 +1396,17 @@ async def test_the_source_key_defaults_to_one(hass): ...
 async def test_changing_an_option_reloads_the_entry(hass): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_adapt.py tests/test_config_flow.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_adapt.py tests/test_config_flow.py -q`
 
-- [ ] **Step 3: Écrire `recipes/adapt.py`, les options et le câblage**
+- [x] **Step 3: Écrire `recipes/adapt.py`, les options et le câblage**
 
 Le composant **n'embarque aucune clé d'API** et n'en lit aucune : ni `GEMINI_KEY`, ni le `.env` de `data/tools/grocy-off`, ni rien d'autre. C'est une règle, pas une préférence — le composant part sur HACS.
 
 Ajouter les deux libellés dans `options.step.init.data` de `translations/fr.json` **et** `en.json`.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/recipes tests/test_config_flow.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/recipes tests/test_config_flow.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/recipes/adapt.py custom_components/home_stock/config_flow.py custom_components/home_stock/const.py custom_components/home_stock/__init__.py custom_components/home_stock/translations tests/recipes/test_adapt.py tests/test_config_flow.py
 git commit -m "feat: adapt an imported recipe through a Home Assistant conversation agent"
@@ -1444,7 +1444,7 @@ class StockManager:
 - **Un repas dont l'heure est passée reste `planned`.** Le composant ne décide pas tout seul qu'un repas n'a pas eu lieu.
 - `meal_summary` rend `{"next": {...} | None, "recipes": {...}, "missing": [...]}` : c'est ce que le coordinateur publiera (tâche 15).
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_recipe_meal_lands_with_a_uid(manager): ...
@@ -1472,15 +1472,15 @@ def test_meal_summary_counts_the_missing_products_over_seven_days(manager): ...
 def test_meal_summary_is_empty_without_any_meal_and_never_raises(manager): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meals_plan.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meals_plan.py -q`
 
-- [ ] **Step 3: Écrire les méthodes**
+- [x] **Step 3: Écrire les méthodes**
 
 Une transaction par méthode. Les messages français passent par les motifs de `messages.py` que la tâche 17 ajoutera : ici, lever `ValueError` avec un texte **anglais stable** (`unknown slot 'brunch'`, `meal 3 is already done`) et laisser la traduction à `messages.py`, exactement comme le lot 0 l'a fait pour `unknown article 7`.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_meals_plan.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_meals_plan.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meals_plan.py
 git commit -m "feat: plan, move and cancel a meal — a done meal never moves"
@@ -1535,7 +1535,7 @@ Ce qu'elle rend :
 - `blocking` porte les raisons pour lesquelles `validate_meal` refuserait aujourd'hui. **Une ligne `short` bloque** tant qu'elle n'a pas été soit acceptée (le panneau renvoie la quantité réduite), soit retirée (`skip_ingredient_ids`) : servir 200 g quand on en demande 500 sans le dire écrit un chiffre faux.
 - **Une ligne `unmatched`, `unquantified` ou `ignored` ne bloque jamais rien.** Refuser un dîner entier parce qu'une gousse d'ail n'est pas appariée serait une leçon de morale, pas un outil.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_preview_writes_absolutely_nothing(manager):
@@ -1573,13 +1573,13 @@ def test_the_preview_uses_the_same_allocation_function_as_the_write(manager, mon
     assert calls, "la simulation doit passer par domain.stock.allocate"
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meal_preview.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meal_preview.py -q`
 
-- [ ] **Step 3: Écrire `preview_meal`**
+- [x] **Step 3: Écrire `preview_meal`**
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_meal_preview.py -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_meal_preview.py -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meal_preview.py
 git commit -m "feat: simulate a meal without writing, on the very same FIFO"
@@ -1636,7 +1636,7 @@ class StockManager:
 
 **Décision de plan — la clé du panneau ne remplace pas les clés déterministes.** `home_stock/meal/validate` porte une `idempotency_key` (la file hors-ligne la pose sur tout). Elle est acceptée et validée, mais **le garde-fou est la famille `meal:<id>:…`**, dérivée de l'identifiant du repas : deux clés de panneau différentes pour le même repas ne doivent pas décrémenter deux fois. Un rejeu relit les mouvements par préfixe de clé et rend les mêmes `movement_ids`.
 
-- [ ] **Step 1: Écrire les tests du refactor d'abord**
+- [x] **Step 1: Écrire les tests du refactor d'abord**
 
 Ils ne portent pas sur du code neuf : ils épinglent le comportement **avant** de déplacer quoi que ce soit.
 
@@ -1654,7 +1654,7 @@ def test_two_writes_in_one_transaction_do_not_deadlock(manager):
                                 reason="cooked", moment="2026-08-21T20:00:00")
 ```
 
-- [ ] **Step 2: Écrire les tests de validation**
+- [x] **Step 2: Écrire les tests de validation**
 
 ```python
 # --- la simulation par défaut ----------------------------------------------
@@ -1729,7 +1729,7 @@ def test_a_dinner_validated_at_one_in_the_morning_lands_on_the_evening(manager):
     fait monter sa barre."""
 ```
 
-- [ ] **Step 3: Écrire les tests des restes** dans `tests/test_leftovers.py`
+- [x] **Step 3: Écrire les tests des restes** dans `tests/test_leftovers.py`
 
 ```python
 def test_the_leftover_product_is_created_once_for_two_cookings(manager):
@@ -1761,18 +1761,18 @@ def test_a_leftover_product_falls_back_to_the_other_aisle(manager):
     liste de courses — ce que le lot 4 devra explicitement empêcher."""
 ```
 
-- [ ] **Step 4: Lancer, vérifier l'échec**
+- [x] **Step 4: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/test_meal_validate.py tests/test_leftovers.py -q`
 Expected: FAIL
 
-- [ ] **Step 5: Extraire les trois `_within`, puis écrire `validate_meal`**
+- [x] **Step 5: Extraire les trois `_within`, puis écrire `validate_meal`**
 
 Faire le refactor **en premier** et relancer la suite entière avant d'écrire une seule ligne de `validate_meal` : c'est le seul moment où l'on saura qu'une régression vient du déplacement et non du code neuf.
 
 Run intermédiaire : `./scripts/test.sh -q` → PASS obligatoire avant de continuer.
 
-- [ ] **Step 6: Vert**
+- [x] **Step 6: Vert**
 
 ```bash
 ./scripts/test.sh tests/test_meal_validate.py tests/test_leftovers.py -q
@@ -1780,7 +1780,7 @@ Run intermédiaire : `./scripts/test.sh -q` → PASS obligatoire avant de contin
 ```
 Expected: PASS des deux.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meal_validate.py tests/test_leftovers.py
 git commit -m "feat: validate a meal — cook then eat, in one transaction"
@@ -1806,7 +1806,7 @@ git commit -m "feat: validate a meal — cook then eat, in one transaction"
 
 **Poser un repas depuis la carte native.** `async_create_event` reçoit un `summary` et un début. Le créneau se déduit de l'heure : celui dont `default_time` est le plus proche. Le `summary` passe à `matching.candidates()` contre les **recettes** ; au-delà du seuil de présélection, le repas pointe la recette, sinon c'est un repas `note`. Un repas posé depuis Lovelace est donc un repas complet et décrémentable, pas une chaîne de caractères sans suite.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_the_calendar_entity_exists_with_a_french_name(hass, setup_entry): ...
@@ -1841,15 +1841,15 @@ async def test_deleting_a_done_meal_marks_it_skipped_and_keeps_its_movements(has
 async def test_deleting_an_unknown_uid_raises_rather_than_passing_silently(hass, setup_entry): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_calendar.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_calendar.py -q`
 
-- [ ] **Step 3: Écrire `calendar.py`**
+- [x] **Step 3: Écrire `calendar.py`**
 
 Sous-classer `HomeStockEntity, CalendarEntity`, `super().__init__(coordinator, "meals", ENTITY_ID_FORMAT)`. Toutes les lectures SQLite passent par `hass.async_add_executor_job`. Ajouter `Platform.CALENDAR` à `PLATFORMS` **en fin de liste** et la clé `entity.calendar.meals.name` (« Repas ») dans les deux fichiers de traduction.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_calendar.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_calendar.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/calendar.py custom_components/home_stock/__init__.py custom_components/home_stock/translations tests/test_calendar.py
 git commit -m "feat: calendar.home_stock_meals, creatable, movable and deletable"
@@ -1874,7 +1874,7 @@ git commit -m "feat: calendar.home_stock_meals, creatable, movable and deletable
 
 **Décision reprise de la spec, et elle vaut d'être répétée dans le code :** `missing_ingredients` est **un compteur, pas une liste cochable**. Une entité `todo` serait déjà la liste de courses, qui est le lot 4 — y cocher signifierait « acheté », donc une session, un prix, un rangement. **Aucune entité `event` pour la validation d'un repas** non plus : une validation est un geste humain qui vient d'avoir lieu sur l'écran, pas un fait que rien n'observe.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_the_three_sensors_exist_with_french_names(hass, setup_entry): ...
@@ -1903,14 +1903,14 @@ async def test_a_leftover_batch_fires_the_expiration_event(hass, setup_entry):
     reste comme n'importe quel autre lot."""
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q    # FAIL puis PASS
 ./scripts/test.sh -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/coordinator.py custom_components/home_stock/sensor.py custom_components/home_stock/translations tests/test_meal_sensors.py tests/test_entities.py
 git commit -m "feat: next meal, recipe and missing-ingredient sensors"
@@ -1948,7 +1948,7 @@ git commit -m "feat: next meal, recipe and missing-ingredient sensors"
 
 **Toute commande qui écrit accepte une `idempotency_key`** — la file hors-ligne la pose sur **tout** ce qui passe par elle, sans notion de « cette commande n'en prend pas ». C'est ce qu'a coûté l'incident du lot 1 : trois commandes à schéma strict, refusées au premier rejeu hors ligne.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Deux fichiers, motif de `tests/test_websocket_consume.py` (`setup_entry`, `hass_ws_client`, `send_json_auto_id`).
 
@@ -1997,7 +1997,7 @@ Et dans `tests/test_offline_queue_contract.py`, **les trois gestes** :
 
 ⚠️ Le scanner ne voit que les **littéraux** passés à `.ajouter(` / `.ecrire(`. Une commande construite par concaténation serait invisible et le contrat serait vert à tort.
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_websocket_recipes.py tests/test_websocket_meals.py -q  # FAIL puis PASS
@@ -2006,7 +2006,7 @@ Et dans `tests/test_offline_queue_contract.py`, **les trois gestes** :
 
 Note : le contrat ne passera **complètement** qu'après la tâche 21 (le front doit avoir écrit ses littéraux). Jusque-là, écrire les entrées de `EXPECTED_QUEUED_COMMAND_TYPES` **en même temps** que les littéraux front, tâche par tâche, plutôt que toutes ici — sinon le premier test du contrat (`… finds exactly the commands …`) tombe et reste rouge pendant quatre tâches.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/websocket_recipes.py custom_components/home_stock/websocket_api.py tests/test_websocket_recipes.py tests/test_websocket_meals.py
 git commit -m "feat: fourteen websocket commands for recipes, meals and validation"
@@ -2053,7 +2053,7 @@ git commit -m "feat: fourteen websocket commands for recipes, meals and validati
 
 Un message non reconnu retombe sur la phrase générique plutôt que d'exposer un `repr` Python à quelqu'un qui a les mains dans la farine.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # tests/test_services_meals.py
@@ -2100,14 +2100,14 @@ def test_no_new_pattern_shadows_an_older_one():
     messages déjà couverts et vérifie que leur code n'a pas changé."""
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_services_meals.py tests/test_messages.py -q   # FAIL puis PASS
 ./scripts/test.sh -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/services.py custom_components/home_stock/services.yaml custom_components/home_stock/messages.py tests/test_services_meals.py tests/test_messages.py
 git commit -m "feat: five meal services, no weaker than the websocket surface"
@@ -2147,7 +2147,7 @@ export function formaterDuree(secondes: number): string;   // « 12:30 », « 1:
 
 **Décision de plan — le minuteur est un module pur, décompté dans le panneau.** Aucune entité `timer` de Home Assistant n'est créée : une recette de quatre étapes en produirait quatre, et elles lui survivraient. Le module ne touche ni `setInterval` ni `Date.now()` — il reçoit le temps, ce qui rend le décompte testable sans horloge factice globale.
 
-- [ ] **Step 1: Écrire les tests purs**
+- [x] **Step 1: Écrire les tests purs**
 
 ```ts
 // nombres.test.ts
@@ -2176,7 +2176,7 @@ it.each([[90, '1:30'], [3661, '1:01:01'], [0, '0:00']])(
 it('ne dépend d’aucune horloge globale', ...);
 ```
 
-- [ ] **Step 2: Écrire les tests de l'écran Recettes**
+- [x] **Step 2: Écrire les tests de l'écran Recettes**
 
 Motif du dépôt : `monter()` local, `element.connexion = { appeler: vi.fn(...) }`, `await element.updateComplete` **deux fois**, sélecteurs en français.
 
@@ -2197,25 +2197,25 @@ it('importe une fiche et signale si l’adaptation a eu lieu', ...);
 it('affiche « aucune recette » plutôt qu’une liste vide muette', ...);
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec**
+- [x] **Step 3: Lancer, vérifier l'échec**
 
 Run (depuis `frontend/`) : `npm test -- tests/nombres.test.ts tests/minuteur.test.ts tests/recettes.test.ts`
 Expected: FAIL
 
-- [ ] **Step 4: Écrire les trois modules**
+- [x] **Step 4: Écrire les trois modules**
 
 Gabarit : `journal.ts` pour la structure d'écran (types exportés décrivant la réponse serveur, constantes en tête, `connectedCallback` qui charge, méthodes `rendreX()` privées, `static styles` à la fin, `min-height: 48px` sur tout ce qui est cliquable, `@media (max-width: 700px)`).
 
 `recettes.ts` écrit par la file : le littéral `'home_stock/recipe/update'` doit apparaître **dans** un `.ajouter(` ou `.ecrire(`, sinon le contrat Python est aveugle. Ajouter la même chaîne à `EXPECTED_QUEUED_COMMAND_TYPES` **dans cette tâche**.
 
-- [ ] **Step 5: Vert**
+- [x] **Step 5: Vert**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS, et le compte total au-dessus de 247.
 
 Run: `./scripts/test.sh tests/test_offline_queue_contract.py -q` → PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add frontend/src/nombres.ts frontend/src/minuteur.ts frontend/src/ecrans/recettes.ts frontend/tests tests/test_offline_queue_contract.py
 git commit -m "feat: French fractions, a pure timer, and the recipe list screen"
@@ -2240,7 +2240,7 @@ git commit -m "feat: French fractions, a pure timer, and the recipe list screen"
 4. **`navigator.wakeLock`, quand l'API existe**, est demandé à l'ouverture et relâché à la sortie. Son absence n'est jamais une erreur : `jsdom` ne l'a pas, la WebView Fire non plus.
 5. **Aucun appel réseau.** La recette vient de `recipe/get`, une fois. Hors ligne, une recette déjà chargée reste lisible — le Wi-Fi de la cuisine n'est pas meilleur que celui d'un rayon de supermarché.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 const RECETTE = { recipe: {...}, steps: [ /* 3 étapes, dont une avec 2 puces et un minuteur */ ],
@@ -2274,11 +2274,11 @@ it('propose « J’ai cuisiné » seulement quand un mealId est fourni', ...);
 it('émet « valider-repas » avec le meal_id depuis la dernière étape', ...);
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 Run (depuis `frontend/`) : `npm test -- tests/recette.test.ts` → FAIL puis PASS, puis `npm test` complet.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add frontend/src/ecrans/recette.ts frontend/tests/recette.test.ts
 git commit -m "feat: the kitchen view — one page per step, buttons only, no gestures"
@@ -2300,7 +2300,7 @@ git commit -m "feat: the kitchen view — one page per step, buttons only, no ge
 
 **L'écran dit qu'il n'y a pas de retour en arrière.** En toutes lettres, avant l'appui de confirmation, plutôt que de laisser croire à une annulation possible.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('affiche une ligne par ingrédient avec son statut', ...);
@@ -2334,7 +2334,7 @@ it('affiche « en attente » quand la file garde l’action hors ligne', ...);
 it('n’envoie rien deux fois si on double-clique la confirmation', ...);
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 Ajouter `'home_stock/meal/validate'` à `EXPECTED_QUEUED_COMMAND_TYPES` **dans cette tâche**, en même temps que le littéral côté front.
 
@@ -2344,7 +2344,7 @@ cd frontend && npm test
 ./scripts/test.sh tests/test_offline_queue_contract.py -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add frontend/src/ecrans/validation.ts frontend/tests/validation.test.ts tests/test_offline_queue_contract.py
 git commit -m "feat: the validation screen — two taps, and it says there is no undo"
@@ -2369,7 +2369,7 @@ git commit -m "feat: the validation screen — two taps, and it says there is no
 
 **Le planning :** sept colonnes × quatre créneaux en 1280 × 800, **une journée à la fois** en 412 × 915 avec précédent / suivant. **Pas de grille de sept colonnes réduite** : elle produirait des cibles sous 48 px et `verifier-rendu.mjs` la refuserait, à juste titre.
 
-- [ ] **Step 1: Écrire les tests du planning**
+- [x] **Step 1: Écrire les tests du planning**
 
 ```ts
 it('affiche sept colonnes et quatre créneaux en large', ...);
@@ -2388,7 +2388,7 @@ it('n’ouvre pas la validation sur un repas déjà validé', ...);
 it('affiche un jour vide sans planter', ...);
 ```
 
-- [ ] **Step 2: Écrire les tests de navigation** dans `frontend/tests/panneau.test.ts`
+- [x] **Step 2: Écrire les tests de navigation** dans `frontend/tests/panneau.test.ts`
 
 ```ts
 it('affiche les boutons Recettes et Planning dans la barre', ...);
@@ -2405,17 +2405,17 @@ it('applique le garde-fou du rangement en attente aux quatre nouvelles cibles',
 it('n’ouvre pas la vue cuisine sans recetteOuverte', ...);
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec**
+- [x] **Step 3: Lancer, vérifier l'échec**
 
 Run (depuis `frontend/`) : `npm test -- tests/planning.test.ts tests/panneau.test.ts`
 
-- [ ] **Step 4: Écrire l'écran et la navigation**
+- [x] **Step 4: Écrire l'écran et la navigation**
 
 Six endroits, tous obligatoires : le type `Ecran`, les quatre `import './ecrans/…'`, les quatre branches de `rendreEcran()`, les deux boutons de `rendreNavigation()`, la liste `enfants` de `reglerAttente()` dans `verifier-rendu.mjs` (tâche 22), et les scénarios (tâche 22).
 
 Ajouter `'home_stock/meal/plan'`, `'home_stock/meal/move'`, `'home_stock/meal/cancel'` et `'home_stock/recipe/ingredient/match'` à `EXPECTED_QUEUED_COMMAND_TYPES`, en même temps que leurs littéraux.
 
-- [ ] **Step 5: Vert**
+- [x] **Step 5: Vert**
 
 ```bash
 cd frontend && npm test
@@ -2423,7 +2423,7 @@ cd frontend && npm test
 ```
 Expected: PASS des deux. Le contrat de la file d'attente doit maintenant être **complet** : `tested == discovered == EXPECTED_QUEUED_COMMAND_TYPES`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add frontend/src/ecrans/planning.ts frontend/src/panneau.ts frontend/tests tests/test_offline_queue_contract.py
 git commit -m "feat: the planning screen, and the navigation that makes lot 3 reachable"
@@ -2440,7 +2440,7 @@ git commit -m "feat: the planning screen, and the navigation that makes lot 3 re
 
 **C'est la seule tâche autorisée à lancer `npm run build`.** Le répertoire est bind-monté dans Home Assistant : le bundle construit est servi tel quel. Une seule construction, à la fin, quand tout le reste est vert.
 
-- [ ] **Step 1: Compléter le vérificateur**
+- [x] **Step 1: Compléter le vérificateur**
 
 Deux gestes préalables, sans lesquels les scénarios mentiraient :
 - ajouter les quatre nouveaux tags à la liste en dur de `reglerAttente()` (`home-stock-recettes`, `home-stock-recette`, `home-stock-validation`, `home-stock-planning`) — sans quoi le vérificateur mesure une page pas encore peinte ;
@@ -2490,14 +2490,14 @@ Définir les fixtures avec des données **réalistes**, pas symboliques : `RECET
 
 Ajouter un scénario à `SCENARIOS_MINIFIES` : la vue cuisine sur le bundle minifié — c'est l'écran qui dépend le plus de noms de classes CSS, et `terser` est passé par là.
 
-- [ ] **Step 2: Lancer le vérificateur**
+- [x] **Step 2: Lancer le vérificateur**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: aucun défaut sur les **deux** formats — aucun débordement, aucune cible sous 48 px, aucun contraste sous 4,5:1, aucun texte tronqué, et l'écran attendu réellement atteint.
 
 Corriger les styles jusqu'à ce que ce soit vrai. **Ne jamais désactiver un contrôle.** Le point de rupture attendu est le planning : si les sept colonnes ne tiennent pas en 1280, c'est la grille qui change, pas le seuil.
 
-- [ ] **Step 3: Mettre à jour la documentation d'exploitation**
+- [x] **Step 3: Mettre à jour la documentation d'exploitation**
 
 Dans `docs/exploitation.md`, une section `## Lot 3 — recettes, planning et validation d'un repas` **à la fin du fichier**, en français et sans jargon :
 
@@ -2512,7 +2512,7 @@ Dans `docs/exploitation.md`, une section `## Lot 3 — recettes, planning et val
 - **Les images de recettes importées restent chez la source** : une recette perd sa photo si TheMealDB disparaît. Dette assumée, à reprendre au lot 7 avec les images Grocy.
 - **Ce que le lot 3 ne fait pas** : pas de liste de courses depuis le planning, pas de correction d'un repas validé, pas encore les 87 recettes de Grocy.
 
-- [ ] **Step 4: Construire le bundle**
+- [x] **Step 4: Construire le bundle**
 
 Run (depuis `frontend/`) : `npm run build`
 
@@ -2523,12 +2523,12 @@ git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/
 ```
 Un seul fichier doit avoir changé.
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: mêmes scénarios verts, cette fois sur le bundle construit et minifié.
 
-- [ ] **Step 6: Lancer les deux suites une dernière fois**
+- [x] **Step 6: Lancer les deux suites une dernière fois**
 
 ```bash
 ./scripts/test.sh -q
@@ -2536,7 +2536,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: tout vert, et les deux compteurs **au-dessus** de 623 et 247.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js
