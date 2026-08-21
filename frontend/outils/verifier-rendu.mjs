@@ -641,6 +641,18 @@ const FICHE_PURIFICATEUR = { equipment: {
   ],
 } };
 
+/** Lot 2bis : la même journée, plus les plafonds réglés et la moyenne des
+ *  sept journées closes. Deux objectifs cèdent sur la journée, un troisième
+ *  seulement sur la moyenne — la ligne grise. */
+const JOURNEE_AVEC_OBJECTIFS = {
+  ...JOURNEE_CHARGEE,
+  totals: { kcal: 2450, cost: 5.51, waste_cost: 0.35, unvalued: 1,
+            salt: 9.1, sugars: 41.2 },
+  goals: { kcal: 2000, salt: 6, sugars: 50 },
+  week_mean: { kcal: 1980, cost: 6.2, waste_cost: 0.4, unvalued: 0,
+               salt: 5.4, sugars: 58.3 },
+};
+
 const SCENARIOS = [
   {
     nom: 'Scanner (écran par défaut)',
@@ -920,6 +932,49 @@ const SCENARIOS = [
     ],
     ecranAttendu: 'home-stock-ticket',
     elementAttendu: { enfant: 'home-stock-ticket', selector: '.avertissement' },
+  },
+  {
+    // Lot 2bis. Le même écran « manger » que ci-dessus, motif « Jeté » : la
+    // consigne de tri doit être visible, et rester UNE LIGNE — la hauteur de
+    // l'écran ne doit pas dépendre de ce qu'Open Food Facts sait de
+    // l'emballage.
+    nom: 'Manger (consigne de tri sur un rebut)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/product/get': {
+          product: { id: 1, name: 'Yaourt nature brassé bio', base_unit: 'g' },
+          suggested_portion: 125, portion_source: 'manual', serving_quantity: null,
+          next_batch: { id: 9, remaining: 500, best_before: '2026-09-01' },
+          packaging: { bins: ['yellow', 'glass'],
+                       materials: ['en:pp-polypropylene', 'en:glass'] },
+        },
+      },
+    },
+    actions: [
+      { type: 'dispatch-evenement', nom: 'manger-produit', detail: { product_id: 1 } },
+      // Deuxième bouton de motif : « Jeté ».
+      { type: 'click-in-child', enfant: 'home-stock-consommation',
+        selector: '.motifs .motif:nth-child(2)' },
+    ],
+    ecranAttendu: 'home-stock-consommation',
+    elementAttendu: { enfant: 'home-stock-consommation', selector: '.tri' },
+  },
+  {
+    // Lot 2bis. Trois objectifs réglés, deux dépassés sur la journée et un
+    // troisième sur la seule moyenne des sept journées closes : les lignes
+    // doivent tenir sous les totaux, sans débordement.
+    nom: 'Journal (trois objectifs, deux dépassés)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/journal/day': JOURNEE_AVEC_OBJECTIFS,
+        'home_stock/journal/series': SERIE_QUATORZE_JOURS,
+      },
+    },
+    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    ecranAttendu: 'home-stock-journal',
+    elementAttendu: { enfant: 'home-stock-journal', selector: '.objectif-semaine' },
   },
 ];
 

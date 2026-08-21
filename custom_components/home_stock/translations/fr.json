@@ -19,7 +19,16 @@
      "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
      "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)",
      "shopping_list_horizon_days": "Nombre de jours de repas pris en compte pour la liste de courses",
-     "receipt_agent": "Entité ai_task qui lit les photos de tickets de caisse (facultatif)"
+     "receipt_agent": "Entité ai_task qui lit les photos de tickets de caisse (facultatif)",
+     "goal_kcal": "Objectif maximal d'énergie par jour (kcal)",
+     "goal_proteins": "Objectif maximal de protéines par jour (g)",
+     "goal_carbohydrates": "Objectif maximal de glucides par jour (g)",
+     "goal_sugars": "Objectif maximal de sucres par jour (g)",
+     "goal_added_sugars": "Objectif maximal de sucres ajoutés par jour (g)",
+     "goal_fat": "Objectif maximal de matières grasses par jour (g)",
+     "goal_saturated_fat": "Objectif maximal de graisses saturées par jour (g)",
+     "goal_fiber": "Objectif maximal de fibres par jour (g)",
+     "goal_salt": "Objectif maximal de sel par jour (g)"
     }
    }
   },
@@ -114,6 +123,9 @@
    },
    "shortages": {
     "name": "Ruptures"
+   },
+   "nutrition_goals": {
+    "name": "Objectifs nutritionnels"
    }
   },
   "event": {

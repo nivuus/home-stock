@@ -19,7 +19,16 @@
      "recipe_agent": "Conversation agent that translates and adapts imported recipes (optional)",
      "recipe_source_key": "TheMealDB API key (\"1\" is the public test key)",
      "shopping_list_horizon_days": "How many days of planned meals the shopping list looks ahead",
-     "receipt_agent": "ai_task entity that reads receipt photos (optional)"
+     "receipt_agent": "ai_task entity that reads receipt photos (optional)",
+     "goal_kcal": "Maximum energy per day (kcal)",
+     "goal_proteins": "Maximum protein per day (g)",
+     "goal_carbohydrates": "Maximum carbohydrates per day (g)",
+     "goal_sugars": "Maximum sugars per day (g)",
+     "goal_added_sugars": "Maximum added sugars per day (g)",
+     "goal_fat": "Maximum fat per day (g)",
+     "goal_saturated_fat": "Maximum saturated fat per day (g)",
+     "goal_fiber": "Maximum fibre per day (g)",
+     "goal_salt": "Maximum salt per day (g)"
     }
    }
   },
@@ -114,6 +123,9 @@
    },
    "shortages": {
     "name": "Shortages"
+   },
+   "nutrition_goals": {
+    "name": "Nutrition goals"
    }
   },
   "event": {

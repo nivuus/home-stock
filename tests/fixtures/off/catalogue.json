@@ -452,7 +452,23 @@
    "product_quantity": 1000,
    "product_quantity_unit": "g",
    "quantity": "1 kg",
-   "traces_tags": []
+   "traces_tags": [],
+   "packagings": [
+    {
+     "material": "en:pp-polypropylene",
+     "shape": "en:pot",
+     "number_of_units": 4
+    },
+    {
+     "material": "en:cardboard",
+     "shape": "en:sleeve"
+    }
+   ],
+   "packaging_tags": [
+    "en:pot",
+    "en:plastic",
+    "en:cardboard"
+   ]
   }
  },
  "3366321052416": {
@@ -1563,7 +1579,12 @@
    "nutrition_data_prepared_per": "100g",
    "product_name": "Paprika moulu",
    "product_name_fr": "Paprika moulu",
-   "traces_tags": []
+   "traces_tags": [],
+   "packaging_tags": [
+    "en:glass",
+    "fr:bocal",
+    "en:metal-lid"
+   ]
   }
  },
  "3560070510771": {

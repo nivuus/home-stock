@@ -56,6 +56,7 @@ export type Produit = {
   days_after_opening: number | null;
   default_shelf_life_days: number | null;
   reference_kcal: number | null;
+  manual_portion: number | null;
   active: number;
   external_ref: string | null;
 };
@@ -67,6 +68,7 @@ export type Produit = {
  *  (voir l'en-tête du fichier). */
 export const CHAMPS_CATALOGUE_MODIFIABLES = [
   'name', 'aisle_id', 'default_location_id', 'min_quantity', 'default_shelf_life_days',
+  'manual_portion',
 ] as const;
 
 /** Les seuls champs que cet écran propose de modifier. Une saisie vide vaut
@@ -78,6 +80,7 @@ export type Brouillon = {
   default_location_id: string;
   min_quantity: string;
   default_shelf_life_days: string;
+  manual_portion: string;
 };
 
 export function brouillonDepuis(produit: Produit): Brouillon {
@@ -87,6 +90,7 @@ export function brouillonDepuis(produit: Produit): Brouillon {
     default_location_id: produit.default_location_id !== null ? String(produit.default_location_id) : '',
     min_quantity: produit.min_quantity !== null ? String(produit.min_quantity) : '',
     default_shelf_life_days: produit.default_shelf_life_days !== null ? String(produit.default_shelf_life_days) : '',
+    manual_portion: produit.manual_portion !== null ? String(produit.manual_portion) : '',
   };
 }
 
@@ -98,6 +102,7 @@ function idOuNull(saisie: string): number | null {
 const LIBELLE_CHAMP_NUMERIQUE = {
   min_quantity: 'Seuil de réapprovisionnement',
   default_shelf_life_days: 'Durée de conservation',
+  manual_portion: 'Ma portion',
 } as const;
 
 function appliquerChampNumerique(
@@ -136,6 +141,11 @@ export function champsModifies(brouillon: Brouillon, produit: Produit): Resultat
   if (erreurSeuil) return { ok: false, erreur: erreurSeuil };
   const erreurConservation = appliquerChampNumerique('default_shelf_life_days', brouillon, produit, champs);
   if (erreurConservation) return { ok: false, erreur: erreurConservation };
+  // Vider le champ rend le produit à la médiane apprise : `analyserNombre`
+  // rend `null` pour une saisie vide, et `null !== 45` part donc bien en
+  // effacement — la convention du lot 1, sans rien y ajouter.
+  const erreurPortion = appliquerChampNumerique('manual_portion', brouillon, produit, champs);
+  if (erreurPortion) return { ok: false, erreur: erreurPortion };
 
   return { ok: true, champs };
 }
@@ -346,6 +356,14 @@ export class EcranCatalogue extends LitElement {
             @input=${(e: InputEvent) =>
               this.modifierBrouillon('default_shelf_life_days', (e.target as HTMLInputElement).value)} />
         </label>
+        ${produit.base_unit !== 'piece' ? html`
+          <label class="champ">
+            Ma portion (${produit.base_unit})
+            <input class="champ-portion" inputmode="decimal" placeholder="ex. 45" .value=${brouillon.manual_portion}
+              @input=${(e: InputEvent) => this.modifierBrouillon('manual_portion', (e.target as HTMLInputElement).value)} />
+            <span class="mention">vide = déduite automatiquement</span>
+          </label>
+        ` : nothing}
         <p class="champ-lecture-seule">
           Catégorie : ${produit.category_id ?? 'aucune'} (identifiant interne) — non modifiable ici : aucune
           liste de noms n'existe côté serveur pour vérifier une saisie.

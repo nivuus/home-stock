@@ -1,15 +1,19 @@
 import pytest
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.const import (
     CONF_EXPIRATION_ALERT_DAYS,
+    CONF_GOALS,
     CONF_RECIPE_AGENT,
     CONF_RECIPE_SOURCE_KEY,
     DEFAULT_EXPIRATION_ALERT_DAYS,
     DEFAULT_RECIPE_SOURCE_KEY,
     DOMAIN,
+    GOAL_NUTRIENTS,
+    MAX_GOAL,
 )
 
 
@@ -242,3 +246,83 @@ async def test_the_horizon_option_survives_a_round_trip(hass):
     field = next(key for key in again["data_schema"].schema
                  if str(key) == CONF_SHOPPING_LIST_HORIZON_DAYS)
     assert field.default() == 10
+
+
+# --- lot 2bis : les neuf plafonds journaliers -------------------------------
+
+async def test_the_options_flow_offers_the_nine_goals_all_optional(hass):
+    """Le schéma est FERMÉ sur GOAL_NUTRIENTS : un objectif sur un nutriment
+    que le journal ne fige pas ne pourrait être comparé à rien."""
+    _, result = await _open_options(hass)
+    champs = {str(key): key for key in result["data_schema"].schema}
+    attendus = {f"goal_{nutrient}" for nutrient in GOAL_NUTRIENTS}
+    assert attendus <= set(champs)
+    assert {c for c in champs if c.startswith("goal_")} == attendus
+    for nom in attendus:
+        assert isinstance(champs[nom], vol.Optional)
+
+
+async def test_an_empty_goals_form_writes_no_goal_at_all(hass):
+    """Un champ vidé OMET la clé, il n'écrit pas 0 : « pas d'objectif » doit
+    rester exprimable, et 0 voudrait dire « tout est un dépassement »."""
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: 3,
+                    CONF_RECIPE_AGENT: "conversation.bleuenn",
+                    CONF_RECIPE_SOURCE_KEY: "9973533"})
+    await hass.async_block_till_done()
+
+    assert entry.options.get(CONF_GOALS, {}) == {}
+    # Les options voisines survivent : le repli ne les emporte pas.
+    assert entry.options[CONF_EXPIRATION_ALERT_DAYS] == 3
+    assert entry.options[CONF_RECIPE_AGENT] == "conversation.bleuenn"
+    assert entry.options[CONF_RECIPE_SOURCE_KEY] == "9973533"
+
+
+async def test_a_goal_is_folded_into_a_single_dict(hass):
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": 6})
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_GOALS] == {"salt": 6.0}
+    # Le reste du composant ne voit jamais les neuf clés plates.
+    assert "goal_salt" not in entry.options
+
+
+async def test_a_goal_is_suggested_not_imposed_and_can_be_cleared(hass):
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": 6})
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    champ = next(key for key in result["data_schema"].schema
+                 if str(key) == "goal_salt")
+    assert champ.default is vol.UNDEFINED
+    assert champ.description == {"suggested_value": 6.0}
+
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_EXPIRATION_ALERT_DAYS: 3})
+    await hass.async_block_till_done()
+    assert entry.options[CONF_GOALS] == {}
+
+
+async def test_a_goal_out_of_bounds_fails_the_form_and_keeps_the_options(hass):
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": 6})
+    await hass.async_block_till_done()
+    avant = dict(entry.options)
+
+    for mauvais in (0, -1, MAX_GOAL + 1, "beaucoup"):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        with pytest.raises(vol.Invalid):
+            await hass.config_entries.options.async_configure(
+                result["flow_id"],
+                user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": mauvais})
+        assert dict(entry.options) == avant

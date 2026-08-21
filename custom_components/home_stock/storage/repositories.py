@@ -25,7 +25,7 @@ from ..domain.route import is_reliable
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
     "days_after_opening", "default_shelf_life_days", "reference_kcal", "active",
-    "external_ref",
+    "external_ref", "manual_portion",
 )
 ARTICLE_FIELDS = (
     "brand", "label", "net_quantity", "image", "kcal_per_base_unit", "proteins",
@@ -170,6 +170,32 @@ def insert_article(conn, *, product_id: int, **fields: Any) -> int:
 
 def get_article(conn, article_id: int) -> dict[str, Any] | None:
     return _row(conn.execute("SELECT * FROM article WHERE id = ?", (article_id,)).fetchone())
+
+
+def article_off_raw(conn, article_id: int) -> str | None:
+    """The raw Open Food Facts record stored on one article, if any.
+
+    Targeted on purpose: the packaging advice reads one article, once, when
+    the "manger" screen opens. Loading the whole row for one text column
+    would drag every nutrient along with it.
+    """
+    row = conn.execute("SELECT off_raw FROM article WHERE id = ?",
+                       (article_id,)).fetchone()
+    return row["off_raw"] if row is not None else None
+
+
+def max_net_quantity(conn, product_id: int) -> float | None:
+    """The largest pack known for this product, or nothing.
+
+    The largest, never the first found nor the FIFO batch: the same rice
+    exists in 500 g and 1 kg packs, and 800 g is then an indigestible
+    portion, not a typo — only the biggest pack can rule a portion out.
+    """
+    row = conn.execute(
+        "SELECT MAX(net_quantity) AS largest FROM article WHERE product_id = ?",
+        (product_id,)).fetchone()
+    largest = row["largest"] if row is not None else None
+    return None if largest is None else float(largest)
 
 
 def resolve_kcal_rate(conn, article: Mapping[str, Any],

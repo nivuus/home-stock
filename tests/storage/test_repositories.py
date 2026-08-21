@@ -448,3 +448,43 @@ def test_a_batch_zero_is_not_a_batch_silence(conn):
     zéro gramme de sel ; il ne titre pas « demande à l'article »."""
     _batch(conn, nutrition={"salt": 0.0}, article_macros={"salt": 0.001})
     assert repo.list_batches_for_product(conn, 1)[0]["salt"] == 0.0
+
+
+def test_manual_portion_is_writable_through_update_product(conn):
+    """`NULL` est l'effacement : le produit repasse à la médiane apprise."""
+    product_id = repo.insert_product(conn, name="Riz", base_unit="g")
+    assert repo.get_product(conn, product_id)["manual_portion"] is None
+
+    repo.update_product_fields(conn, product_id, {"manual_portion": 45.0})
+    assert repo.get_product(conn, product_id)["manual_portion"] == 45.0
+
+    repo.update_product_fields(conn, product_id, {"manual_portion": None})
+    assert repo.get_product(conn, product_id)["manual_portion"] is None
+
+
+def test_article_off_raw_returns_the_stored_record_or_none(conn):
+    product_id = repo.insert_product(conn, name="Yaourt", base_unit="g")
+    with_raw = repo.insert_article(conn, product_id=product_id,
+                                   off_raw='{"product_name": "Yaourt"}')
+    without = repo.insert_article(conn, product_id=product_id)
+
+    assert repo.article_off_raw(conn, with_raw) == '{"product_name": "Yaourt"}'
+    assert repo.article_off_raw(conn, without) is None
+    assert repo.article_off_raw(conn, 999) is None
+
+
+def test_max_net_quantity_is_the_largest_pack_known_for_the_product(conn):
+    """Un même riz existe en 500 g et en 1 kg : 800 g reste une portion
+    (indigeste), pas une faute de saisie. C'est le PLUS GRAND paquet connu
+    qui borne, jamais le premier trouvé ni le lot FIFO."""
+    product_id = repo.insert_product(conn, name="Riz", base_unit="g")
+    repo.insert_article(conn, product_id=product_id, net_quantity=1000)
+    repo.insert_article(conn, product_id=product_id, net_quantity=500)
+    assert repo.max_net_quantity(conn, product_id) == 1000.0
+
+    unknown = repo.insert_product(conn, name="Sel", base_unit="g")
+    repo.insert_article(conn, product_id=unknown)
+    assert repo.max_net_quantity(conn, unknown) is None
+
+    empty = repo.insert_product(conn, name="Poivre", base_unit="g")
+    assert repo.max_net_quantity(conn, empty) is None

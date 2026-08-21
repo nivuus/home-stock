@@ -379,9 +379,10 @@ def test_migration_versions_are_contiguous_from_one():
     """Un dépassement de version saute une migration DÉFINITIVEMENT et sans
     bruit : `apply_migrations` ne redescend jamais.
 
-    Les lots 3 et 5 ont été écrits en parallèle, l'un sur `m004`, l'autre sur
-    `m005` : après leur fusion la suite est [1, 2, 3, 4, 5], donc contiguë, et
-    ce test reprend sa forme stricte — la seule qui interdise un trou."""
+    Le lot 4 (`m006_shopping`) et le lot 2bis (`m007_portion`) ont été écrits
+    en parallèle, l'un sur `m006`, l'autre sur `m007` : après leur fusion la
+    suite est [1, 2, 3, 4, 5, 6, 7], donc contiguë, et ce test reprend sa
+    forme stricte — la seule qui interdise un trou."""
     versions = [module.VERSION for module in migrations.MIGRATIONS]
     assert versions == list(range(1, len(versions) + 1))
     assert migrations.CURRENT_VERSION == versions[-1]
@@ -686,7 +687,9 @@ def test_m005_adds_no_column_to_the_catalogue(tmp_path):
     (tmp_path / "avant").mkdir()
     (tmp_path / "apres").mkdir()
     before = _migrated_to(tmp_path / "avant", version=4)
-    after = _migrated(tmp_path / "apres")
+    # La borne haute est 5, pas la tête : `m007` ajoute délibérément une
+    # colonne à `product` (la portion manuelle), ce qui ne dit rien de `m005`.
+    after = _migrated_to(tmp_path / "apres", version=5)
     for table in ("product", "article", "batch"):
         assert ({r["name"] for r in before.execute(f"PRAGMA table_info({table})")}
                 == {r["name"] for r in after.execute(f"PRAGMA table_info({table})")})
@@ -920,5 +923,26 @@ def test_m006_applies_to_a_copy_of_the_real_lot5_database(tmp_path):
     copy.write_bytes(source.read_bytes())
     conn = sqlite3.connect(copy)
     conn.row_factory = sqlite3.Row
-    assert migrations.apply_migrations(conn) == 6
-    assert migrations.apply_migrations(conn) == 6      # rejouée : sans effet
+    assert migrations.apply_migrations(conn) == CURRENT_VERSION
+    assert migrations.apply_migrations(conn) == CURRENT_VERSION   # rejouée : sans effet
+
+
+def test_m007_adds_the_manual_portion_column(tmp_path):
+    conn = _migrated(tmp_path)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(product)")}
+    assert "manual_portion" in columns
+
+
+def test_m007_leaves_every_existing_product_undecided(tmp_path):
+    """NULL n'est pas 0.0 : c'est « déduis-la ». Le jour de la migration, c'est
+    100 % du catalogue — et la médiane apprise du lot 2 continue de décider."""
+    conn = _migrated_to(tmp_path, version=CURRENT_VERSION - 1)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Riz', 'g')")
+    conn.commit()
+    apply_migrations(conn)
+    assert conn.execute("SELECT manual_portion FROM product").fetchone()[0] is None
+
+
+def test_m007_is_replayable(tmp_path):
+    conn = _migrated(tmp_path)
+    assert apply_migrations(conn) == CURRENT_VERSION

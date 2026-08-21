@@ -13,6 +13,11 @@ import type { UniteBase } from './ecrans/fiche';
 
 export type Raccourci = { libelle: string; quantite: number };
 
+/** D'où vient la portion proposée, telle que `home_stock/product/get` la
+ *  nomme. Ce module ne fait qu'une chose de cette source : choisir entre
+ *  « Ma portion » et « 1 portion » — on doit voir d'où vient le chiffre. */
+export type SourcePortion = 'manual' | 'learned' | 'serving' | null;
+
 function afficher(quantite: number, unite: UniteBase): string {
   if (unite === 'piece') return `${formaterNombre(quantite)} pièce${quantite >= 2 ? 's' : ''}`;
   if (unite === 'g') {
@@ -22,14 +27,16 @@ function afficher(quantite: number, unite: UniteBase): string {
 }
 
 export function raccourcisQuantite(restant: number, unite: UniteBase,
-                                   portion: number | null): Raccourci[] {
+                                   portion: number | null,
+                                   source: SourcePortion = null): Raccourci[] {
   if (restant <= 0) return [];
 
   const proposes: Raccourci[] = [];
   if (unite === 'piece') {
     proposes.push({ libelle: afficher(1, unite), quantite: 1 });
   } else if (portion !== null && portion > 0 && portion <= restant) {
-    proposes.push({ libelle: `1 portion (${afficher(portion, unite)})`, quantite: portion });
+    const titre = source === 'manual' ? 'Ma portion' : '1 portion';
+    proposes.push({ libelle: `${titre} (${afficher(portion, unite)})`, quantite: portion });
   }
   if (unite !== 'piece') {
     proposes.push({ libelle: `La moitié (${afficher(restant / 2, unite)})`, quantite: restant / 2 });

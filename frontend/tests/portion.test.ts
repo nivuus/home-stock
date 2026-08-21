@@ -43,3 +43,24 @@ describe('raccourcisQuantite', () => {
     expect(raccourcisQuantite(0, 'g', 125)).toEqual([]);
   });
 });
+
+describe('raccourcisQuantite — d’où vient la portion', () => {
+  it('dit « Ma portion » quand la valeur a été saisie', () => {
+    const [premier] = raccourcisQuantite(500, 'g', 45, 'manual');
+    expect(premier.libelle).toBe('Ma portion (45 g)');
+  });
+
+  it('dit « 1 portion » pour une valeur déduite, ou sans source', () => {
+    for (const source of ['learned', 'serving', null] as const) {
+      const [premier] = raccourcisQuantite(500, 'g', 45, source);
+      expect(premier.libelle).toBe('1 portion (45 g)');
+    }
+    // Argument omis : les appels existants restent valides.
+    expect(raccourcisQuantite(500, 'g', 45)[0].libelle).toBe('1 portion (45 g)');
+  });
+
+  it('ne change pas le libellé à la pièce, où une portion vaut une pièce', () => {
+    const [premier] = raccourcisQuantite(4, 'piece', 45, 'manual');
+    expect(premier.libelle).toBe('1 pièce');
+  });
+});

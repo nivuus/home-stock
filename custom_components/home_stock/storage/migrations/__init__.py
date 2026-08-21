@@ -10,6 +10,7 @@ from . import (
     m004_recipes,
     m005_equipment,
     m006_shopping,
+    m007_portion,
 )
 
 MIGRATIONS = (
@@ -19,6 +20,7 @@ MIGRATIONS = (
     m004_recipes,
     m005_equipment,
     m006_shopping,
+    m007_portion,
 )
 CURRENT_VERSION = MIGRATIONS[-1].VERSION
 
