@@ -162,3 +162,105 @@ def test_nested_page_divs_do_not_produce_a_page():
         '<h3 style="color:#333;">Étape 1 — X</h3><ol><li>a</li></ol>'
         '</div></div>')
     assert len(pages) == 1
+
+
+# --- minuteurs --------------------------------------------------------------
+
+def test_a_label_with_spaces_survives():
+    """#Repos poulet:600, pas #Repos. Un motif #(\\S+): coupe au premier
+    espace et perd la moitié du libellé, sans rien signaler."""
+    assert gh.minuteurs("Laisser reposer. #Repos poulet:600") == [("Repos poulet", 600)]
+    assert gh.minuteurs("#Cabillaud face 1:180") == [("Cabillaud face 1", 180)]
+    assert gh.minuteurs("#Airfryer légumes:1050") == [("Airfryer légumes", 1050)]
+
+
+@pytest.mark.parametrize("fragment", [
+    'style="color:#888;font-size:12px"',
+    'style="color:#333;"',
+    '<p style="color:#555;font-size:14px;">Une accroche.</p>',
+    "#fff",
+    "background:#1a1a1a;padding:12px",
+])
+def test_a_css_colour_is_never_a_timer(fragment):
+    """327 des 443 # de la base sont des couleurs. C'est l'erreur qui a été
+    commise pour de vrai sur la première expression essayée."""
+    assert gh.minuteurs(fragment) == []
+
+
+def test_the_hundred_and_sixteen_timers(grocy_reel):
+    """116, pas 115. Un minuteur perdu, c'est une cuisson non minutée sur une
+    tablette, et personne ne s'en aperçoit avant d'avoir brûlé le poisson."""
+    total = 0
+    for ligne in grocy_reel["recipes"]:
+        for page in gh.decouper(ligne["description"]):
+            for puce in page.bullets:
+                total += len(gh.minuteurs(puce))
+    assert total == 116
+
+
+def test_every_timer_lives_in_a_normal_recipe(grocy_reel):
+    for ligne in _type_un(grocy_reel):
+        for page in gh.decouper(ligne["description"]):
+            for puce in page.bullets:
+                assert gh.minuteurs(puce) == [], ligne["name"]
+
+
+def test_durations_stay_inside_the_measured_range(grocy_reel):
+    durees = [s for l in grocy_reel["recipes"]
+              for p in gh.decouper(l["description"]) for b in p.bullets
+              for _, s in gh.minuteurs(b)]
+    assert min(durees) == 25
+    assert max(durees) == 3600
+
+
+def test_a_bullet_with_two_timers_becomes_two_instructions():
+    puce = "Poêle à feu vif, saisir 4 min par face. #Poulet face 1:240 #Poulet face 2:240"
+    resultat = gh.instructions(puce)
+    assert len(resultat) == 2
+    assert resultat[0].timer_label == "Poulet face 1" and resultat[0].timer_seconds == 240
+    assert "saisir 4 min par face" in resultat[0].text
+    # Le texte de la seconde est le libellé du second minuteur : une chaîne
+    # qui existe DÉJÀ dans la source, jamais une phrase inventée.
+    assert resultat[1].text == "Poulet face 2"
+    assert resultat[1].timer_seconds == 240
+
+
+def test_the_eight_double_bullets_and_no_more(grocy_reel):
+    doubles = [b for l in grocy_reel["recipes"]
+               for p in gh.decouper(l["description"]) for b in p.bullets
+               if len(gh.minuteurs(b)) == 2]
+    assert len(doubles) == 8
+
+
+def test_no_bullet_carries_three_timers(grocy_reel):
+    """Le dédoublement ne traite que la paire. Trois minuteurs sur une puce
+    demanderaient une décision qui n'a pas été prise — mieux vaut le savoir
+    par un test rouge que par une instruction avalée."""
+    for ligne in grocy_reel["recipes"]:
+        for page in gh.decouper(ligne["description"]):
+            for puce in page.bullets:
+                assert len(gh.minuteurs(puce)) <= 2
+
+
+def test_the_marker_never_stays_in_the_text():
+    resultat = gh.instructions("Laisser reposer. #Repos poulet:600")
+    assert "#" not in resultat[0].text
+    assert resultat[0].text == "Laisser reposer."
+
+
+def test_five_hundred_and_sixty_one_instructions_in_all(grocy_reel):
+    """553 puces + les 8 dédoublements. C'est le chiffre que C8 contrôlera."""
+    total = sum(len(gh.instructions(b)) for l in grocy_reel["recipes"]
+                for p in gh.decouper(l["description"])
+                if p.kind != "ingredients" for b in p.bullets)
+    assert total == 561
+
+
+def test_the_check_of_m004_can_never_be_violated(grocy_reel):
+    """CHECK ((timer_label IS NULL) = (timer_seconds IS NULL)) : le motif
+    exigeant les deux, une puce à libellé sans durée ne peut pas naître."""
+    for ligne in grocy_reel["recipes"]:
+        for page in gh.decouper(ligne["description"]):
+            for puce in page.bullets:
+                for inst in gh.instructions(puce):
+                    assert (inst.timer_label is None) == (inst.timer_seconds is None)

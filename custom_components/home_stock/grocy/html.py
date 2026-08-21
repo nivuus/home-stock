@@ -57,6 +57,11 @@ _LEADING_PICTOGRAM = re.compile(r"^[^\w(]+\s*")
 
 _STEP_TITLE = re.compile(r"^Étape\s+\d+\s*[—–-]\s*(.*)$")
 
+# L'étiquette contient des espaces (#Repos poulet:600) et 327 des 443 `#` de
+# la base sont des couleurs CSS. Interdire #, :, ;, < et > dans l'étiquette
+# est ce qui sépare les deux — un motif plus lâche fait de
+# `style="color:#888;font-size:12px"` un minuteur de 12 secondes.
+TIMER = re.compile(r"#([^#:;<>]{1,40}?):(\d{1,5})\b")
 
 
 class Page(NamedTuple):
@@ -67,6 +72,19 @@ class Page(NamedTuple):
     images: list[str]
     bullets: list[str]
     html: str
+
+
+class Instruction(NamedTuple):
+    """One line of a step, with at most one timer.
+
+    `recipe_instruction` carries a CHECK ((timer_label IS NULL) =
+    (timer_seconds IS NULL)): a label without a duration cannot be born,
+    because the pattern demands both.
+    """
+
+    text: str
+    timer_label: str | None
+    timer_seconds: int | None
 
 
 class Meta(NamedTuple):
@@ -203,3 +221,34 @@ def meta(description: str | None) -> Meta:
         summary=texte(resume.group(1)) or None if resume else None,
     )
 
+
+def minuteurs(fragment: str) -> list[tuple[str, int]]:
+    """The `#Label:seconds` timers of a fragment, in order of appearance."""
+    if not fragment:
+        return []
+    return [(label.strip(), int(seconds))
+            for label, seconds in TIMER.findall(fragment)]
+
+
+def instructions(bullet: str) -> list[Instruction]:
+    """One bullet, one or two instructions.
+
+    Eight bullets in the base carry two timers — they are two-sided cooks
+    ("saisir 4 min par face. #Poulet face 1:240 #Poulet face 2:240"). The
+    bullet is SPLIT: the first instruction keeps the sentence and the first
+    timer, the second carries the SECOND TIMER'S LABEL as its text. Nothing is
+    invented — that string is already in the source — and no timer is lost.
+
+    Keeping only the first would drop 8 timers; merging them into 480 s would
+    be wrong, since you turn the chicken between the two.
+    """
+    trouves = minuteurs(bullet)
+    phrase = texte(TIMER.sub(" ", bullet))
+    if not trouves:
+        return [Instruction(text=phrase, timer_label=None, timer_seconds=None)]
+    resultat = [Instruction(text=phrase, timer_label=trouves[0][0],
+                            timer_seconds=trouves[0][1])]
+    for label, secondes in trouves[1:]:
+        resultat.append(Instruction(text=label, timer_label=label,
+                                    timer_seconds=secondes))
+    return resultat
