@@ -444,3 +444,136 @@ async def test_the_three_sensors_are_named_in_french(hass, setup_entry):
         # manquante fait retomber le nom sur l'`entity_id` brut.
         assert en["entity"]["sensor"][cle]["name"]
         assert hass.states.get(f"sensor.home_stock_{cle}") is not None
+
+
+# --- Lot 2bis : le capteur d'objectifs nutritionnels -------------------------
+
+@pytest.fixture
+async def _with_goals(hass):
+    """Une entrée chargée dont les options portent des plafonds."""
+    async def _load(goals):
+        entry = MockConfigEntry(domain=DOMAIN, data={},
+                                options={"nutrition_goals": goals})
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        return entry
+    return _load
+
+
+def _seed_salty_meal(manager, *, salt_per_base_unit: float, grams: float) -> None:
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Placard", kind="pantry")
+        product_id = repo.insert_product(conn, name="Chips", base_unit="g")
+        article_id = repo.insert_article(conn, product_id=product_id,
+                                         kcal_per_base_unit=5.0,
+                                         salt=salt_per_base_unit,
+                                         fiber=salt_per_base_unit)
+    manager.add_stock(article_id=article_id, quantity=1000.0, location_id=location_id)
+    manager.consume(product_id=product_id, quantity=grams)
+
+
+async def test_the_goals_sensor_is_off_when_no_goal_is_set(hass, _with_goals):
+    entry = await _with_goals({})
+    state = hass.states.get("binary_sensor.home_stock_nutrition_goals")
+    assert state.state == "off"
+    assert state.attributes["count"] == 0
+
+
+async def test_a_day_over_its_salt_cap_turns_the_sensor_on(hass, _with_goals):
+    entry = await _with_goals({"salt": 6.0})
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: _seed_salty_meal(manager, salt_per_base_unit=0.084, grams=100.0))
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.home_stock_nutrition_goals")
+    assert state.state == "on"
+    assert state.attributes["day_count"] == 1
+    assert state.attributes["week_count"] == 0
+    assert len(state.attributes["exceeded"]) == 1
+    assert state.attributes["exceeded"][0]["nutrient"] == "salt"
+    assert (state.attributes["food_day"]
+            == entry.runtime_data.coordinator.data["today"]["food_day"])
+
+
+async def test_a_goal_on_a_disabled_sensor_still_fires(hass, _with_goals):
+    """Cinq des neuf capteurs quotidiens sont créés éteints. Un objectif posé
+    sur l'un d'eux doit fonctionner sans qu'on l'allume : le calcul lit
+    `coordinator.data["today"]`, jamais une entité."""
+    entry = await _with_goals({"fiber": 6.0})
+    registry = er.async_get(hass)
+    entree = registry.async_get("sensor.home_stock_fiber_today")
+    assert entree is not None and entree.disabled_by is not None
+
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: _seed_salty_meal(manager, salt_per_base_unit=0.084, grams=100.0))
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.home_stock_fiber_today") is None
+    state = hass.states.get("binary_sensor.home_stock_nutrition_goals")
+    assert state.state == "on"
+    assert state.attributes["exceeded"][0]["nutrient"] == "fiber"
+
+
+async def test_the_goals_sensor_reads_no_entity_at_all():
+    """Garde-fou de lecture : `binary_sensor.py` ne consulte ni un capteur par
+    nutriment, ni la machine à états."""
+    from pathlib import Path as _Path
+
+    import custom_components.home_stock as _home_stock
+
+    source = (_Path(_home_stock.__file__).parent / "binary_sensor.py").read_text()
+    assert "sensor." not in source
+    assert "hass.states" not in source
+
+
+async def test_the_goals_blueprint_is_a_valid_automation_nobody_installs(hass):
+    """Le blueprint est livré, jamais installé par le composant. Il est donc
+    validé ici comme Home Assistant le validerait à l'import — schéma de
+    condition et d'actions compris, un `!input` substitué par son défaut —
+    et sa phrase est réellement rendue, pour qu'un attribut mal nommé ne
+    passe pas pour une annonce muette."""
+    from pathlib import Path
+
+    from homeassistant.helpers import config_validation as cv
+    from homeassistant.helpers.template import Template
+    from homeassistant.util import yaml as yaml_util
+
+    path = Path(__file__).resolve().parent.parent / "blueprints" / "automation" \
+        / "home_stock" / "objectifs_bleuenn.yaml"
+    document = yaml_util.load_yaml_dict(path)
+    assert document["blueprint"]["domain"] == "automation"
+    assert set(document["blueprint"]["input"]) == {"heure", "agent", "capteur"}
+    # Horaire, jamais un déclencheur d'état : un passage à `on` s'annoncerait
+    # au rafraîchissement du coordinateur, donc à table.
+    assert document["triggers"][0]["trigger"] == "time"
+    assert document["blueprint"]["input"]["heure"]["default"] == "21:30:00"
+
+    defaults = {name: spec["default"]
+                for name, spec in document["blueprint"]["input"].items()}
+    substituted = yaml_util.substitute(document, defaults)
+    assert cv.CONDITION_SCHEMA(substituted["conditions"][0])["condition"] == "state"
+    action = cv.SCRIPT_SCHEMA(substituted["actions"])[0]
+    assert action["action"] == "conversation.process"
+
+    # Aucune référence à un capteur par nutriment : `state()` y rendrait
+    # `unavailable` sur une entité éteinte, et une automation qui ne se
+    # déclenche jamais est le pire des états.
+    texte = substituted["actions"][0]["data"]["text"]
+    assert "home_stock_salt_today" not in texte
+    assert substituted["variables"]["nom_capteur"] == defaults["capteur"]
+
+    hass.states.async_set(
+        defaults["capteur"], "on",
+        {"exceeded": [{"nutrient": "salt", "scope": "day", "value": 8.4,
+                       "goal": 6.0, "ratio": 1.4},
+                      {"nutrient": "kcal", "scope": "week", "value": 2400.0,
+                       "goal": 2000.0, "ratio": 1.2}]})
+    rendu = Template(texte, hass).async_render(
+        variables=substituted["variables"], parse_result=False)
+    assert "le sel aujourd'hui" in " ".join(rendu.split())
+    assert "l'énergie en moyenne sur la semaine" in " ".join(rendu.split())

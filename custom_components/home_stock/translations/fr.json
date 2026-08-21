@@ -100,6 +100,9 @@
       },
       "shortages": {
         "name": "Ruptures"
+      },
+      "nutrition_goals": {
+        "name": "Objectifs nutritionnels"
       }
     },
     "event": {

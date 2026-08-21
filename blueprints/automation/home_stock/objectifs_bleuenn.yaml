@@ -1,0 +1,72 @@
+blueprint:
+  name: Garde-manger — annonce des objectifs dépassés
+  description: >-
+    Chaque jour à l'heure choisie, fait annoncer par l'assistant conversationnel
+    les objectifs nutritionnels dépassés — sur la journée en cours, et sur la
+    moyenne des sept journées closes.
+
+    Déclencheur horaire volontaire : un passage à `on` s'annoncerait au
+    rafraîchissement du coordinateur, donc à n'importe quel quart d'heure, y
+    compris à table. L'heure par défaut est 21 h 30 — après le dîner, dernier
+    moment où la journée est encore corrigeable.
+
+    Aucun capteur par nutriment n'est consulté : cinq des neuf capteurs
+    quotidiens sont créés éteints, et `state()` y rendrait `unavailable`. Tout
+    se lit dans l'attribut `exceeded` du capteur d'objectifs.
+
+    À importer une fois ; ce fichier n'est jamais installé par l'intégration.
+  domain: automation
+  input:
+    heure:
+      name: Heure de l'annonce
+      default: "21:30:00"
+      selector:
+        time:
+    agent:
+      name: Agent conversationnel
+      default: conversation.personas_studio_home_manager
+      selector:
+        entity:
+          domain: conversation
+    capteur:
+      name: Capteur d'objectifs nutritionnels
+      default: binary_sensor.home_stock_nutrition_goals
+      selector:
+        entity:
+          domain: binary_sensor
+
+triggers:
+  - trigger: time
+    at: !input heure
+
+conditions:
+  - condition: state
+    entity_id: !input capteur
+    state: "on"
+
+variables:
+  nom_capteur: !input capteur
+  libelles:
+    kcal: l'énergie
+    proteins: les protéines
+    carbohydrates: les glucides
+    sugars: les sucres
+    added_sugars: les sucres ajoutés
+    fat: les matières grasses
+    saturated_fat: les graisses saturées
+    fiber: les fibres
+    salt: le sel
+
+actions:
+  - action: conversation.process
+    data:
+      agent_id: !input agent
+      text: >-
+        {% set depassements = state_attr(nom_capteur, 'exceeded') or [] %}
+        Objectifs dépassés :
+        {%- for d in depassements %}
+        {{ libelles.get(d.nutrient, d.nutrient) }}
+        {{ "aujourd'hui" if d.scope == 'day' else 'en moyenne sur la semaine' }},
+        {{ d.value | round(1) }} pour un objectif de {{ d.goal | round(1) }}
+        {{- ',' if not loop.last else '.' }}
+        {%- endfor %}

@@ -16,7 +16,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .application import StockManager
-from .const import CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS, DOMAIN
+from .const import (
+    CONF_EXPIRATION_ALERT_DAYS,
+    CONF_GOALS,
+    DEFAULT_EXPIRATION_ALERT_DAYS,
+    DOMAIN,
+)
+from .domain import goals as goals_domain
 from .domain.foodday import food_day_bounds
 
 _LOGGER = logging.getLogger(__name__)
@@ -182,6 +188,19 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return data
 
         data = await self.hass.async_add_executor_job(_read)
+        # Les options vivent ici, jamais dans application.py : le gestionnaire
+        # ne connaît pas l'entrée de configuration, et n'a pas à la connaître.
+        # Le calcul est pur, il n'a rien à faire dans l'exécuteur.
+        breaches = goals_domain.exceeded(
+            data["today"], data["week_mean"],
+            self.config_entry.options.get(CONF_GOALS, {}) or {})
+        data["goals"] = {
+            "exceeded": breaches,
+            "count": len(breaches),
+            "day_count": sum(1 for b in breaches if b["scope"] == "day"),
+            "week_count": sum(1 for b in breaches if b["scope"] == "week"),
+            "food_day": data["today"]["food_day"],
+        }
         data.update(await self._async_battery_data())
         self._schedule_food_day_rollover(tz)
         return data
