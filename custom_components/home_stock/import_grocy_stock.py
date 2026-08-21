@@ -12,9 +12,11 @@ scoring matcher is never called: every batch knows its product by id. The
 fallback "by name" that created 35 duplicates in April 2026 does not exist
 here, and must not be added.
 
-The Grocy query aliases `s` for stock and `prod` for products: the repository
-forbids the literal `SELECT b.*` through a scan that does not tell tables
-apart, so no table in this lot is ever aliased `b`.
+The Grocy query aliases `s` for stock and `prod` for products. No table in
+this lot is ever aliased `b`: the repository forbids selecting a whole row
+through an alias named `b`, and it does so with a LITERAL scan that does not
+tell tables apart — the forbidden string cannot even be written down here, in
+a docstring, without the scan catching it.
 """
 from __future__ import annotations
 
@@ -291,9 +293,9 @@ def _locations_within(conn, grocy) -> Locations:
 def _stock_rows(grocy) -> list[dict[str, Any]]:
     """The 108 stock rows, joined to their product.
 
-    `s` for stock, `prod` for products, `qu` for the unit: no table in this
-    lot is ever aliased `b`, because the repository forbids the literal
-    `SELECT b.*` through a scan that does not tell tables apart.
+    `s` for stock, `prod` for products, `qu` for the unit — never `b`. The
+    repository's scan for a whole-row select through an alias `b` is literal
+    and blind to which table is meant.
     """
     return [dict(row) for row in grocy.execute(
         "SELECT s.id AS id, s.product_id AS product_id, s.amount AS amount,"
