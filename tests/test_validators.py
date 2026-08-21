@@ -142,3 +142,22 @@ def test_every_new_refusal_has_a_french_sentence():
             appel()
         phrase = french_message(leve.value)
         assert phrase != GENERIC_MESSAGE, str(leve.value)
+
+
+# --- lot 4 : d'où vient un prix (amendement A3) ----------------------------
+
+def test_price_source_accepts_the_six_declared_sources():
+    from custom_components.home_stock.const import PRICE_SOURCES
+    from custom_components.home_stock.validators import price_source
+    for source in PRICE_SOURCES:
+        assert price_source(source) == source
+
+
+def test_price_source_lets_nothing_through_unknown():
+    """`source` décide du rang 1 de la cascade : une faute de frappe y ferait
+    disparaître un prix réellement observé, sans que rien ne le signale."""
+    from custom_components.home_stock.validators import price_source
+    with pytest.raises(vol.Invalid):
+        price_source("open_price")
+    assert price_source(None) is None
+    assert price_source("") is None

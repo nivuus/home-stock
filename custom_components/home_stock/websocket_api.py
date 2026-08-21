@@ -32,7 +32,7 @@ from .shopping import ShoppingError
 from .storage import repositories as repo
 from .validators import (
     MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date,
-    non_negative_float, parts_count, preview,
+    non_negative_float, parts_count, preview, price_source,
 )
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
@@ -57,6 +57,7 @@ _finite_float = finite_float
 _non_negative_float = non_negative_float
 _bounded_int = bounded_int
 _bounded_text = bounded_text
+_price_source = price_source
 _iso_date = iso_date
 _preview = preview
 _PARTS: Final = parts_count
@@ -987,6 +988,7 @@ async def session_current(hass, connection, msg) -> None:
     vol.Required("quantity"): _finite_float,
     vol.Optional("unit_price"): _NON_NEGATIVE_FLOAT,
     vol.Optional("idempotency_key"): _bounded_text,
+    vol.Optional("price_source"): _price_source,
 })
 @websocket_api.async_response
 async def session_add_line(hass, connection, msg) -> None:
@@ -998,7 +1000,8 @@ async def session_add_line(hass, connection, msg) -> None:
         line = await hass.async_add_executor_job(partial(
             runtime.shopping.add_line, article_id=msg["article_id"],
             quantity=msg["quantity"], unit_price=msg.get("unit_price"),
-            idempotency_key=msg.get("idempotency_key")))
+            idempotency_key=msg.get("idempotency_key"),
+            price_source=msg.get("price_source")))
     except ShoppingError as err:
         _shopping_error(connection, msg, err)
         return
@@ -1029,6 +1032,7 @@ async def session_add_line(hass, connection, msg) -> None:
     # that refuses it here just to accept it on add_line/stock_add makes the
     # client re-litigate which commands are which. Uniform accept is honest.
     vol.Optional("idempotency_key"): _bounded_text,
+    vol.Optional("price_source"): _price_source,
 })
 @websocket_api.async_response
 async def session_update_line(hass, connection, msg) -> None:
@@ -1039,7 +1043,8 @@ async def session_update_line(hass, connection, msg) -> None:
     try:
         line = await hass.async_add_executor_job(partial(
             runtime.shopping.update_line, msg["line_id"],
-            quantity=msg.get("quantity"), unit_price=msg.get("unit_price")))
+            quantity=msg.get("quantity"), unit_price=msg.get("unit_price"),
+            price_source=msg.get("price_source")))
     except ShoppingError as err:
         _shopping_error(connection, msg, err)
         return

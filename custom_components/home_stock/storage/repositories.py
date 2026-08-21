@@ -15,6 +15,7 @@ from ..const import (
     CONSUME_REASONS,
     MACRO_COLUMNS,
     NUTRITION_COLUMNS,
+    OBSERVED_PRICE_SOURCES,
     REASON_CONSUMPTION,
 )
 from ..domain.matching import normalise
@@ -725,16 +726,18 @@ def set_session_state(conn, session_id: int, state: str, *,
 
 def add_line(conn, *, session_id: int, article_id: int, quantity: float,
              unit_price: float | None, scanned_at: str,
-             idempotency_key: str | None) -> int:
+             idempotency_key: str | None,
+             price_source: str | None = None) -> int:
     return _insert(conn, "shopping_line", {
         "session_id": session_id, "article_id": article_id, "quantity": quantity,
         "unit_price": unit_price, "scanned_at": scanned_at,
-        "idempotency_key": idempotency_key,
+        "idempotency_key": idempotency_key, "price_source": price_source,
     })
 
 
 def update_line(conn, line_id: int, *, quantity: float | None = None,
-                unit_price: float | None = None) -> None:
+                unit_price: float | None = None,
+                price_source: str | None = None) -> None:
     """Only the fields actually passed are written: None means "leave it", which
     is not the same as "clear it"."""
     if quantity is not None:
@@ -743,6 +746,9 @@ def update_line(conn, line_id: int, *, quantity: float | None = None,
     if unit_price is not None:
         conn.execute("UPDATE shopping_line SET unit_price = ? WHERE id = ?",
                      (unit_price, line_id))
+    if price_source is not None:
+        conn.execute("UPDATE shopping_line SET price_source = ? WHERE id = ?",
+                     (price_source, line_id))
 
 
 def remove_line(conn, line_id: int) -> None:
@@ -837,10 +843,18 @@ def session_totals(conn, session_id: int) -> dict[str, Any]:
 
 
 def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
+    """The last price OBSERVED in this shop — amendment A3.
+
+    A suggestion accepted without being touched (`open_prices`, `last_known`,
+    `store`) is not evidence of anything: counting it here would put rank 1
+    of the cascade at the mercy of its own guesses, and by the second trip
+    the guess would have overwritten the shelf label.
+    """
     row = conn.execute(
-        """
+        f"""
         SELECT price_per_base_unit FROM price
         WHERE article_id = ? AND store = ?
+          AND source IN {_reasons_sql(OBSERVED_PRICE_SOURCES)}
         ORDER BY observed_on DESC, id DESC LIMIT 1
         """,
         (article_id, store),

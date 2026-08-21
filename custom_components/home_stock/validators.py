@@ -13,7 +13,7 @@ from typing import Any, Final, Mapping
 
 import voluptuous as vol
 
-from .const import MAX_PARTS
+from .const import MAX_PARTS, PRICE_SOURCES
 
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
@@ -301,3 +301,26 @@ def media_path(value: Any) -> str | None:
         raise vol.Invalid(
             f"media path must not point under www/, got {preview(value)}")
     return cleaned
+
+
+# --- lot 4 -----------------------------------------------------------------
+# En fin de fichier, et sans toucher à `bounded_text`, `finite_float`,
+# `iso_date` ni `media_path` : les deux surfaces (websocket et services)
+# lisent les mêmes bornes, et aucune n'a le droit d'être la plus faible.
+
+def price_source(value: Any) -> str | None:
+    """L'une de `PRICE_SOURCES`, ou `None`.
+
+    Un mot inconnu est refusé plutôt que rangé tel quel : `source` décide du
+    rang 1 de la cascade (amendement A3), et une faute de frappe y ferait
+    disparaître un prix réellement observé sans que rien ne le signale.
+    """
+    if value is None:
+        return None
+    text = bounded_text(value)
+    if not text:
+        return None
+    if text not in PRICE_SOURCES:
+        raise vol.Invalid(
+            f"unknown price source '{text}'; expected one of {PRICE_SOURCES}")
+    return text

@@ -214,3 +214,35 @@ def test_known_shops_come_back_most_recent_first(conn):
                       price_per_base_unit=0.002, store="Leclerc", source="manual")
 
     assert repo.list_stores(conn) == ["Leclerc", "Carrefour"]
+
+
+# --- amendement A3 : la cascade ne se nourrit pas de ses suppositions -------
+
+def _observe(conn, *, source, price, day, store="Leclerc"):
+    return repo.insert_price(conn, article_id=1, observed_on=day,
+                             price_per_base_unit=price, source=source, store=store)
+
+
+def test_an_open_prices_observation_never_reaches_rank_one(conn):
+    """LE test de la dette : deux lignes dans le même magasin, l'une
+    `open_prices` plus récente, l'autre `manual` plus ancienne.
+    `latest_price_in_store` rend la MANUELLE."""
+    _observe(conn, source="manual", price=0.004, day="2026-08-01")
+    _observe(conn, source="open_prices", price=0.009, day="2026-08-20")
+    assert repo.latest_price_in_store(conn, 1, "Leclerc") == pytest.approx(0.004)
+
+
+@pytest.mark.parametrize("source", ["receipt", "import", "manual"])
+def test_a_receipt_and_an_import_observation_do_reach_rank_one(conn, source):
+    """`receipt` et `import` sont des observations : le ticket et la reprise
+    Grocy disent ce qui a réellement été payé."""
+    _observe(conn, source=source, price=0.007, day="2026-08-20")
+    assert repo.latest_price_in_store(conn, 1, "Leclerc") == pytest.approx(0.007)
+
+
+@pytest.mark.parametrize("source", ["open_prices", "last_known", "store"])
+def test_a_store_with_only_suggested_prices_answers_nothing(conn, source):
+    """Et la cascade retombe alors sur Open Prices puis sur le dernier prix
+    connu — comportement du lot 1, préservé."""
+    _observe(conn, source=source, price=0.009, day="2026-08-20")
+    assert repo.latest_price_in_store(conn, 1, "Leclerc") is None

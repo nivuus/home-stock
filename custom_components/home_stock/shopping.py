@@ -89,7 +89,8 @@ class ShoppingService:
     # --- lines --------------------------------------------------------------
 
     def add_line(self, *, article_id: int, quantity: float, unit_price: float | None,
-                 idempotency_key: str | None) -> dict[str, Any]:
+                 idempotency_key: str | None,
+                 price_source: str | None = None) -> dict[str, Any]:
         with self.manager.db.write() as conn:
             if idempotency_key:
                 # The panel's offline queue replays in order; a replayed scan
@@ -99,10 +100,15 @@ class ShoppingService:
                     return existing
 
             session = self._open_session(conn)
+            # Amendement A3 : d'où vient ce prix. Un appelant qui ne dit rien
+            # décrit un prix tapé — c'est ce que faisait le lot 1, et c'est
+            # le choix qui ne perd rien. Une ligne sans prix n'a pas de
+            # source : il n'y a pas de valeur dont on puisse dire l'origine.
+            source = (price_source or "manual") if unit_price is not None else None
             line_id = repo.add_line(
                 conn, session_id=session["id"], article_id=article_id,
                 quantity=quantity, unit_price=unit_price, scanned_at=_now(),
-                idempotency_key=idempotency_key,
+                idempotency_key=idempotency_key, price_source=source,
             )
             if unit_price is not None:
                 # The observation happens in the aisle, so it is recorded in the
@@ -110,7 +116,7 @@ class ShoppingService:
                 repo.insert_price(
                     conn, article_id=article_id, observed_on=_now()[:10],
                     price_per_base_unit=unit_price, store=session["store"],
-                    source="manual",
+                    source=source,
                 )
             # Always hand back the row as the database holds it, whether or
             # not a key was supplied: a caller must not have to guess the
@@ -118,13 +124,19 @@ class ShoppingService:
             return repo.get_line(conn, line_id)
 
     def update_line(self, line_id: int, *, quantity: float | None = None,
-                    unit_price: float | None = None) -> dict[str, Any]:
+                    unit_price: float | None = None,
+                    price_source: str | None = None) -> dict[str, Any]:
         with self.manager.db.write() as conn:
             line = self._line(conn, line_id)
             if line["stored_at"]:
                 raise ShoppingError("Cette ligne est déjà rangée.")
-            repo.update_line(conn, line_id, quantity=quantity, unit_price=unit_price)
-            if unit_price is not None and unit_price != line["unit_price"]:
+            changed = unit_price is not None and unit_price != line["unit_price"]
+            # Une valeur qui change ici est une saisie HUMAINE, quelle que
+            # soit la source annoncée : on vient de la corriger devant
+            # l'étiquette. Une valeur inchangée conserve la source déclarée.
+            repo.update_line(conn, line_id, quantity=quantity, unit_price=unit_price,
+                             price_source="manual" if changed else price_source)
+            if changed:
                 # A price corrected at the till has to correct the observation
                 # the scan seeded, and a price typed here for the first time
                 # has to record one. Without this, a suggestion accepted at

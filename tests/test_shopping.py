@@ -250,3 +250,68 @@ def test_close_moves_an_open_session_to_done_and_stamps_closed_at(service):
 def test_close_without_a_session_is_refused(service):
     with pytest.raises(ShoppingError):
         service.close()
+
+
+# --- amendement A3 : d'où vient le prix d'une ligne -------------------------
+
+def _prices(service):
+    return service.manager.db.read().execute(
+        "SELECT * FROM price ORDER BY id").fetchall()
+
+
+def test_a_price_accepted_without_being_touched_is_written_as_open_prices(service):
+    """Le coeur de A3 : `price_source='open_prices'` en entrée produit une
+    observation `price` de source `open_prices`, pas `manual`."""
+    service.start(store="Leclerc")
+    service.add_line(article_id=10, quantity=500, unit_price=0.004,
+                     price_source="open_prices", idempotency_key=None)
+    [observation] = _prices(service)
+    assert observation["source"] == "open_prices"
+    assert observation["store"] == "Leclerc"
+
+
+def test_a_price_typed_by_a_human_is_written_as_manual(service):
+    """Et le rang 1 de la cascade lui appartient."""
+    service.start(store="Leclerc")
+    service.add_line(article_id=10, quantity=500, unit_price=0.004,
+                     price_source="manual", idempotency_key=None)
+    [observation] = _prices(service)
+    assert observation["source"] == "manual"
+
+
+def test_an_absent_price_source_defaults_to_manual(service):
+    """Compatibilité : un appelant qui ne dit rien décrit un prix tapé —
+    c'est ce que faisait le lot 1, et c'est le choix qui ne perd rien."""
+    service.start(store="Leclerc")
+    service.add_line(article_id=10, quantity=500, unit_price=0.004,
+                     idempotency_key=None)
+    [observation] = _prices(service)
+    assert observation["source"] == "manual"
+
+
+def test_correcting_a_price_at_the_till_always_writes_manual(service):
+    """`update_line` avec une valeur DIFFÉRENTE est une saisie humaine, quelle
+    que soit la source annoncée : on vient de la corriger devant l'étiquette."""
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=0.004,
+                            price_source="open_prices", idempotency_key=None)
+    service.update_line(line["id"], unit_price=0.006, price_source="open_prices")
+    assert [row["source"] for row in _prices(service)] == ["open_prices", "manual"]
+
+
+def test_the_shopping_line_remembers_where_its_price_came_from(service):
+    """`shopping_line.price_source` est écrite, et relue par le panier."""
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=0.004,
+                            price_source="open_prices", idempotency_key=None)
+    assert line["price_source"] == "open_prices"
+    updated = service.update_line(line["id"], unit_price=0.006)
+    assert updated["price_source"] == "manual"
+
+
+def test_a_line_without_a_price_records_no_observation_and_no_source(service):
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            price_source="open_prices", idempotency_key=None)
+    assert _prices(service) == []
+    assert line["price_source"] is None

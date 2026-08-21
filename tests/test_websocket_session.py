@@ -355,3 +355,27 @@ async def test_a_trip_still_waiting_to_be_put_away_blocks_a_new_one(
     reopened = await _send(client, 7, "home_stock/session/start", store="Lidl")
     assert reopened["success"] is True
     assert reopened["result"]["store"] == "Lidl"
+
+
+async def test_the_websocket_refuses_an_unknown_price_source(hass, hass_ws_client,
+                                                             setup_entry):
+    """Parité des deux surfaces : ce que le service refuse, le websocket le
+    refuse. Les bornes du lot 4 vivent une seule fois, dans `validators`."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    refused = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                          quantity=500, unit_price=0.002,
+                          price_source="open_price")
+    assert refused["success"] is False
+
+
+async def test_an_accepted_suggestion_is_recorded_as_a_suggestion(hass, hass_ws_client,
+                                                                  setup_entry):
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    line = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                       quantity=500, unit_price=0.002,
+                       price_source="open_prices")
+    assert line["result"]["price_source"] == "open_prices"
