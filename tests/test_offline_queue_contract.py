@@ -76,6 +76,10 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # one refused button in lot 1's round 1 (see this file's module
     # docstring) if its schema didn't accept the queue's idempotency key.
     "home_stock/stock/consume",
+    # Lot 3, task 18: the recipe list marks an imported recipe as reviewed.
+    # It is a write like any other and goes through the same queue — the
+    # kitchen's network is no better than a shop aisle's.
+    "home_stock/recipe/update",
 }
 
 
@@ -173,6 +177,21 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert reordered_aisles["success"] is True, reordered_aisles.get("error")
     tested.add("home_stock/aisles/reorder")
+
+    # --- lot 3: recipes ------------------------------------------------
+    created_recipe = await _send(
+        client, _id(), "home_stock/recipe/create", name="Recette du contrat",
+        idempotency_key="contract-recipe-create",
+    )
+    assert created_recipe["success"] is True, created_recipe.get("error")
+
+    updated_recipe = await _send(
+        client, _id(), "home_stock/recipe/update",
+        recipe_id=created_recipe["result"]["recipe_id"],
+        fields={"needs_review": 0}, idempotency_key="contract-recipe-update",
+    )
+    assert updated_recipe["success"] is True, updated_recipe.get("error")
+    tested.add("home_stock/recipe/update")
 
     # --- the shopping-session lifecycle, exactly as the panel drives it -
     started = await _send(client, _id(), "home_stock/session/start", store="Leclerc",

@@ -2147,7 +2147,7 @@ export function formaterDuree(secondes: number): string;   // « 12:30 », « 1:
 
 **Décision de plan — le minuteur est un module pur, décompté dans le panneau.** Aucune entité `timer` de Home Assistant n'est créée : une recette de quatre étapes en produirait quatre, et elles lui survivraient. Le module ne touche ni `setInterval` ni `Date.now()` — il reçoit le temps, ce qui rend le décompte testable sans horloge factice globale.
 
-- [ ] **Step 1: Écrire les tests purs**
+- [x] **Step 1: Écrire les tests purs**
 
 ```ts
 // nombres.test.ts
@@ -2176,7 +2176,7 @@ it.each([[90, '1:30'], [3661, '1:01:01'], [0, '0:00']])(
 it('ne dépend d’aucune horloge globale', ...);
 ```
 
-- [ ] **Step 2: Écrire les tests de l'écran Recettes**
+- [x] **Step 2: Écrire les tests de l'écran Recettes**
 
 Motif du dépôt : `monter()` local, `element.connexion = { appeler: vi.fn(...) }`, `await element.updateComplete` **deux fois**, sélecteurs en français.
 
@@ -2197,25 +2197,25 @@ it('importe une fiche et signale si l’adaptation a eu lieu', ...);
 it('affiche « aucune recette » plutôt qu’une liste vide muette', ...);
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec**
+- [x] **Step 3: Lancer, vérifier l'échec**
 
 Run (depuis `frontend/`) : `npm test -- tests/nombres.test.ts tests/minuteur.test.ts tests/recettes.test.ts`
 Expected: FAIL
 
-- [ ] **Step 4: Écrire les trois modules**
+- [x] **Step 4: Écrire les trois modules**
 
 Gabarit : `journal.ts` pour la structure d'écran (types exportés décrivant la réponse serveur, constantes en tête, `connectedCallback` qui charge, méthodes `rendreX()` privées, `static styles` à la fin, `min-height: 48px` sur tout ce qui est cliquable, `@media (max-width: 700px)`).
 
 `recettes.ts` écrit par la file : le littéral `'home_stock/recipe/update'` doit apparaître **dans** un `.ajouter(` ou `.ecrire(`, sinon le contrat Python est aveugle. Ajouter la même chaîne à `EXPECTED_QUEUED_COMMAND_TYPES` **dans cette tâche**.
 
-- [ ] **Step 5: Vert**
+- [x] **Step 5: Vert**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS, et le compte total au-dessus de 247.
 
 Run: `./scripts/test.sh tests/test_offline_queue_contract.py -q` → PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add frontend/src/nombres.ts frontend/src/minuteur.ts frontend/src/ecrans/recettes.ts frontend/tests tests/test_offline_queue_contract.py
 git commit -m "feat: French fractions, a pure timer, and the recipe list screen"
