@@ -216,3 +216,65 @@ describe('<home-stock-liste>', () => {
     expect(element.shadowRoot!.textContent).toContain('Liste indisponible');
   });
 });
+
+// --- lot 6 : les rayons en colonnes au-delà de 1000 px ----------------------
+
+const QUATRE_RAYONS = [
+  ligne({ id: 1, aisle_id: 1, aisle_name: 'Épicerie', aisle_position: 1 }),
+  ligne({ id: 2, aisle_id: 1, aisle_name: 'Épicerie', aisle_position: 1 }),
+  ligne({ id: 3, aisle_id: 2, aisle_name: 'Frais', aisle_position: 2 }),
+  ligne({ id: 4, aisle_id: 3, aisle_name: 'Surgelés', aisle_position: 3 }),
+  ligne({ id: 5, aisle_id: null, aisle_name: null, aisle_position: 9 }),
+];
+
+function monterListe(large: boolean, lignes = QUATRE_RAYONS) {
+  const element = monter({ donnees: donnees(lignes) }) as HTMLElement & {
+    large: boolean; updateComplete: Promise<boolean>;
+  };
+  element.large = large;
+  return element;
+}
+
+describe('<home-stock-liste> : la vue dense (lot 6)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('range les rayons en colonnes au-delà de 1000 px', async () => {
+    const e = monterListe(true);
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelector('.rayons-colonnes')).not.toBeNull();
+    expect(e.shadowRoot!.querySelectorAll('.rayon')).toHaveLength(4);
+  });
+
+  it('reste empilée en étroit', async () => {
+    const e = monterListe(false);
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelector('.rayons-colonnes')).toBeNull();
+    expect(e.shadowRoot!.querySelectorAll('.rayon')).toHaveLength(4);
+  });
+
+  it("n'affiche pas une donnée de plus qu'en étroit", async () => {
+    // Élargir n'ajoute rien : c'est la MÊME liste, mieux disposée. Un prix ou
+    // une estimation de plus en large serait une seconde vérité à tenir.
+    const etroit = monterListe(false);
+    await etroit.updateComplete;
+    const texteEtroit = etroit.shadowRoot!.textContent!.replace(/\s+/g, ' ').trim();
+    document.body.innerHTML = '';
+
+    const large = monterListe(true);
+    await large.updateComplete;
+    const texteLarge = large.shadowRoot!.textContent!.replace(/\s+/g, ' ').trim();
+
+    expect(texteLarge).toBe(texteEtroit);
+  });
+
+  it('coche une ligne par la file dans les deux mises en page', async () => {
+    const file = fausseFile();
+    const element = monter({ donnees: donnees([ligne({ id: 7 })]), file }) as any;
+    element.large = true;
+    await element.updateComplete;
+
+    (element.shadowRoot!.querySelector('.cocher') as HTMLButtonElement).click();
+    expect(file.ajouter).toHaveBeenCalledWith('home_stock/list/check',
+      expect.objectContaining({ item_id: 7 }));
+  });
+});

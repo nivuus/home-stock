@@ -232,12 +232,20 @@ export class EcranListe extends LitElement {
         <p class="vide">Rien à acheter pour l’instant.</p>
       ` : nothing}
 
-      ${grouperListeParRayon(ouvertes).map((groupe) => html`
-        <section class="rayon">
-          <h3 class="rayon-nom">${groupe.rayon}</h3>
-          ${groupe.lignes.map((ligne) => this.rendreLigne(ligne, false))}
-        </section>
-      `)}
+      ${(() => {
+        const rayons = grouperListeParRayon(ouvertes).map((groupe) => html`
+          <section class="rayon">
+            <h3 class="rayon-nom">${groupe.rayon}</h3>
+            ${groupe.lignes.map((ligne) => this.rendreLigne(ligne, false))}
+          </section>
+        `);
+        // Au-delà de 1000 px les rayons cessent d'être empilés : une ligne de
+        // courses est COURTE mais large, et quatre rayons les uns sous les
+        // autres imposent de défiler pour une information qui tient sur un
+        // écran. Rien d'autre ne change : mêmes lignes, mêmes commandes, même
+        // texte — élargir n'ajoute pas une donnée.
+        return this.large ? html`<div class="rayons-colonnes">${rayons}</div>` : rayons;
+      })()}
 
       ${cochees.length > 0 ? html`
         <section class="cochees">
@@ -269,6 +277,17 @@ export class EcranListe extends LitElement {
       margin: 16px 0 4px; font-size: 0.9rem; text-transform: uppercase;
       color: var(--secondary-text-color); letter-spacing: 0.04em;
     }
+
+    /* --- la vue dense (lot 6) ---------------------------------------------
+       Des colonnes d'au moins 320 px : en dessous, le nom, la quantité et
+       l'origine d'une ligne se cassent en trois et on perd tout le gain.
+       Le remplissage automatique laisse le nombre de colonnes suivre la largeur
+       réelle, plutôt que de le figer à trois. */
+    .rayons-colonnes {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 0 24px; align-items: start;
+    }
+    .rayons-colonnes .rayon { break-inside: avoid; }
     .ligne {
       display: flex; align-items: center; gap: 8px; padding: 8px 0;
       border-bottom: 1px solid var(--divider-color, #ddd);

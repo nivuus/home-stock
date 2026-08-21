@@ -406,16 +406,13 @@ export class EcranReglages extends LitElement {
   }
 
   render() {
-    return html`
-      ${this.enAttente > 0 ? html`
-        <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
-      ` : nothing}
-
-      ${this.erreurChargement ? html`
-        <p class="erreur">${this.erreurChargement}</p>
-        <button class="reessayer" @click=${() => { void this.charger(); }}>Réessayer</button>
-      ` : nothing}
-
+    // Au-delà de 1000 px, six sections courtes cessent d'être empilées sur
+    // deux écrans de haut. Elles sont RANGÉES, pas modifiées : chaque liste
+    // garde ses propres boutons et son propre index, et c'est ce qui fait que
+    // trois listes réordonnables côte à côte ne se mélangent pas — le
+    // déplacement se calcule dans le tableau de la liste, jamais sur la
+    // position dans le document.
+    const sections = html`
       <section class="section">
         <h3 class="titre">Ordre des rayons</h3>
         <p class="explication">
@@ -478,9 +475,32 @@ export class EcranReglages extends LitElement {
         ${this.erreurResync ? html`<p class="erreur">${this.erreurResync}</p>` : nothing}
       </section>
     `;
+
+    return html`
+      ${this.enAttente > 0 ? html`
+        <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
+      ` : nothing}
+
+      ${this.erreurChargement ? html`
+        <p class="erreur">${this.erreurChargement}</p>
+        <button class="reessayer" @click=${() => { void this.charger(); }}>Réessayer</button>
+      ` : nothing}
+
+      ${this.large ? html`<div class="trois-colonnes">${sections}</div>` : sections}
+    `;
   }
 
   static styles = css`
+    /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
+       Trois colonnes d'au moins 320 px : en dessous, les explications de
+       chaque section se cassent en lignes de trois mots. Le remplissage
+       automatique laisse le nombre de colonnes suivre la largeur réelle, donc
+       trois sur un 1280 et davantage sur un 1920, sans jamais étirer une
+       section sur toute la page. */
+    .trois-colonnes {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 0 24px; align-items: start;
+    }
     .liste-magasins, .liste-rayons-magasin, .liste-recurrentes {
       list-style: none; margin: 0; padding: 0;
     }
