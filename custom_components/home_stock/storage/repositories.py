@@ -2042,3 +2042,109 @@ def list_estimate_rows(conn) -> list[dict[str, Any]]:
                 row["estimate"] = round(quantity * price, 4)
             break
     return rows
+
+
+# =============================================================================
+# Lot 4 — le ticket de caisse.
+#
+# Alias `br` (receipt) et `rl` (receipt_line) — jamais `b` : le test qui
+# interdit de sélectionner une ligne de lot entière scanne ce paquet
+# littéralement et ne distingue pas les tables.
+# =============================================================================
+
+def insert_receipt(conn, *, media_content_id: str, captured_at: str,
+                   session_id: int | None = None,
+                   store_id: int | None = None,
+                   agent_entity_id: str | None = None,
+                   state: str = "pending") -> int:
+    return _insert(conn, "receipt", {
+        "session_id": session_id, "media_content_id": media_content_id,
+        "captured_at": captured_at, "state": state, "store_id": store_id,
+        "agent_entity_id": agent_entity_id, "attempts": 0,
+    })
+
+
+def get_receipt(conn, receipt_id: int) -> dict[str, Any] | None:
+    row = _row(conn.execute(
+        "SELECT br.* FROM receipt br WHERE br.id = ?", (receipt_id,)).fetchone())
+    if row is None:
+        return None
+    row["lines"] = receipt_lines(conn, receipt_id)
+    return row
+
+
+def receipt_lines(conn, receipt_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT rl.* FROM receipt_line rl WHERE rl.receipt_id = ?"
+        " ORDER BY rl.position, rl.id", (receipt_id,)))
+
+
+def list_receipts(conn, *, states: Sequence[str] | None = None,
+                  limit: int = 50) -> list[dict[str, Any]]:
+    where, params = "", []
+    if states:
+        where = f" WHERE br.state IN {_reasons_sql(states)}"
+    return _rows(conn.execute(
+        "SELECT br.*, st.name AS store_name FROM receipt br"
+        " LEFT JOIN store st ON st.id = br.store_id"
+        f"{where}"
+        " ORDER BY br.captured_at DESC, br.id DESC LIMIT ?",
+        (*params, limit)))
+
+
+def pending_receipts(conn) -> list[dict[str, Any]]:
+    """Ceux qui doivent encore une réponse : à lire, ou dont la lecture a
+    échoué. La photo reste, `home_stock.read_receipt` réessaie."""
+    return list_receipts(conn, states=("pending", "failed"))
+
+
+def set_receipt_state(conn, receipt_id: int, state: str, *,
+                      error: str | None = None, attempts: int | None = None,
+                      read_at: str | None = None, store_id: int | None = None,
+                      purchased_on: str | None = None,
+                      total: float | None = None,
+                      agent_entity_id: str | None = None,
+                      raw: str | None = None) -> None:
+    fields: dict[str, Any] = {"state": state, "error": error}
+    for name, value in (("attempts", attempts), ("read_at", read_at),
+                        ("store_id", store_id), ("purchased_on", purchased_on),
+                        ("total", total), ("agent_entity_id", agent_entity_id),
+                        ("raw", raw)):
+        if value is not None:
+            fields[name] = value
+    _update_fields(conn, "receipt", receipt_id, fields)
+
+
+def replace_receipt_lines(conn, receipt_id: int,
+                          lines: Sequence[Mapping[str, Any]]) -> None:
+    """Une relecture REMPLACE ce qu'on avait lu.
+
+    Garder les deux ferait une liste où la moitié des lignes vient d'une
+    lecture ratée, et rien à l'écran ne dirait laquelle.
+    """
+    conn.execute("DELETE FROM receipt_line WHERE receipt_id = ?", (receipt_id,))
+    for line in lines:
+        _insert(conn, "receipt_line", {
+            "receipt_id": receipt_id,
+            "position": line["position"],
+            "label": line["label"],
+            "quantity": line.get("quantity"),
+            "unit_price": line.get("unit_price"),
+            "total_price": line.get("total_price"),
+            "line_id": line.get("line_id"),
+            "article_id": line.get("article_id"),
+            "match_state": line.get("match_state", "unmatched"),
+        })
+
+
+def set_receipt_line_match(conn, receipt_line_id: int, *, line_id: int | None,
+                           state: str) -> None:
+    conn.execute(
+        "UPDATE receipt_line SET line_id = ?, match_state = ? WHERE id = ?",
+        (line_id, state, receipt_line_id))
+
+
+def mark_receipt_line_applied(conn, receipt_line_id: int, *, at: str) -> None:
+    """Ce qui rend une seconde application sans effet."""
+    conn.execute("UPDATE receipt_line SET applied_at = ? WHERE id = ?",
+                 (at, receipt_line_id))

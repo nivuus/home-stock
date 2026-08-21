@@ -2213,6 +2213,154 @@ class StockManager:
                    for text, claims in by_text.items()]
         return wanted
 
+    # --- § 10.4 : le ticket relit des prix --------------------------------
+
+    @staticmethod
+    def _receipt_price_per_base_unit(conn, line: Mapping[str, Any],
+                                     unit_price: float | None) -> float | None:
+        """Le prix du ticket ramené à l'unité de base — règle du lot 1.
+
+        Division par le poids net en `g`/`ml`, AUCUN diviseur en `piece` :
+        une éponge coûte 2,40 € la pièce, pas 0,80 € le gramme d'éponge.
+        """
+        if unit_price is None:
+            return None
+        article = repo.get_article(conn, line["article_id"])
+        if article is None:
+            return None
+        base_unit = repo.product_base_unit(conn, article["product_id"])
+        net = article.get("net_quantity")
+        if base_unit == "piece" or not net:
+            return unit_price
+        return unit_price / net
+
+    def _receipt_plan(self, conn, receipt_id: int) -> dict[str, Any]:
+        """Ce que l'application ferait : les lignes visées, et ce qu'elles
+        corrigeraient. Lecture seule — `preview_receipt` s'en sert tel quel."""
+        receipt = repo.get_receipt(conn, receipt_id)
+        if receipt is None:
+            raise LookupError(f"unknown receipt {receipt_id}")
+        if receipt["state"] not in ("read", "applied"):
+            raise ValueError(f"receipt {receipt_id} was never read")
+        targets: list[dict[str, Any]] = []
+        skipped = 0
+        corrected = 0
+        for line in receipt["lines"]:
+            if line["applied_at"] is not None:
+                continue
+            if line["match_state"] == "ignored" or line["line_id"] is None:
+                # Aucune ligne de panier ne la porte : elle reste VISIBLE et
+                # `unmatched`. Fabriquer un article depuis un libellé abrégé
+                # produirait des doublons de catalogue à chaque voyage — le
+                # ré-appariement par nom qui a créé 35 doublons dans Grocy en
+                # avril 2026. Le ticket relit des prix ; ce n'est pas une
+                # seconde source d'entrée en stock.
+                skipped += 1
+                continue
+            cart = repo.get_line(conn, line["line_id"])
+            if cart is None:
+                skipped += 1
+                continue
+            price = self._receipt_price_per_base_unit(conn, cart, line["unit_price"])
+            movements = 0
+            if cart["stored_at"] and cart["batch_id"] is not None:
+                movements = len(self._movements_to_reprice(conn, cart["batch_id"]))
+            corrected += movements
+            targets.append({"receipt_line": line, "cart": cart, "price": price,
+                            "movements": movements})
+        return {"receipt": receipt, "targets": targets, "skipped": skipped,
+                "corrected_movements": corrected}
+
+    def preview_receipt(self, receipt_id: int) -> dict[str, Any]:
+        """« 3 mouvements déjà écrits seront corrigés », ou rien. N'écrit rien."""
+        plan = self._receipt_plan(self.db.read(), receipt_id)
+        return {"receipt_id": receipt_id, "applied": len(plan["targets"]),
+                "skipped": plan["skipped"],
+                "corrected_movements": plan["corrected_movements"]}
+
+    def match_receipt_line(self, receipt_line_id: int, *, line_id: int | None,
+                           state: str) -> None:
+        """Rapprocher à la main. Même vocabulaire qu'au lot 3 : quatre mots,
+        la même signification."""
+        if state not in MATCH_STATES:
+            raise ValueError(
+                f"unknown match state '{state}'; expected one of {MATCH_STATES}")
+        with self.db.write() as conn:
+            repo.set_receipt_line_match(conn, receipt_line_id, line_id=line_id,
+                                        state=state)
+
+    def apply_receipt(self, receipt_id: int, *,
+                      moment: str | None = None) -> dict[str, Any]:
+        """Appliquer un ticket : trois choses, et jamais une quatrième.
+
+        1. `shopping_line.unit_price` prend le prix du ticket ramené à
+           l'unité de base ; `price_source` passe à `receipt`.
+        2. Une observation `price` par ligne corrigée, avec le magasin de la
+           session et la date du TICKET — c'est ce qui a été payé, le jour où
+           ça l'a été, et c'est elle qui alimentera le rang 1 de la cascade au
+           voyage suivant.
+        3. Si la ligne est déjà rangée, la correction passe par le § 12.4 : le
+           lot existe, une partie a peut-être été consommée, et le journal est
+           en ajout seul.
+
+        UNE seule transaction, et `_correct_price_within` par ligne rangée :
+        `Database._lock` n'est pas réentrant.
+        """
+        when = moment or _now()
+        with self.db.write() as conn:
+            plan = self._receipt_plan(conn, receipt_id)
+            receipt = plan["receipt"]
+            observed_on = receipt["purchased_on"] or when[:10]
+            # `price.store` reste renseignée à côté de `store_id` : c'est la
+            # colonne que lit `latest_price_in_store`, et le journal des
+            # observations dit ce qui a été vu, sous le nom qu'il portait.
+            store = repo.get_store(conn, receipt["store_id"]) \
+                if receipt["store_id"] else None
+            store_name = store["name"] if store else None
+            applied = 0
+            corrected = 0
+            for target in plan["targets"]:
+                cart, price = target["cart"], target["price"]
+                repo.update_line(conn, cart["id"], unit_price=price,
+                                 price_source="receipt")
+                if price is not None:
+                    repo.insert_price(
+                        conn, article_id=cart["article_id"],
+                        observed_on=observed_on, price_per_base_unit=price,
+                        source="receipt", store=store_name,
+                        store_id=receipt["store_id"])
+                if cart["stored_at"] and cart["batch_id"] is not None:
+                    corrected += self._correct_price_within(
+                        conn, cart["batch_id"], price_per_base_unit=price,
+                        moment=when)
+                repo.mark_receipt_line_applied(conn, target["receipt_line"]["id"],
+                                               at=when)
+                applied += 1
+            repo.set_receipt_state(conn, receipt_id, "applied")
+            return {"receipt_id": receipt_id, "applied": applied,
+                    "skipped": plan["skipped"], "corrected_movements": corrected}
+
+    def _correct_price_within(self, conn, batch_id: int, *,
+                              price_per_base_unit: float | None,
+                              moment: str) -> int:
+        """Le corps de `correct_price` sans son observation `price`.
+
+        `apply_receipt` en écrit une lui-même, avec la date du ticket et le
+        magasin de la session — deux informations que `correct_price` n'a
+        pas. Extrait pour que les deux chemins partagent la seule chose qui
+        compte : contrepassation puis réécriture, en une transaction.
+        """
+        affected = self._movements_to_reprice(conn, batch_id)
+        repo.set_batch_price(conn, batch_id, price_per_base_unit)
+        for movement in affected:
+            self._correct_movement_within(conn, movement, moment=moment,
+                                          adjust_stock=False)
+            line = reprice(movement, price_per_base_unit=price_per_base_unit,
+                           moment=moment)
+            line["idempotency_key"] = f"reprice:{movement['id']}"
+            repo.insert_movement(conn, **line)
+        return len(affected)
+
     # --- § 11 : l'ordre des rayons d'un magasin ---------------------------
 
     def learn_store_route(self, store_id: int, *,
@@ -2309,7 +2457,6 @@ class StockManager:
             if batch is None:
                 raise LookupError(f"unknown batch {batch_id}")
             affected = self._movements_to_reprice(conn, batch_id)
-            repo.set_batch_price(conn, batch_id, price_per_base_unit)
             price_id = None
             if price_per_base_unit is not None:
                 price_id = repo.insert_price(
@@ -2317,18 +2464,12 @@ class StockManager:
                     observed_on=observed_on or when[:10],
                     price_per_base_unit=price_per_base_unit,
                     source=source, store_id=store_id)
-            written: list[int] = []
-            for movement in affected:
-                self._correct_movement_within(conn, movement, moment=when,
-                                              adjust_stock=False)
-                line = reprice(movement, price_per_base_unit=price_per_base_unit,
-                               moment=when)
-                line["idempotency_key"] = f"reprice:{movement['id']}"
-                written.append(repo.insert_movement(conn, **line))
+            self._correct_price_within(conn, batch_id,
+                                       price_per_base_unit=price_per_base_unit,
+                                       moment=when)
             return {
                 "batch_id": batch_id,
                 "corrected_movements": len(affected),
-                "movement_ids": written,
                 "price_id": price_id,
             }
 
