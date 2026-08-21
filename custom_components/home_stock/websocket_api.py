@@ -1238,3 +1238,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
                     session_update_line, session_remove_line, session_checkout,
                     session_store_line, session_close):
         websocket_api.async_register_command(hass, command)
+    # Imported here, not at module level: `websocket_batteries` imports this
+    # module's shared helpers rather than copying them, so a top-level import
+    # in either direction is a cycle. Lot 5 touches exactly these two lines.
+    from .websocket_batteries import async_register_battery_commands
+    async_register_battery_commands(hass)
