@@ -13,7 +13,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .application import PartsError
-from .const import CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
+from .const import BATTERY_EVENT_KINDS, CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
@@ -22,7 +22,8 @@ from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
 from .validators import (
-    bounded_int, bounded_text, finite_float, iso_date, non_negative_float, parts_count,
+    bounded_int, bounded_text, finite_float, iso_date, non_negative_float,
+    parts_count, preview,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,22 @@ _LOGGER = logging.getLogger(__name__)
 # commands' ids. `_id` keeps cv.positive_int's own range (>= 0) but swaps
 # its coercion leg for `bounded_int`, which refuses all three instead.
 _id: Final = vol.All(bounded_int, vol.Range(min=0))
+
+
+def _iso_datetime(value: Any) -> str:
+    """An ISO timestamp whose DATE part is a real calendar date.
+
+    `iso_date` guards the ten leading characters — the part that reaches
+    `installed_on` and every `occurred_at[:10]` comparison — and the rest is
+    kept as given. A "02/05/2024" typed into a script must be refused here,
+    not discovered later by a coordinator refresh that then takes every
+    entity unavailable.
+    """
+    text = bounded_text(value)
+    if text is None:
+        raise vol.Invalid("expected a timestamp")
+    iso_date(text[:10])
+    return text
 
 ADD_STOCK_SCHEMA = vol.All(
     vol.Schema({
@@ -100,6 +117,40 @@ RESYNC_SCHEMA = vol.Schema(vol.All(
 ))
 
 
+# --- lot 5 : piles et équipements -------------------------------------------
+
+# `extra_items` and `extra_keep` are validated on the SHAPE OF THE CONTAINER
+# only, never item by item. A service that refused a malformed item would make
+# the air-purifier's filter task vanish the first time the macro's item shape
+# changed; `merge_plan` copies what it does not understand instead. What IS
+# refused is a container that is not a list at all — that means the wiring
+# itself is broken, and the wiring must then disarm the closing pass, which
+# `continue_on_error: true` plus an undefined `stock` already do.
+def _plain_list(value: Any) -> list:
+    """A real list. NOT `cv.ensure_list`, which wraps a bare string into a
+    one-element list — so `extra_items: "pas une liste"` would sail through as
+    `["pas une liste"]` and be copied verbatim into todo.maintenance as an
+    item nobody can act on."""
+    if not isinstance(value, list):
+        raise vol.Invalid(f"expected a list, got {preview(value)}")
+    return value
+
+
+MAINTENANCE_PLAN_SCHEMA = vol.Schema({
+    vol.Optional("extra_items"): _plain_list,
+    vol.Optional("extra_keep"): _plain_list,
+})
+
+BATTERY_EVENT_SCHEMA = vol.Schema({
+    vol.Required("battery_id"): _id,
+    vol.Required("kind"): vol.In(BATTERY_EVENT_KINDS),
+    vol.Optional("occurred_at"): _iso_datetime,
+    vol.Optional("consume_spare"): cv.boolean,
+    vol.Optional("note"): bounded_text,
+    vol.Optional("idempotency_key"): bounded_text,
+})
+
+
 def _entry(hass: HomeAssistant):
     """The single loaded entry. Raises if the integration is not set up."""
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
@@ -118,6 +169,14 @@ async def _run(hass: HomeAssistant, work) -> Any:
     here used to leak the English original ("unknown article 5") into a
     notification and a voice answer.
 
+    `vol.Invalid` is in the list for that same rule. The schemas run before
+    the handler, but the invariants that bind two fields together
+    (`check_battery_fields`, `check_battery_event`) are enforced INSIDE the
+    manager, where they can see the stored row — so they raise here, not at
+    schema time. Without this, "a primary battery cannot be charged" reached
+    a script as a raw English `voluptuous.error.Invalid` while the websocket
+    surface answered a French sentence: exactly the asymmetry this lot forbids.
+
     `LookupError` is caught alongside the `ValueError` family for the same
     reason: `repo.product_base_unit` raises it for an unknown product id
     (StockManager.consume's FIFO path calls it directly with the caller's
@@ -131,7 +190,8 @@ async def _run(hass: HomeAssistant, work) -> Any:
     """
     try:
         return await hass.async_add_executor_job(work)
-    except (InsufficientStock, LookupError, PartsError, UnitError, ValueError) as error:
+    except (InsufficientStock, LookupError, PartsError, UnitError, ValueError,
+            vol.Invalid) as error:
         raise HomeAssistantError(french_message(error)) from error
     except OverflowError as error:
         # Backstop, not the primary defence: ADD_STOCK_SCHEMA/CONSUME_SCHEMA/
@@ -399,6 +459,29 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         entry.async_create_background_task(hass, run(), "home_stock resync_off")
 
+    async def maintenance_plan(call: ServiceCall) -> ServiceResponse:
+        """The plan `maintenance_sync_taches` reconciles todo.maintenance from.
+
+        Never raises when the database is unwell: `StockManager.maintenance_plan`
+        answers `complete: False` instead, and the automation's `peut_fermer`
+        flag reads that. The only thing that makes THIS raise is a
+        badly-SHAPED argument, because that means the wiring is broken.
+        """
+        coordinator = _entry(hass).runtime_data.coordinator
+        return await coordinator.async_maintenance_plan(
+            extra_items=call.data.get("extra_items"),
+            extra_keep=call.data.get("extra_keep"))
+
+    async def record_battery_event(call: ServiceCall) -> None:
+        runtime = _entry(hass).runtime_data
+        await _run(hass, partial(
+            runtime.manager.record_battery_event, call.data["battery_id"],
+            kind=call.data["kind"], occurred_at=call.data.get("occurred_at"),
+            consume_spare=call.data.get("consume_spare"),
+            note=call.data.get("note"),
+            idempotency_key=call.data.get("idempotency_key")))
+        await runtime.coordinator.async_request_refresh()
+
     hass.services.async_register(DOMAIN, "add_stock", add_stock, schema=ADD_STOCK_SCHEMA)
     hass.services.async_register(DOMAIN, "consume", consume, schema=CONSUME_SCHEMA)
     hass.services.async_register(DOMAIN, "open_batch", open_batch, schema=BATCH_SCHEMA)
@@ -420,3 +503,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(DOMAIN, "resync_off", resync_off, schema=RESYNC_SCHEMA)
+    hass.services.async_register(DOMAIN, "maintenance_plan", maintenance_plan,
+                                 schema=MAINTENANCE_PLAN_SCHEMA,
+                                 supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(DOMAIN, "record_battery_event", record_battery_event,
+                                 schema=BATTERY_EVENT_SCHEMA)

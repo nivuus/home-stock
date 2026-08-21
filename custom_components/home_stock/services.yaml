@@ -169,3 +169,101 @@ resync_off:
         Resynchronise tous les articles ayant un code-barres. Laisser vide pour
         cibler un article ou un produit précis à la place.
       selector: { boolean: }
+
+maintenance_plan:
+  name: Plan de maintenance
+  description: >-
+    Rend les tâches d'entretien liées aux piles, fusionnées avec celles que le
+    macro `maintenance.jinja` a déjà calculées. Personne n'appelle ce service à
+    la main : il est appelé par l'automation « Maintenance - Synchronisation
+    liste de tâches » (maintenance_sync_taches), qui s'en sert pour reconstruire
+    todo.maintenance chaque heure. La réponse porte `items`, `keep` et
+    `complete` — et c'est `complete` qui autorise ou non la fermeture des
+    tâches : un plan incomplet a le droit d'ajouter et de rafraîchir, jamais de
+    fermer.
+  fields:
+    extra_items:
+      name: Tâches du macro
+      description: >-
+        Les items déjà calculés par le macro (aspirateurs, filtres, plantes,
+        mises à jour). Recopiés tels quels, même ceux dont la forme n'est pas
+        comprise : le service ne doit jamais pouvoir faire disparaître une tâche.
+      required: false
+      example: "{{ plan['items'] }}"
+      selector:
+        object:
+    extra_keep:
+      name: Résumés à maintenir
+      description: >-
+        Les résumés que le macro veut garder ouverts (son hystérésis). Réunis
+        avec ceux des piles, sans doublon.
+      required: false
+      example: "{{ plan['keep'] }}"
+      selector:
+        object:
+
+record_battery_event:
+  name: Enregistrer un événement de pile
+  description: >-
+    Note qu'une pile vient d'être changée, rechargée, posée ou retirée. Un
+    remplacement sort une rechange du placard quand la pile en a une, et remet
+    à zéro le dernier relevé : on ne sait rien de la pile neuve tant que
+    l'appareil n'a pas parlé.
+  fields:
+    battery_id:
+      name: Pile
+      description: Identifiant de la pile déclarée.
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          mode: box
+    kind:
+      name: Nature de l'événement
+      description: >-
+        `replacement` (pile changée), `charge` (rechargée), `install` (posée
+        pour la première fois) ou `removal` (retirée). Une pile jetable ne se
+        recharge pas, une batterie intégrée ne se remplace pas.
+      required: true
+      example: replacement
+      selector:
+        select:
+          options:
+            - install
+            - charge
+            - replacement
+            - removal
+    occurred_at:
+      name: Moment
+      description: Horodatage ISO. Par défaut, maintenant.
+      required: false
+      example: "2026-08-21T10:00:00"
+      selector:
+        text:
+    consume_spare:
+      name: Sortir une rechange du placard
+      description: >-
+        Par défaut, une pile jetable en consomme une et une cellule
+        rechargeable n'en consomme aucune — les quatre LADDA tournent entre le
+        tiroir et trois capteurs, et compter chaque rotation viderait le stock
+        pour rien. À forcer le jour où une cellule meurt vraiment.
+      required: false
+      example: true
+      selector:
+        boolean:
+    note:
+      name: Note
+      description: Commentaire libre attaché à l'événement.
+      required: false
+      example: "achetée en lot de 4"
+      selector:
+        text:
+    idempotency_key:
+      name: Clé d'idempotence
+      description: >-
+        Rejouer la même clé ne réécrit ni l'événement ni la sortie de stock.
+      required: false
+      example: "b7e1-…"
+      selector:
+        text:
