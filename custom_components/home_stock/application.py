@@ -1147,3 +1147,11 @@ class StockManager:
             if days_left >= 0:
                 ahead.append({**row, "days_left": days_left})
         return ahead
+
+    def record_readings(self, readings) -> None:
+        """Write a whole refresh's worth of readings in one transaction."""
+        rows = list(readings)
+        if not rows:
+            return
+        with self.db.write() as conn:
+            repo.set_battery_readings(conn, rows)

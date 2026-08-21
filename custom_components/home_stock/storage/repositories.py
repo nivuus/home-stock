@@ -965,3 +965,17 @@ def warranty_rows(conn) -> list[dict[str, Any]]:
         computed.append({**row, "warranty_ends_on": ends_on.isoformat()})
     computed.sort(key=lambda row: (row["warranty_ends_on"], row["name"]))
     return computed
+
+
+def set_battery_readings(conn, readings) -> None:
+    """Every reading of this refresh, in ONE statement and ONE transaction.
+
+    Fourteen separate UPDATEs every fifteen minutes on a single-writer
+    database is 1 344 transactions a day for nothing. `executemany` inside the
+    caller's transaction keeps it to one.
+    """
+    rows = [(percent, at, battery_id) for battery_id, percent, at in readings]
+    if not rows:
+        return
+    conn.executemany(
+        "UPDATE battery SET last_percent = ?, last_reading_at = ? WHERE id = ?", rows)
