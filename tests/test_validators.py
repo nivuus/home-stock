@@ -176,3 +176,24 @@ def test_a_store_name_is_bounded_and_stripped():
         store_name("x" * 300)
     with pytest.raises(vol.Invalid):
         store_name(None)
+
+
+def test_list_quantity_refuses_zero_and_the_absurd():
+    from custom_components.home_stock.const import MAX_LIST_QUANTITY
+    from custom_components.home_stock.validators import list_quantity
+    assert list_quantity(None) is None
+    assert list_quantity(500) == 500.0
+    assert list_quantity(MAX_LIST_QUANTITY) == MAX_LIST_QUANTITY
+    for refus in (0, -1, MAX_LIST_QUANTITY + 1, float("inf"), float("nan"), "x"):
+        with pytest.raises(vol.Invalid):
+            list_quantity(refus)
+
+
+def test_every_days_is_a_whole_number_of_days_within_a_year():
+    from custom_components.home_stock.const import MAX_EVERY_DAYS
+    from custom_components.home_stock.validators import every_days
+    assert every_days(1) == 1
+    assert every_days(MAX_EVERY_DAYS) == MAX_EVERY_DAYS
+    for refus in (0, -3, MAX_EVERY_DAYS + 1, None, 1.5, "x"):
+        with pytest.raises(vol.Invalid):
+            every_days(refus)

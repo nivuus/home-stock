@@ -1611,3 +1611,262 @@ def set_battery_readings(conn, readings) -> None:
         return
     conn.executemany(
         "UPDATE battery SET last_percent = ?, last_reading_at = ? WHERE id = ?", rows)
+
+
+# =============================================================================
+# Lot 4 — la liste de courses, ses revendications et ses récurrences.
+#
+# Alias `sl` (shopping_list_item), `sa` (store_aisle), `ai` (aisle), `st`
+# (store), `sc` (shopping_list_claim) — jamais `b` : le test qui interdit de
+# sélectionner une ligne de lot entière scanne ce paquet LITTÉRALEMENT et ne
+# regarde pas quelle table est derrière l'alias.
+# =============================================================================
+
+LIST_ITEM_FIELDS: Final = ("product_id", "free_text", "quantity", "note")
+
+# 999 : un produit sans rayon marche en dernier. Un rayon inconnu DANS ce
+# magasin garde sa place par défaut (`aisle.position`) plutôt que de tomber
+# à la fin — on sait où il est en général, on ne sait juste pas où il est ici.
+_LIST_ORDER_SQL: Final = "COALESCE(sa.position, ai.position, 999)"
+
+
+def insert_list_item(conn, *, added_at: str, product_id: int | None = None,
+                     free_text: str | None = None, quantity: float | None = None,
+                     note: str | None = None) -> int:
+    return _insert(conn, "shopping_list_item", {
+        "product_id": product_id, "free_text": free_text, "quantity": quantity,
+        "note": note, "added_at": added_at,
+    })
+
+
+def update_list_item(conn, item_id: int, fields: Mapping[str, Any]) -> None:
+    _update_fields(conn, "shopping_list_item", item_id,
+                   _filtered(fields, LIST_ITEM_FIELDS))
+
+
+def check_list_item(conn, item_id: int, *, at: str, session_id: int | None,
+                    line_id: int | None) -> None:
+    """« Je l'ai », jamais « c'est en stock » (§ 7.5).
+
+    `session_id` et `line_id` sont écrits ensemble : c'est le SCAN qui coche,
+    et la ligne de panier doit rester retrouvable pour pouvoir décocher quand
+    on repose l'article dans le rayon.
+    """
+    conn.execute(
+        "UPDATE shopping_list_item SET checked_at = ?, session_id = ?, line_id = ?"
+        " WHERE id = ?", (at, session_id, line_id, item_id))
+
+
+def uncheck_list_item(conn, item_id: int) -> None:
+    """Les trois colonnes ensemble : un item décoché qui garderait un
+    `line_id` mort ferait viser au décochage suivant une ligne disparue."""
+    conn.execute(
+        "UPDATE shopping_list_item SET checked_at = NULL, session_id = NULL,"
+        " line_id = NULL WHERE id = ?", (item_id,))
+
+
+def remove_list_item(conn, item_id: int, *, at: str) -> None:
+    """Un horodatage, jamais un DELETE : la réconciliation doit se SOUVENIR
+    qu'on n'en veut pas, sinon elle remet la ligne un quart d'heure plus tard."""
+    conn.execute("UPDATE shopping_list_item SET removed_at = ? WHERE id = ?",
+                 (at, item_id))
+
+
+def purge_list_item(conn, item_id: int) -> None:
+    """Le seul DELETE de la liste, et il emporte les revendications."""
+    conn.execute("DELETE FROM shopping_list_claim WHERE item_id = ?", (item_id,))
+    conn.execute("DELETE FROM shopping_list_item WHERE id = ?", (item_id,))
+
+
+def open_item_for_product(conn, product_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT sl.* FROM shopping_list_item sl"
+        " WHERE sl.product_id = ? AND sl.checked_at IS NULL AND sl.removed_at IS NULL",
+        (product_id,)).fetchone())
+
+
+def get_list_item(conn, item_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT sl.* FROM shopping_list_item sl WHERE sl.id = ?",
+        (item_id,)).fetchone())
+
+
+def list_items(conn, *, store_id: int | None = None,
+               include_checked: bool = True,
+               include_removed: bool = False) -> list[dict[str, Any]]:
+    """La liste ouverte, dans l'ordre du magasin où l'on est.
+
+    L'ordre appris de CE magasin d'abord, l'ordre par défaut du rayon en
+    repli, 999 pour un produit sans rayon. Sans `store_id`, c'est l'ordre du
+    lot 1, inchangé.
+    """
+    where = ["sl.removed_at IS NULL"] if not include_removed else []
+    if not include_checked:
+        where.append("sl.checked_at IS NULL")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = _rows(conn.execute(
+        "SELECT sl.*, p.name AS product_name, p.base_unit, p.aisle_id,"
+        "       ai.name AS aisle_name,"
+        f"      {_LIST_ORDER_SQL} AS aisle_position"
+        " FROM shopping_list_item sl"
+        " LEFT JOIN product p ON p.id = sl.product_id"
+        " LEFT JOIN aisle ai ON ai.id = p.aisle_id"
+        " LEFT JOIN store_aisle sa ON sa.aisle_id = ai.id AND sa.store_id = ?"
+        f"{clause}"
+        f" ORDER BY {_LIST_ORDER_SQL}, p.name, sl.id",
+        (store_id,)))
+    claims = _claims_by_item(conn)
+    for row in rows:
+        row["claims"] = claims.get(row["id"], [])
+    return rows
+
+
+def _claims_by_item(conn) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in _rows(conn.execute(
+            "SELECT sc.* FROM shopping_list_claim sc ORDER BY sc.item_id, sc.origin")):
+        grouped.setdefault(row["item_id"], []).append(row)
+    return grouped
+
+
+def set_claim(conn, *, item_id: int, origin: str, quantity: float | None,
+              detail: str | None, claimed_at: str) -> None:
+    """Au plus une revendication par origine : deux passages de la même
+    origine mettent à jour, ils n'empilent pas."""
+    conn.execute(
+        "INSERT INTO shopping_list_claim (item_id, origin, quantity, detail, claimed_at)"
+        " VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT (item_id, origin) DO UPDATE SET"
+        "   quantity = excluded.quantity, detail = excluded.detail,"
+        "   claimed_at = excluded.claimed_at",
+        (item_id, origin, quantity, detail, claimed_at))
+
+
+def drop_claim(conn, *, item_id: int, origin: str) -> None:
+    conn.execute("DELETE FROM shopping_list_claim WHERE item_id = ? AND origin = ?",
+                 (item_id, origin))
+
+
+def claims_of(conn, item_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT sc.* FROM shopping_list_claim sc WHERE sc.item_id = ? ORDER BY sc.origin",
+        (item_id,)))
+
+
+# --- les récurrences --------------------------------------------------------
+
+RECURRING_FIELDS: Final = ("product_id", "free_text", "quantity", "every_days",
+                           "last_added_on", "active")
+
+
+def upsert_recurring(conn, *, recurring_id: int | None = None,
+                     product_id: int | None = None, free_text: str | None = None,
+                     quantity: float | None = None, every_days: int,
+                     last_added_on: str | None = None,
+                     active: int = 1) -> int:
+    values = {
+        "product_id": product_id, "free_text": free_text, "quantity": quantity,
+        "every_days": every_days, "last_added_on": last_added_on, "active": active,
+    }
+    if recurring_id is None:
+        return _insert(conn, "shopping_recurring", values)
+    _update_fields(conn, "shopping_recurring", recurring_id, values)
+    return int(recurring_id)
+
+
+def delete_recurring(conn, recurring_id: int) -> None:
+    conn.execute("DELETE FROM shopping_recurring WHERE id = ?", (recurring_id,))
+
+
+def list_recurring(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    where = " WHERE sr.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT sr.*, p.name AS product_name, p.base_unit"
+        " FROM shopping_recurring sr"
+        " LEFT JOIN product p ON p.id = sr.product_id"
+        f"{where}"
+        " ORDER BY COALESCE(p.name, sr.free_text), sr.id"))
+
+
+def due_recurring(conn, today: str) -> list[dict[str, Any]]:
+    """Ce qu'on rachète sans que rien ne le réclame, arrivé à échéance.
+
+    Jamais ajoutée = due tout de suite : déclarer « le café, toutes les trois
+    semaines » et attendre trois semaines avant de le voir apparaître est le
+    genre de silence qui fait croire que la fonction ne marche pas.
+    """
+    return _rows(conn.execute(
+        "SELECT sr.*, p.name AS product_name, p.base_unit"
+        " FROM shopping_recurring sr"
+        " LEFT JOIN product p ON p.id = sr.product_id"
+        " WHERE sr.active = 1"
+        "   AND (sr.last_added_on IS NULL"
+        "        OR DATE(sr.last_added_on, '+' || sr.every_days || ' days') <= DATE(?))"
+        " ORDER BY sr.id", (today,)))
+
+
+def mark_recurring_added(conn, recurring_id: int, on: str) -> None:
+    conn.execute("UPDATE shopping_recurring SET last_added_on = ? WHERE id = ?",
+                 (on, recurring_id))
+
+
+# --- l'estimation du panier -------------------------------------------------
+
+def _estimate_articles(conn, product_id: int) -> list[dict[str, Any]]:
+    """Les articles de ce produit, du plus habituel au moins habituel.
+
+    Le dernier acheté d'abord, l'article générique ensuite, le reste après.
+    """
+    return _rows(conn.execute(
+        "SELECT a.id, a.net_quantity,"
+        "       (SELECT MAX(bt.entered_at) FROM batch bt WHERE bt.article_id = a.id)"
+        "         AS last_bought"
+        " FROM article a WHERE a.product_id = ?"
+        " ORDER BY last_bought IS NULL, last_bought DESC, a.is_generic DESC, a.id",
+        (product_id,)))
+
+
+def list_estimate_rows(conn) -> list[dict[str, Any]]:
+    """Pour chaque ligne ouverte, l'article qu'on achète d'habitude et son prix.
+
+    « L'article qu'on achète d'habitude » = le dernier entré en stock pour ce
+    produit, à défaut son article générique. Répondre « ça va faire combien ? »
+    avec le moins cher du catalogue donnerait un total que la caisse
+    démentirait à chaque voyage.
+
+    Un article sans prix connu ne fait pas taire la ligne : on descend la
+    liste des candidats jusqu'au premier qui en a un. Une estimation muette
+    alors qu'un prix existe sur le même produit n'aide personne.
+
+    Sans quantité (« ce qu'il faut »), on estime UN conditionnement : zéro
+    afficherait moins que la réalité, et personne ne s'en méfierait.
+    """
+    rows = _rows(conn.execute(
+        "SELECT sl.id AS item_id, sl.product_id, sl.free_text, sl.quantity,"
+        "       sl.checked_at, p.name AS product_name, p.base_unit"
+        " FROM shopping_list_item sl"
+        " LEFT JOIN product p ON p.id = sl.product_id"
+        " WHERE sl.removed_at IS NULL"
+        " ORDER BY sl.id"))
+    for row in rows:
+        row["article_id"] = None
+        row["price_per_base_unit"] = None
+        row["estimate"] = None
+        if row["product_id"] is None:
+            continue
+        candidates = _estimate_articles(conn, row["product_id"])
+        if candidates:
+            row["article_id"] = candidates[0]["id"]
+        for article in candidates:
+            price = latest_price(conn, article["id"])
+            if price is None:
+                continue
+            quantity = row["quantity"]
+            if quantity is None:
+                quantity = article["net_quantity"]
+            row["article_id"] = article["id"]
+            row["price_per_base_unit"] = price
+            if quantity is not None:
+                row["estimate"] = round(quantity * price, 4)
+            break
+    return rows

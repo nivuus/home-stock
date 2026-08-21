@@ -13,7 +13,7 @@ from typing import Any, Final, Mapping
 
 import voluptuous as vol
 
-from .const import MAX_PARTS, PRICE_SOURCES
+from .const import MAX_EVERY_DAYS, MAX_LIST_QUANTITY, MAX_PARTS, PRICE_SOURCES
 
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
@@ -340,3 +340,35 @@ def store_name(value: Any) -> str:
     if not cleaned:
         raise vol.Invalid(f"a store needs a name, got {preview(value)}")
     return cleaned
+
+
+def list_quantity(value: Any) -> float | None:
+    """La quantité d'une ligne de liste : `]0 ; MAX_LIST_QUANTITY]`, ou `None`.
+
+    `None` est une réponse valide — « ce qu'il faut ». Zéro n'en est pas une :
+    une ligne qui demande zéro est une ligne qu'on n'aurait pas dû écrire, et
+    elle afficherait « 0 g » à côté d'un produit qu'il faut vraiment acheter.
+    """
+    if value is None:
+        return None
+    number = finite_float(value)
+    if number <= 0:
+        raise vol.Invalid(f"quantity must be positive, got {preview(value)}")
+    if number > MAX_LIST_QUANTITY:
+        raise vol.Invalid(
+            f"quantity must not exceed {MAX_LIST_QUANTITY}, got {preview(value)}")
+    return number
+
+
+def every_days(value: Any) -> int:
+    """La période d'une récurrence, en jours entiers : `[1 ; MAX_EVERY_DAYS]`.
+
+    Zéro rendrait la ligne due à chaque passage du coordinateur — soit
+    quatre-vingt-seize ajouts par jour.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid(f"every_days must be a whole number of days, got {preview(value)}")
+    if not 1 <= value <= MAX_EVERY_DAYS:
+        raise vol.Invalid(
+            f"every_days must be between 1 and {MAX_EVERY_DAYS}, got {preview(value)}")
+    return value
