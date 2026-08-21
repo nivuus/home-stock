@@ -151,7 +151,7 @@ DEFAULT_RECIPE_SOURCE_KEY: Final = "1"
 
 **Décision de plan — la contiguïté est un test, pas une consigne.** `apply_migrations()` n'applique que les migrations dont la `VERSION` dépasse `MAX(version)` de `schema_version`. Un trou est sans conséquence ; un **dépassement** est fatal et silencieux. Le test de contiguïté ajouté ici est ce qui empêche le lot 5 (qui vise `m006`) d'atterrir sur `master` avant le lot 4 sans renuméroter. Il manque aujourd'hui ; le lot 3 le pose parce qu'il est le premier des deux à écrire une migration.
 
-- [ ] **Step 1: Écrire les tests de la migration et de la contiguïté**
+- [x] **Step 1: Écrire les tests de la migration et de la contiguïté**
 
 Dans `tests/storage/test_migrations.py`, à la fin du fichier. **Lire d'abord le haut du fichier** et reprendre le helper d'ouverture/migration déjà présent (noté `_migrated(tmp_path)` ci-dessous) plutôt que d'en écrire un autre.
 
@@ -281,12 +281,12 @@ def test_m004_servings_and_timer_bounds(tmp_path):
         _insert_instruction(conn, timer_label="Repos", timer_seconds=0)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: FAIL — `ImportError` sur `m004_recipes`, puis `no such table: recipe`.
 
-- [ ] **Step 3: Écrire `m004_recipes.py`**
+- [x] **Step 3: Écrire `m004_recipes.py`**
 
 Recopier le DDL de la spec § 6 **tel quel** — il a été relu, ses `CHECK` sont des décisions et non de la décoration. Le module suit le contrat des trois précédents : docstring de tête, `VERSION = 4`, `SQL = """…"""` passé à `executescript`, puis `apply(conn)` pour ce qui demande du Python.
 
@@ -328,17 +328,17 @@ Dans `storage/migrations/__init__.py` : ajouter `m004_recipes` à l'import **et 
 
 Dans `const.py` : ajouter le bloc du lot en fin de fichier, et `REASON_COOKED` **à la fin** de `REASONS` — jamais au milieu.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Lancer toute la suite Python**
+- [x] **Step 5: Lancer toute la suite Python**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS — aucune régression. Un test du lot 0 épingle `REASONS` : s'il échoue, c'est que `cooked` a été inséré au milieu.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/migrations custom_components/home_stock/const.py tests/storage/test_migrations.py
@@ -371,7 +371,7 @@ SELECT b.*, COALESCE(a.kcal_per_base_unit, p.reference_kcal) AS kcal_per_base_un
 
 Dès que `batch` porte ces neuf colonnes, `b.*` les ramène **aussi**, et la ligne rendue contient deux colonnes du même nom. `dict(sqlite3.Row)` garde alors la **première** — c'est-à-dire la colonne brute de `batch`, `NULL` pour tout le stock existant — et non le `COALESCE`. Résultat : toutes les kcal et toutes les macros du stock passent silencieusement à `NULL` le jour où la migration s'applique. **`SELECT b.*` doit donc être remplacé par une liste explicite de colonnes** dans les deux requêtes concernées. C'est le seul changement de cette tâche qui n'est pas une addition.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/storage/test_repositories.py`, à la fin :
 
@@ -436,12 +436,12 @@ def test_insert_batch_without_nutrition_is_unchanged(conn):
     assert all(row[column] is None for column in NUTRITION_COLUMNS)
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/storage/test_repositories.py -q`
 Expected: FAIL — `insert_batch() got an unexpected keyword argument 'nutrition'`.
 
-- [ ] **Step 3: Étendre la cascade et l'insertion**
+- [x] **Step 3: Étendre la cascade et l'insertion**
 
 Dans `repositories.py` : les deux constantes, la liste explicite de colonnes à la place de `b.*` dans `list_batches_for_product` **et** dans `stock_rows` si elle sélectionne `b.*`, l'argument `nutrition` de `insert_batch` (filtré sur `NUTRITION_COLUMNS`, importé de `application`… non : **déplacer `NUTRITION_COLUMNS` de `application.py` vers `const.py`** pour que `repositories` puisse l'utiliser sans importer la couche du dessus — `application` continue de le réexporter pour ne casser aucun appelant).
 
@@ -449,7 +449,7 @@ Dans `repositories.py` : les deux constantes, la liste explicite de colonnes à 
 
 Dans `application.py`, `consume_batch` lit déjà sa ligne de lot jointe : lui faire prendre les taux du lot en priorité (`repo.macro_rates` reçoit une ligne déjà cascadée par `list_batches_for_product`, donc rien à changer si la requête est bien corrigée — **le vérifier par le test ci-dessous plutôt que par lecture**).
 
-- [ ] **Step 4: Lancer, vérifier le vert, puis la suite entière**
+- [x] **Step 4: Lancer, vérifier le vert, puis la suite entière**
 
 ```bash
 ./scripts/test.sh tests/storage/test_repositories.py -q
@@ -457,7 +457,7 @@ Dans `application.py`, `consume_batch` lit déjà sa ligne de lot jointe : lui f
 ```
 Expected: PASS des deux. La suite entière est obligatoire ici : cette tâche touche la lecture de **tout** le stock.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/repositories.py custom_components/home_stock/const.py custom_components/home_stock/application.py tests/storage/test_repositories.py

@@ -793,3 +793,42 @@ def test_consume_batch_accepts_parts_and_an_idempotency_key(manager):
     assert first == second
     assert manager.db.read().execute(
         "SELECT COUNT(*) FROM movement WHERE reason = 'consumption'").fetchone()[0] == 1
+
+
+# --- lot 3 (amendement A2) : manger un plat compte les valeurs DU PLAT -------
+
+def test_consume_batch_counts_the_batch_nutrition_over_the_article(manager, pasta):
+    """Ce que le plan demandait de vérifier par un test plutôt qu'à la lecture.
+
+    L'article « Panzani 500 g » titre 3,5 kcal/g. Le lot, lui, est une part de
+    lasagnes cuisinée : il porte ses propres 1,8 kcal/g. Manger ce lot doit
+    inscrire 1,8 dans le mouvement — sinon une assiette de restes serait
+    comptée au tarif de ses pâtes crues.
+    """
+    with manager.db.write() as conn:
+        batch_id = repo.insert_batch(
+            conn, article_id=pasta["article_id"], location_id=pasta["location_id"],
+            quantity=300.0, entered_at="2026-08-21T18:00:00",
+            nutrition={"kcal_per_base_unit": 1.8, "proteins": 0.09})
+
+    manager.consume_batch(batch_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT kcal, proteins FROM movement WHERE batch_id = ?", (batch_id,)
+    ).fetchone()
+    assert row["kcal"] == pytest.approx(180.0)      # 100 g x 1,8 — pas 350
+    assert row["proteins"] == pytest.approx(9.0)
+
+
+def test_consume_batch_still_reads_the_article_when_the_batch_is_silent(manager, pasta):
+    """La cascade ne casse rien : un lot ordinaire compte comme avant."""
+    with manager.db.write() as conn:
+        batch_id = repo.insert_batch(
+            conn, article_id=pasta["article_id"], location_id=pasta["location_id"],
+            quantity=300.0, entered_at="2026-08-21T18:00:00")
+
+    manager.consume_batch(batch_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT kcal FROM movement WHERE batch_id = ?", (batch_id,)).fetchone()
+    assert row["kcal"] == pytest.approx(350.0)      # 100 g x 3,5

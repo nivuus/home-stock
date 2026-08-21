@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .const import (
     MACRO_COLUMNS,
     MAX_PARTS,
+    NUTRITION_COLUMNS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
     REASON_CONVERSION,
@@ -27,12 +28,6 @@ from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
 
-# Nutrition columns of `article`, all stored per base unit, all rescaled when a
-# product changes unit.
-NUTRITION_COLUMNS: Final = (
-    "kcal_per_base_unit", "proteins", "carbohydrates", "sugars", "added_sugars",
-    "fat", "saturated_fat", "fiber", "salt",
-)
 
 # The keys a bucket and a day both carry. One definition, so a series and a
 # day can never disagree about what "kcal" means.
@@ -294,13 +289,17 @@ class StockManager:
                 ).fetchone()
                 return int(row["id"])
             row = conn.execute(
-                # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
-                # b.* is deliberately not used here: since lot 3 (amendment A2),
-                # batch carries its own kcal_per_base_unit/macro columns under
-                # the same names as the resolved article rate selected below,
-                # and sqlite3.Row would silently keep the first (batch's own,
-                # always NULL today) match instead of the resolved one. See
-                # repo.BATCH_COLUMNS_SQL for the full explanation.
+                # kcal and macro rates: the same cascade as add_stock() and
+                # consume() — the batch's own values first (lot 3, amendment
+                # A2), then the article's, then the product's reference_kcal
+                # (spec 7.4). Eating a portion of last night's lasagne must
+                # count the lasagne's calories, not the flour's.
+                #
+                # `b.*` is deliberately not used: batch and article now share
+                # those nine column names, and sqlite3.Row keeps the FIRST
+                # match — the raw batch column would shadow the cascade and
+                # every value would read NULL in silence. See
+                # repo.BATCH_COLUMNS_SQL.
                 f"SELECT {repo.BATCH_COLUMNS_SQL}, a.product_id,"
                 f" {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
                 f" {repo.MACRO_RATE_SQL}"

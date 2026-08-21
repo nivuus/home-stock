@@ -59,6 +59,12 @@ MACRO_COLUMNS: Final = (
     "fat", "saturated_fat", "fiber", "salt",
 )
 
+# The nine nutrition columns, all stored per base unit, all rescaled when a
+# product changes unit. Lives here rather than in `application` because the
+# repositories need it too since lot 3 (a batch may carry its own nutrition)
+# and the storage layer must never import the layer above it.
+NUTRITION_COLUMNS: Final = ("kcal_per_base_unit", *MACRO_COLUMNS)
+
 # A serving above this value is not a serving: it is a data entry mistake in
 # a collaborative database (a pallet announced in grams).
 MAX_SERVING: Final = 5000.0

@@ -12,6 +12,7 @@ from typing import Any
 from ..const import (
     CONSUME_REASONS,
     MACRO_COLUMNS,
+    NUTRITION_COLUMNS,
     REASON_CONSUMPTION,
 )
 
@@ -28,32 +29,51 @@ ARTICLE_FIELDS = (
     "is_generic", "external_ref", "serving_quantity",
 )
 
-# The kcal rate to price a movement with: the article's own kcal_per_base_unit,
-# or lacking that, its product's reference_kcal (spec 7.4) — generic and
-# fresh-produce articles usually carry no rate of their own. Named once here so
-# the SQL call sites (list_batches_for_product, stock_rows) and the Python call
-# sites (resolve_kcal_rate, used by application.add_stock/consume_batch) cannot
-# drift apart.
-KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
+# The kcal rate to price a movement with, in the only order that makes sense:
+# the BATCH's own rate first (lot 3, amendment A2 — a cooked dish's calories
+# belong to that pan of lasagne, not to every future one), then the article's
+# own kcal_per_base_unit, then its product's reference_kcal (spec 7.4) —
+# generic and fresh-produce articles usually carry no rate of their own.
+# Named once here so the SQL call sites (list_batches_for_product, stock_rows)
+# and the Python call sites (resolve_kcal_rate, used by
+# application.add_stock/consume_batch) cannot drift apart.
+#
+# Every query using this MUST join `batch` as `b`, `article` as `a` and
+# `product` as `p`. All three do today.
+KCAL_RATE_SQL = (
+    "COALESCE(b.kcal_per_base_unit, a.kcal_per_base_unit, p.reference_kcal)"
+)
 
-# The eight macro rates, read straight off the article. Unlike the kcal rate
-# above, there is NO product-level fallback: `product.reference_kcal` exists
-# because a generic article (loose apples) still has a known calorie count,
-# but nobody maintains a reference protein content per product. No value on
-# the article means no value, and the movement freezes NULL.
-MACRO_RATE_SQL = ", ".join(f"a.{column}" for column in MACRO_COLUMNS)
+# The eight macro rates: the batch's own value when it has one, the article's
+# otherwise. Unlike the kcal rate above, there is NO product-level fallback:
+# `product.reference_kcal` exists because a generic article (loose apples)
+# still has a known calorie count, but nobody maintains a reference protein
+# content per product. No value on either means no value, and the movement
+# freezes NULL.
+#
+# The cascade is per COLUMN, not per row: a dish whose protein content is
+# known and whose fibre content is not must read the known protein off the
+# batch and still fall through to the article for the fibre. A row-level
+# choice would throw away eight known values to punish one missing one.
+# And COALESCE only skips NULL, never 0.0 — a dish measured at zero salt
+# says zero, it does not say "ask the article".
+MACRO_RATE_SQL = ", ".join(
+    f"COALESCE(b.{column}, a.{column}) AS {column}" for column in MACRO_COLUMNS
+)
 
+# The batch's OWN columns, spelled out, MINUS the nine nutrition ones.
+#
 # Lot 3 (amendment A2) gave `batch` its own kcal_per_base_unit and eight macro
-# columns, so `batch` and `article` now share those nine names. `b.*` used to
-# be safe to combine with KCAL_RATE_SQL/MACRO_RATE_SQL because the names never
-# collided; now sqlite3.Row resolves a name to its FIRST matching column, so
-# `b.*`'s own (still-unused, always-NULL-today) kcal_per_base_unit/macros would
-# silently shadow the resolved article rate that comes right after it in the
-# SELECT list. Spelling out batch's columns instead of `b.*` keeps the rate
-# resolution the only source of truth for those nine names, exactly as before
-# lot 3 — using the batch's own nutrition (when a later lot starts writing it)
-# is a resolution-order decision for that lot to make, not a side effect of
-# this migration's column names.
+# columns, so `batch` and `article` now share those nine names. `SELECT b.*`
+# used to be safe next to KCAL_RATE_SQL/MACRO_RATE_SQL because the names never
+# collided; now the row would carry each of those names TWICE and
+# `dict(sqlite3.Row)` keeps the FIRST — the raw batch column, ahead of the
+# resolved cascade. Every calorie in the stock would read NULL, with no
+# exception raised and no test the wiser.
+#
+# So the batch's nutrition never travels under its own name: it reaches
+# callers only through the cascade above, which already reads it first. A
+# test forbids `SELECT b.*` across the component so this cannot come back.
 BATCH_COLUMNS_SQL = (
     "b.id, b.article_id, b.location_id, b.remaining, b.initial, b.best_before,"
     " b.entered_at, b.opened_at, b.price_per_base_unit, b.session_id, b.closed_at"
@@ -146,16 +166,36 @@ def get_article(conn, article_id: int) -> dict[str, Any] | None:
     return _row(conn.execute("SELECT * FROM article WHERE id = ?", (article_id,)).fetchone())
 
 
-def resolve_kcal_rate(conn, article: dict[str, Any]) -> float | None:
-    """The kcal rate to price a movement with (spec 7.4): the article's own
-    kcal_per_base_unit, or lacking that, its product's reference_kcal. Python-side
-    twin of KCAL_RATE_SQL, for call sites that already hold the article row in
-    hand instead of joining kcal in SQL (application.add_stock/consume_batch)."""
+def resolve_kcal_rate(conn, article: Mapping[str, Any],
+                      batch: Mapping[str, Any] | None = None) -> float | None:
+    """The kcal rate to price a movement with: the batch's own rate (lot 3),
+    then the article's own kcal_per_base_unit, then its product's
+    reference_kcal (spec 7.4). Python-side twin of KCAL_RATE_SQL, for call
+    sites that already hold their rows in hand instead of joining kcal in SQL
+    (application.add_stock/consume_batch). The two must always agree."""
+    if batch is not None and batch["kcal_per_base_unit"] is not None:
+        return batch["kcal_per_base_unit"]
     rate = article["kcal_per_base_unit"]
     if rate is not None:
         return rate
     product = get_product(conn, article["product_id"])
     return product["reference_kcal"] if product else None
+
+
+def batch_macro_rates(batch: Mapping[str, Any] | None,
+                      article: Mapping[str, Any]) -> dict[str, float | None]:
+    """The eight macro rates, batch first then article, column by column.
+    Python-side twin of MACRO_RATE_SQL.
+
+    `is not None` and not a truth test: a macro measured at 0.0 is a
+    measurement, and falling through to the article on a zero would quietly
+    replace "this dish has no salt" with "this ingredient has some".
+    """
+    return {
+        column: (batch[column] if batch is not None
+                 and batch[column] is not None else article[column])
+        for column in MACRO_COLUMNS
+    }
 
 
 def find_article_by_barcode(conn, code: str) -> dict[str, Any] | None:
@@ -258,12 +298,29 @@ def latest_price(conn, article_id: int) -> float | None:
 
 def insert_batch(conn, *, article_id: int, location_id: int, quantity: float,
                  entered_at: str, best_before: str | None = None,
-                 price_per_base_unit: float | None = None) -> int:
-    return _insert(conn, "batch", {
+                 price_per_base_unit: float | None = None,
+                 nutrition: Mapping[str, float | None] | None = None) -> int:
+    """Open a batch. `nutrition` freezes this batch's own values (lot 3): a pan
+    of lasagne knows its calories, and the next pan made from the same recipe
+    with different tomatoes will know its own.
+
+    Filtered on NUTRITION_COLUMNS on the way in. The mapping is computed from a
+    recipe, not typed into a form, but an unknown key here would reach an
+    INSERT and could overwrite `remaining` — the filter is what makes the
+    parameter safe to hand a computed dict.
+    """
+    values = {
         "article_id": article_id, "location_id": location_id,
         "remaining": quantity, "initial": quantity, "entered_at": entered_at,
         "best_before": best_before, "price_per_base_unit": price_per_base_unit,
-    })
+    }
+    if nutrition:
+        values.update({
+            column: nutrition[column]
+            for column in NUTRITION_COLUMNS
+            if column in nutrition
+        })
+    return _insert(conn, "batch", values)
 
 
 def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:

@@ -1,6 +1,6 @@
 import pytest
 
-from custom_components.home_stock.const import MACRO_COLUMNS
+from custom_components.home_stock.const import MACRO_COLUMNS, NUTRITION_COLUMNS
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
@@ -290,11 +290,16 @@ def test_no_query_selects_the_whole_batch_row_next_to_a_resolved_rate():
     from pathlib import Path
 
     component = Path(repo.__file__).resolve().parent.parent
-    offenders = [
-        path.relative_to(component).as_posix()
-        for path in component.rglob("*.py")
-        if "SELECT b.*" in path.read_text(encoding="utf-8")
-    ]
+    offenders = []
+    for path in component.rglob("*.py"):
+        for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1):
+            # Les commentaires ont le droit de nommer le piège — c'est même là
+            # qu'il est expliqué. Seul le SQL réel est interdit.
+            if line.lstrip().startswith("#"):
+                continue
+            if "SELECT b.*" in line:
+                offenders.append(f"{path.relative_to(component).as_posix()}:{number}")
     assert offenders == []
 
 
@@ -307,3 +312,139 @@ def test_list_batches_for_product_still_resolves_kcal_after_m004(seeded_conn):
     seeded_conn.execute("UPDATE article SET kcal_per_base_unit = 3.5 WHERE id = 1")
     [row] = repo.list_batches_for_product(seeded_conn, 1)
     assert row["kcal_per_base_unit"] == 3.5
+
+
+# --- lot 3 (amendement A2) : le lot peut porter sa propre nutrition ---------
+
+def _batch(conn, *, article_kcal=None, product_reference_kcal=None,
+           nutrition=None, article_macros=None):
+    """Un produit, un article et un lot ouvert, avec la nutrition qu'on veut
+    à chacun des trois étages de la cascade. Rend l'identifiant du lot.
+
+    Écrit dans une base neuve, donc product_id == article_id == 1 : les tests
+    de ce fichier tiennent déjà cette convention (voir `seeded_conn`).
+    """
+    repo.insert_location(conn, name="Placard", kind="pantry")
+    product_id = repo.insert_product(conn, name="Article", base_unit="g")
+    if product_reference_kcal is not None:
+        repo.update_product_fields(
+            conn, product_id, {"reference_kcal": product_reference_kcal})
+    article_id = repo.insert_article(conn, product_id=product_id)
+    fields = dict(article_macros or {})
+    if article_kcal is not None:
+        fields["kcal_per_base_unit"] = article_kcal
+    if fields:
+        repo.update_article_fields(conn, article_id, fields)
+    return repo.insert_batch(
+        conn, article_id=article_id, location_id=1, quantity=500.0,
+        entered_at="2026-08-21T18:00:00", nutrition=nutrition)
+
+
+def test_the_cascade_reads_the_article_when_the_batch_says_nothing(conn):
+    """Tout ce qui existe se lit exactement comme avant."""
+    _batch(conn, article_kcal=2.5)
+    assert repo.list_batches_for_product(conn, 1)[0]["kcal_per_base_unit"] == 2.5
+
+
+def test_the_cascade_falls_back_to_the_product(conn):
+    _batch(conn, article_kcal=None, product_reference_kcal=0.52)
+    assert repo.list_batches_for_product(conn, 1)[0]["kcal_per_base_unit"] == 0.52
+
+
+def test_the_batch_wins_over_the_article_and_the_product(conn):
+    """Deux cuissons de la même recette n'ont pas la même valeur : l'article
+    est partagé, le lot ne l'est pas."""
+    _batch(conn, article_kcal=2.5, product_reference_kcal=0.52,
+           nutrition={"kcal_per_base_unit": 180.0, "proteins": 9.0})
+    row = repo.list_batches_for_product(conn, 1)[0]
+    assert row["kcal_per_base_unit"] == 180.0
+    assert row["proteins"] == 9.0
+
+
+def test_a_batch_null_macro_still_reads_the_article(conn):
+    """La cascade est par COLONNE, pas par ligne."""
+    _batch(conn, nutrition={"kcal_per_base_unit": 180.0},
+           article_macros={"proteins": 0.09})
+    row = repo.list_batches_for_product(conn, 1)[0]
+    assert row["kcal_per_base_unit"] == 180.0
+    assert row["proteins"] == 0.09
+
+
+def test_the_batch_star_no_longer_shadows_the_cascade(conn):
+    """Régression : `SELECT b.*` ramenait deux colonnes du même nom, et
+    dict(sqlite3.Row) gardait la première — donc le NULL du lot."""
+    _batch(conn, article_kcal=2.5)
+    row = repo.list_batches_for_product(conn, 1)[0]
+    assert row["kcal_per_base_unit"] == 2.5
+    assert list(row).count("kcal_per_base_unit") == 1
+
+
+def test_stock_rows_reads_the_same_cascade(conn):
+    _batch(conn, nutrition={"kcal_per_base_unit": 180.0})
+    assert repo.stock_rows(conn)[0]["kcal_per_base_unit"] == 180.0
+
+
+def test_insert_batch_freezes_the_nutrition_it_is_given(conn):
+    batch_id = _batch(conn, nutrition={"kcal_per_base_unit": 180.0, "salt": 0.9})
+    row = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert row["kcal_per_base_unit"] == 180.0
+    assert row["salt"] == 0.9
+    assert row["fiber"] is None      # ce qui n'est pas dit reste inconnu, pas zéro
+
+
+def test_insert_batch_without_nutrition_is_unchanged(conn):
+    batch_id = _batch(conn)
+    row = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert all(row[column] is None for column in NUTRITION_COLUMNS)
+
+
+def test_insert_batch_ignores_a_key_that_is_not_a_nutrient(conn):
+    """`nutrition` vient d'un calcul de recette, pas d'un formulaire : on le
+    filtre sur les neuf colonnes connues plutôt que de laisser une clé
+    inventée atteindre un INSERT."""
+    batch_id = _batch(conn, nutrition={"kcal_per_base_unit": 180.0, "remaining": 0.0})
+    row = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert row["kcal_per_base_unit"] == 180.0
+    assert row["remaining"] == 500.0          # la quantité n'a pas été écrasée
+
+
+def test_resolve_kcal_rate_prefers_the_batch(conn):
+    """Le pendant Python de la cascade SQL, pour les appelants qui tiennent
+    déjà leurs lignes en main. Les deux doivent dire la même chose."""
+    _batch(conn, article_kcal=2.5, product_reference_kcal=0.52,
+           nutrition={"kcal_per_base_unit": 180.0})
+    article = repo.get_article(conn, 1)
+    batch = conn.execute("SELECT * FROM batch WHERE id = 1").fetchone()
+    assert repo.resolve_kcal_rate(conn, article, batch=batch) == 180.0
+    assert repo.resolve_kcal_rate(conn, article) == 2.5
+
+
+def test_resolve_kcal_rate_falls_through_a_silent_batch(conn):
+    _batch(conn, article_kcal=2.5)
+    article = repo.get_article(conn, 1)
+    batch = conn.execute("SELECT * FROM batch WHERE id = 1").fetchone()
+    assert repo.resolve_kcal_rate(conn, article, batch=batch) == 2.5
+
+
+def test_batch_macro_rates_is_a_per_column_cascade(conn):
+    # Des lignes complètes, comme celles que les appelants tiennent vraiment :
+    # une colonne absente doit rester une KeyError, pas devenir un None muet.
+    batch = {column: None for column in MACRO_COLUMNS} | {"proteins": 9.0}
+    article = {column: 0.5 for column in MACRO_COLUMNS} | {"proteins": 0.09,
+                                                           "salt": 0.001}
+    rates = repo.batch_macro_rates(batch, article)
+    assert rates["proteins"] == 9.0        # le lot l'emporte
+    assert rates["salt"] == 0.001          # le lot se tait, l'article répond
+    assert set(rates) == set(MACRO_COLUMNS)
+
+
+def test_batch_macro_rates_without_a_batch_reads_the_article(conn):
+    article = {column: 0.5 for column in MACRO_COLUMNS}
+    assert repo.batch_macro_rates(None, article) == article
+
+
+def test_a_batch_zero_is_not_a_batch_silence(conn):
+    """`0.0` est une mesure, `NULL` est une absence. Un plat sans sel titre
+    zéro gramme de sel ; il ne titre pas « demande à l'article »."""
+    _batch(conn, nutrition={"salt": 0.0}, article_macros={"salt": 0.001})
+    assert repo.list_batches_for_product(conn, 1)[0]["salt"] == 0.0
