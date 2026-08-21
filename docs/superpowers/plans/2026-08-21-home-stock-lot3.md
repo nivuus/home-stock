@@ -702,7 +702,7 @@ def per_part_values(frozen: Sequence[Mapping[str, float | None]],
 3. `plan_decrement` ne lève **jamais** `InsufficientStock`. Elle le voit venir : quand le besoin dépasse le disponible, elle rend `status="short"`, `allocations` réduites au disponible, et laisse l'arbitrage à l'appelant. C'est la simulation, et une simulation qui lève ne montre rien.
 4. `per_part_values` traite **chaque clé indépendamment** : si un seul élément de `frozen` porte `None` sur une clé, le résultat porte `None` **pour cette clé**. Sinon, somme ÷ `parts`. Aucun arrondi.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/domain/test_recipes.py`. Le module est pur : aucun `hass`, aucun SQLite, aucun réseau. Il se teste en `pytest` nu.
 
@@ -861,21 +861,21 @@ def test_zero_parts_is_refused_rather_than_dividing():
         per_part_values([{"kcal": 1.0}], 0)
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/domain/test_recipes.py -q`
 Expected: FAIL — `ModuleNotFoundError: …domain.recipes`
 
-- [ ] **Step 3: Écrire `domain/recipes.py`**
+- [x] **Step 3: Écrire `domain/recipes.py`**
 
 Pur, docstrings en anglais, messages d'erreur en français (ils traversent `messages.py`). `plan_decrement` alloue en séquence sur une **copie mutable** du disponible par produit, pour que deux lignes du même produit ne se servent pas deux fois du même lot. `display_amount` pluralise en français (`≥ 2` → pluriel), replie sur `format_quantity` quand il n'y a ni mesure ni conditionnement, et sur `raw_text` quand il n'y a pas de quantité du tout.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/domain/test_recipes.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/recipes.py tests/domain/test_recipes.py
