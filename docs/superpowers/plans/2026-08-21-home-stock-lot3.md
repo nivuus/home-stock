@@ -2053,7 +2053,7 @@ git commit -m "feat: fourteen websocket commands for recipes, meals and validati
 
 Un message non reconnu retombe sur la phrase générique plutôt que d'exposer un `repr` Python à quelqu'un qui a les mains dans la farine.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # tests/test_services_meals.py
@@ -2100,14 +2100,14 @@ def test_no_new_pattern_shadows_an_older_one():
     messages déjà couverts et vérifie que leur code n'a pas changé."""
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_services_meals.py tests/test_messages.py -q   # FAIL puis PASS
 ./scripts/test.sh -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/services.py custom_components/home_stock/services.yaml custom_components/home_stock/messages.py tests/test_services_meals.py tests/test_messages.py
 git commit -m "feat: five meal services, no weaker than the websocket surface"

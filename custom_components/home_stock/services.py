@@ -13,7 +13,12 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .application import PartsError
-from .const import CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
+from .const import (
+    CONSUME_REASONS,
+    DOMAIN,
+    MEAL_SLOT_KEYS,
+    REASON_CONSUMPTION,
+)
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
@@ -98,6 +103,76 @@ RESYNC_SCHEMA = vol.Schema(vol.All(
     },
     _at_least_one_resync_target,
 ))
+
+
+# --- lot 3 : recettes, planning, repas -------------------------------------
+#
+# The rule that governs these five: NEITHER surface may be the weaker one.
+# What the websocket refuses, the service refuses too. A service call comes
+# from an automation or from voice, and it is every bit as capable of writing
+# four portions out of three into an append-only journal.
+#
+# So the same shared validators are used here as in `websocket_recipes`:
+# `finite_float` then a strict bound for servings and portions, `parts_count`
+# for the parts, `iso_date` for the day, a `vol.In` on the slot constant.
+
+
+def _positive_float(value: Any) -> float:
+    number = finite_float(value)
+    if number <= 0:
+        raise vol.Invalid(f"Le nombre doit être supérieur à zéro (reçu : {number}).")
+    return number
+
+
+def _not_negative_float(value: Any) -> float:
+    number = finite_float(value)
+    if number < 0:
+        raise vol.Invalid(f"Le nombre ne peut pas être négatif (reçu : {number}).")
+    return number
+
+
+def _meal_day(value: Any) -> str:
+    day = iso_date(value)
+    if day is None:
+        raise vol.Invalid("Date attendue au format AAAA-MM-JJ.")
+    return day
+
+
+PLAN_MEAL_SCHEMA = vol.Schema({
+    vol.Required("day"): _meal_day,
+    vol.Required("slot_key"): vol.In(MEAL_SLOT_KEYS),
+    vol.Optional("recipe_id"): _id,
+    vol.Optional("product_id"): _id,
+    vol.Optional("amount"): _positive_float,
+    vol.Optional("note"): bounded_text,
+    vol.Optional("servings", default=1.0): _positive_float,
+})
+
+VALIDATE_MEAL_SCHEMA = vol.Schema({
+    vol.Required("meal_id"): _id,
+    vol.Required("portions_eaten"): _not_negative_float,
+    vol.Optional("servings"): _positive_float,
+    vol.Optional("parts_total"): parts_count,
+    vol.Optional("parts_mine"): parts_count,
+    vol.Optional("skip_ingredient_ids", default=[]): vol.All([_id],
+                                                             vol.Length(max=200)),
+    # Simulated by DEFAULT, like import_grocy_catalog since lot 0: a service
+    # that decrements a stock must not do so on the first exploratory call
+    # from the developer tools.
+    vol.Optional("dry_run", default=True): cv.boolean,
+})
+
+IMPORT_RECIPE_SCHEMA = vol.Schema({
+    vol.Optional("source_ref"): bounded_text,
+    vol.Optional("query"): bounded_text,
+})
+
+ADAPT_RECIPE_SCHEMA = vol.Schema({vol.Required("recipe_id"): _id})
+
+QUERY_MEALS_SCHEMA = vol.Schema({
+    vol.Required("start"): _meal_day,
+    vol.Required("end"): _meal_day,
+})
 
 
 def _entry(hass: HomeAssistant):
@@ -419,4 +494,99 @@ def async_register_services(hass: HomeAssistant) -> None:
         }),
         supports_response=SupportsResponse.ONLY,
     )
+    # --- lot 3 -------------------------------------------------------------
+
+    async def plan_meal(call: ServiceCall) -> None:
+        """Put a meal on a day, from YAML or from voice."""
+        runtime = _entry(hass).runtime_data
+        await _run(hass, partial(
+            runtime.manager.plan_meal, day=call.data["day"],
+            slot_key=call.data["slot_key"], recipe_id=call.data.get("recipe_id"),
+            product_id=call.data.get("product_id"), amount=call.data.get("amount"),
+            note=call.data.get("note"), servings=call.data["servings"]))
+        await runtime.coordinator.async_request_refresh()
+
+    async def validate_meal(call: ServiceCall) -> ServiceResponse:
+        """Cook then eat — but SIMULATE unless `dry_run: false` is passed."""
+        runtime = _entry(hass).runtime_data
+        result = await _run(hass, partial(
+            runtime.manager.validate_meal, call.data["meal_id"],
+            portions_eaten=call.data["portions_eaten"],
+            servings=call.data.get("servings"),
+            parts_total=call.data.get("parts_total"),
+            parts_mine=call.data.get("parts_mine"),
+            skip_ingredient_ids=call.data["skip_ingredient_ids"],
+            dry_run=call.data["dry_run"]))
+        if not call.data["dry_run"]:
+            await runtime.coordinator.async_request_refresh()
+        return result
+
+    async def import_recipe(call: ServiceCall) -> ServiceResponse:
+        """Import one card, named by reference or found by a search.
+
+        Calls the SAME orchestration the websocket does
+        (`websocket_recipes.async_import_recipe`), so the two surfaces cannot
+        drift into importing the same card differently. The only difference is
+        upstream: this one may resolve a free-text search into a reference
+        first, which the panel does in two steps of its own.
+        """
+        from .websocket_recipes import async_import_recipe
+
+        runtime = _entry(hass).runtime_data
+        source_ref = call.data.get("source_ref")
+        if not source_ref:
+            source = runtime.recipe_source
+            hits = await source.search(call.data.get("query") or "") if source else []
+            if not hits:
+                return {"imported": False,
+                        "message": "Aucune recette trouvée à la source."}
+            source_ref = hits[0].source_ref
+        result = await async_import_recipe(hass, runtime, source_ref)
+        if result is None:
+            return {"imported": False,
+                    "message": "Cette recette est introuvable à la source."}
+        await runtime.coordinator.async_request_refresh()
+        return {"imported": True, **result}
+
+    async def adapt_recipe(call: ServiceCall) -> None:
+        """Re-run the adaptation of a recipe imported without an agent."""
+        from .websocket_recipes import async_import_recipe
+
+        runtime = _entry(hass).runtime_data
+        recipe = await _run(hass, partial(
+            repo.get_recipe, runtime.manager.db.read(), call.data["recipe_id"]))
+        if recipe is None:
+            raise HomeAssistantError(
+                f"Recette {call.data['recipe_id']} introuvable.")
+        if not recipe["source_ref"]:
+            raise HomeAssistantError(
+                "Cette recette n'a pas été importée : il n'y a rien à réadapter.")
+        await async_import_recipe(hass, runtime, recipe["source_ref"])
+        await runtime.coordinator.async_request_refresh()
+
+    async def query_meals(call: ServiceCall) -> ServiceResponse:
+        """What is planned over a range. The counterpart of query_stock.
+
+        A response service rather than an entity: this is what will answer
+        "what are we eating tonight?" at lot 6, without creating one entity
+        per meal — the same reasoning lot 0 applied to query_stock.
+        """
+        runtime = _entry(hass).runtime_data
+        meals = await _run(hass, partial(
+            runtime.manager.list_meals, call.data["start"], call.data["end"]))
+        return {"meals": meals}
+
     hass.services.async_register(DOMAIN, "resync_off", resync_off, schema=RESYNC_SCHEMA)
+    hass.services.async_register(DOMAIN, "plan_meal", plan_meal,
+                                 schema=PLAN_MEAL_SCHEMA)
+    hass.services.async_register(DOMAIN, "validate_meal", validate_meal,
+                                 schema=VALIDATE_MEAL_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(DOMAIN, "import_recipe", import_recipe,
+                                 schema=IMPORT_RECIPE_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(DOMAIN, "adapt_recipe", adapt_recipe,
+                                 schema=ADAPT_RECIPE_SCHEMA)
+    hass.services.async_register(DOMAIN, "query_meals", query_meals,
+                                 schema=QUERY_MEALS_SCHEMA,
+                                 supports_response=SupportsResponse.ONLY)

@@ -48,6 +48,69 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
     (re.compile(r"^parts_mine must be between 0 and parts_total$"), "invalid_value",
      lambda m: "Les parts sont incohérentes : on ne mange pas plus de parts "
                "qu'il n'en a été servi."),
+
+    # --- lot 3 : recettes, planning, repas ---------------------------------
+    #
+    # Added at the END, never in the middle: the FIRST pattern that matches
+    # wins, so inserting above would silently change which sentence an older
+    # message produces. A test replays every message the earlier lots covered
+    # to prove none of these shadows one.
+    #
+    # The English left-hand sides are the messages `application.py` actually
+    # raises, not the ones the plan sketched: a regex for a sentence nothing
+    # raises is dead code that reads like a guarantee.
+    (re.compile(r"^unknown recipe (\d+)$"), "not_found",
+     lambda m: f"Recette {m.group(1)} introuvable."),
+    (re.compile(r"^unknown meal (\d+)$"), "not_found",
+     lambda m: f"Repas {m.group(1)} introuvable."),
+    (re.compile(r"^unknown ingredient line (\d+)$"), "not_found",
+     lambda m: f"Ligne d'ingrédient {m.group(1)} introuvable."),
+    (re.compile(r"^unknown slot '(.+?)'; expected one of .+$"), "invalid_value",
+     lambda m: f"Créneau inconnu : {m.group(1)}. "
+               "Attendu : petit-déjeuner, déjeuner, dîner ou en-cas."),
+    (re.compile(r"^unknown match state '(.+?)'; expected one of .+$"), "invalid_value",
+     lambda m: f"État d'appariement inconnu : {m.group(1)}."),
+    (re.compile(r"^unknown recipe source '(.+?)'; expected one of .+$"), "invalid_value",
+     lambda m: f"Source de recette inconnue : {m.group(1)}."),
+    (re.compile(r"^meal (\d+) is already done$"), "invalid_value",
+     lambda m: "Ce repas a déjà été validé. Un repas validé ne se déplace pas "
+               "et ne se revalide pas : ses mouvements portent une date figée."),
+    (re.compile(r"^recipe (\d+) has already been cooked$"), "invalid_value",
+     lambda m: "Cette recette a servi à un repas validé : désactivez-la plutôt "
+               "que de la supprimer, pour que le journal reste lisible."),
+    (re.compile(r"^a '(.+?)' match needs a product; .+$"), "invalid_field",
+     lambda m: "Choisissez un produit avant de confirmer cet ingrédient."),
+    (re.compile(r"^meal (\d+) cannot be validated: (.+)$"), "insufficient_stock",
+     lambda m: "Il manque du stock pour au moins un ingrédient : ajustez la "
+               "quantité ou retirez ces lignes avant de valider."),
+    (re.compile(r"^portions_eaten (.+) exceeds the (.+) parts this meal produces$"),
+     "invalid_value",
+     lambda m: "On ne mange pas plus de parts que le plat n'en fait."),
+    (re.compile(r"^portions_eaten must not be negative, got (.+)$"), "invalid_value",
+     lambda m: "Le nombre de parts mangées ne peut pas être négatif."),
+    (re.compile(r"^portions_eaten must be a real number, got (.+)$"), "invalid_value",
+     lambda m: "Le nombre de parts mangées doit être un nombre."),
+    (re.compile(r"^servings must be positive, got (.+)$"), "invalid_value",
+     lambda m: "Le nombre de parts doit être supérieur à zéro."),
+    (re.compile(r"^servings must be a real number, got (.+)$"), "invalid_value",
+     lambda m: "Le nombre de parts doit être un nombre."),
+    (re.compile(r"^a recipe serves at least one, got (.+)$"), "invalid_value",
+     lambda m: "Une recette est prévue pour au moins une part."),
+    (re.compile(r"^a recipe cannot have more than (\d+) (steps|ingredients), got .+$"),
+     "invalid_value",
+     lambda m: f"Une recette ne peut pas dépasser {m.group(1)} "
+               + ("étapes." if m.group(2) == "steps" else "ingrédients.")),
+    (re.compile(r"^a meal is exactly one of a recipe, a product or a note, got (\d+)$"),
+     "invalid_value",
+     lambda m: "Un repas est soit une recette, soit un produit, soit une note — "
+               "jamais deux à la fois, jamais aucun."),
+    (re.compile(r"^invalid day '(.+?)'; expected YYYY-MM-DD$"), "invalid_value",
+     lambda m: f"Date invalide : {m.group(1)}. Format attendu : AAAA-MM-JJ."),
+    (re.compile(r"^unknown reason '(.+?)'; expected one of .+$"), "invalid_value",
+     lambda m: f"Motif de mouvement inconnu : {m.group(1)}."),
+    (re.compile(r"^no location to put the dish in$"), "invalid_value",
+     lambda m: "Aucun emplacement où ranger le plat : déclarez au moins un "
+               "emplacement avant de valider un repas."),
 )
 
 GENERIC_CODE: Final = "invalid_value"
