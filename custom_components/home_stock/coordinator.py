@@ -84,9 +84,15 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # that gets it wrong twice a year, silently. See
         # async_resolve_time_zone for the guard.
         tz = await async_resolve_time_zone(self.hass)
-        data = await self.hass.async_add_executor_job(
-            partial(self.manager.summary, expiration_alert_days=days, tz=tz)
-        )
+        # Both reads happen in ONE executor job. A refresh runs every fifteen
+        # minutes; two round trips to the executor for it would be exactly
+        # twice as many as it needs.
+        def _read() -> dict[str, Any]:
+            data = self.manager.summary(expiration_alert_days=days, tz=tz)
+            data["meals"] = self.manager.meal_summary(tz=tz)
+            return data
+
+        data = await self.hass.async_add_executor_job(_read)
         self._schedule_food_day_rollover(tz)
         return data
 

@@ -1874,7 +1874,7 @@ git commit -m "feat: calendar.home_stock_meals, creatable, movable and deletable
 
 **Décision reprise de la spec, et elle vaut d'être répétée dans le code :** `missing_ingredients` est **un compteur, pas une liste cochable**. Une entité `todo` serait déjà la liste de courses, qui est le lot 4 — y cocher signifierait « acheté », donc une session, un prix, un rangement. **Aucune entité `event` pour la validation d'un repas** non plus : une validation est un geste humain qui vient d'avoir lieu sur l'écran, pas un fait que rien n'observe.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_the_three_sensors_exist_with_french_names(hass, setup_entry): ...
@@ -1903,14 +1903,14 @@ async def test_a_leftover_batch_fires_the_expiration_event(hass, setup_entry):
     reste comme n'importe quel autre lot."""
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q    # FAIL puis PASS
 ./scripts/test.sh -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/coordinator.py custom_components/home_stock/sensor.py custom_components/home_stock/translations tests/test_meal_sensors.py tests/test_entities.py
 git commit -m "feat: next meal, recipe and missing-ingredient sensors"

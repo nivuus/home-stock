@@ -74,6 +74,15 @@
       },
       "cost_waste_total": {
         "name": "Cost of waste"
+      },
+      "next_meal": {
+        "name": "Next meal"
+      },
+      "recipes": {
+        "name": "Recipes"
+      },
+      "missing_ingredients": {
+        "name": "Missing ingredients"
       }
     },
     "binary_sensor": {

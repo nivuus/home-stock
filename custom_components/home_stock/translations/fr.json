@@ -74,6 +74,15 @@
       },
       "cost_waste_total": {
         "name": "Coût du gaspillage"
+      },
+      "next_meal": {
+        "name": "Prochain repas"
+      },
+      "recipes": {
+        "name": "Recettes"
+      },
+      "missing_ingredients": {
+        "name": "Ingrédients manquants"
       }
     },
     "binary_sensor": {
