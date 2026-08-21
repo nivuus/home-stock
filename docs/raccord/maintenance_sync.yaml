@@ -1,0 +1,133 @@
+# Copie de référence du bloc `maintenance_sync_taches`, avec le raccord vers
+# `home_stock.maintenance_plan` et le drapeau `peut_fermer`.
+#
+# CE FICHIER N'EST PAS INSTALLÉ. Il est livré et testé ici ; le coller dans
+# config/automations.yaml est un geste du propriétaire (voir README.md).
+#
+# Ce que `peut_fermer` empêche, en une phrase : sans lui, une indisponibilité
+# de home_stock ferait disparaître les items de pile de `items` ET de `keep`,
+# `a_fermer` les contiendrait toutes, et UNE SEULE synchronisation à 5 h 05
+# refermerait les quatorze tâches de pile de la maison — chacune se rouvrant à
+# la suivante avec l'annonce de Bleuenn qui va avec.
+#
+# Le drapeau regarde `complete`, et pas seulement la présence de la réponse :
+# l'intégration peut être chargée et répondre alors que sa base est illisible
+# (verrou WAL, disque plein). `get('complete', false)` désarme aussi le jour où
+# une version du service ne rendrait pas la clé — le défaut d'un garde-fou doit
+# être « prudent », jamais « permissif ».
+#
+# Pourquoi le service est appelé DANS un `if` et pas seul avec
+# `continue_on_error` : `continue_on_error` ne rattrape PAS « service
+# introuvable ». Home Assistant traite une action inexistante comme une faute
+# de configuration, pas comme une erreur d'exécution, et interrompt le script à
+# cet endroit — mesuré, pas supposé. La réconciliation entière s'arrêtait donc
+# dès que `home_stock` était déchargé : elle ne fermait rien (tant mieux) mais
+# elle n'ajoutait ni ne rafraîchissait plus rien non plus, et le macro cessait
+# d'alimenter todo.maintenance en silence.
+#
+# Le garde-fou interroge `sensor.home_stock_batteries_low`, une entité que
+# l'intégration crée et qui disparaît de la machine à états quand l'entrée est
+# déchargée. L'appel est alors simplement sauté : `stock` reste indéfini,
+# `peut_fermer` est faux, et l'ajout comme le rafraîchissement continuent sur
+# le plan du macro seul. `continue_on_error` reste sur l'appel pour le cas
+# restant — l'intégration est bien là, mais le service lève.
+#
+# Cette entité est nommée en dur ici : la renommer désarmerait silencieusement
+# le plan des piles pour toujours. Un test Python le verrouille en vérifiant
+# que l'entité citée par ce fichier existe bien après le démarrage de
+# l'intégration.
+- id: maintenance_sync_taches
+  alias: Maintenance - Synchronisation liste de tâches
+  description: 'Réconcilie todo.maintenance avec l''état réel de la maison chaque heure (et au démarrage
+    HA) : ajoute les tâches dont le seuil d''apparition est franchi, rafraîchit leur description, ferme
+    celles dont la condition a disparu. Les règles des consommables, filtres, plantes et mises à jour
+    restent dans config/custom_templates/maintenance.jinja ; celles des piles viennent de home_stock.maintenance_plan,
+    qui sait aussi s''il reste une rechange au placard. La fermeture n''est ARMÉE que si ce service a
+    répondu et que sa réponse dit complete: true — un plan incomplet a le droit d''ajouter et de rafraîchir,
+    jamais de fermer. Bleuenn n''est prévenue que des NOUVELLES tâches. Créée 2026-07-31, raccordée à
+    home_stock au lot 5.'
+  triggers:
+  - trigger: time_pattern
+    minutes: '5'
+  - trigger: homeassistant
+    event: start
+  conditions: []
+  actions:
+  - variables:
+      plan: '{% from ''maintenance.jinja'' import maintenance_plan %}{{ maintenance_plan() | from_json
+        }}'
+  - action: todo.get_items
+    target:
+      entity_id: todo.maintenance
+    data:
+      status: needs_action
+    response_variable: actuel
+  - if:
+    - condition: template
+      value_template: '{{ states(''sensor.home_stock_batteries_low'') not in [''unknown'',
+        ''unavailable''] }}'
+    then:
+    - action: home_stock.maintenance_plan
+      continue_on_error: true
+      data:
+        extra_items: '{{ plan[''items''] }}'
+        extra_keep: '{{ plan[''keep''] }}'
+      response_variable: stock
+  - variables:
+      fusionne: '{{ stock | default(none, true) }}'
+      voulu: '{{ fusionne[''items''] if fusionne else plan[''items''] }}'
+      garde: '{{ fusionne[''keep''] if fusionne else plan[''keep''] }}'
+      peut_fermer: '{{ fusionne is not none and fusionne.get(''complete'', false) }}'
+  - variables:
+      a_ajouter: '{{ voulu | rejectattr(''summary'', ''in'', presents) | list }}'
+      a_fermer: '{{ actuel[''todo.maintenance''][''items''] | rejectattr(''summary'', ''in'', garde) |
+        map(attribute=''summary'') | list }}'
+      a_rafraichir: "{%- set ns = namespace(l=[]) -%} {%- for it in voulu if it.summary in presents -%}\n\
+        \  {%- set cur = actuel['todo.maintenance']['items'] | selectattr('summary', 'eq', it.summary)\
+        \ | list | first -%}\n  {%- if (cur.description | default('')) != it.description -%}\n    {%-\
+        \ set ns.l = ns.l + [it] -%}\n  {%- endif -%}\n{%- endfor -%} {{ ns.l }}"
+  - repeat:
+      for_each: '{{ a_ajouter }}'
+      sequence:
+      - action: todo.add_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: '{{ repeat.item.summary }}'
+          description: '{{ repeat.item.description }}'
+  - repeat:
+      for_each: '{{ a_rafraichir }}'
+      sequence:
+      - action: todo.update_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: '{{ repeat.item.summary }}'
+          description: '{{ repeat.item.description }}'
+  - if:
+    - condition: template
+      value_template: '{{ peut_fermer }}'
+    then:
+    - repeat:
+        for_each: '{{ a_fermer }}'
+        sequence:
+        - action: todo.update_item
+          target:
+            entity_id: todo.maintenance
+          data:
+            item: '{{ repeat.item }}'
+            status: completed
+    - action: todo.remove_completed_items
+      target:
+        entity_id: todo.maintenance
+  - if:
+    - condition: template
+      value_template: '{{ a_ajouter | count > 0 }}'
+    then:
+    - action: personas_home.send_event
+      data:
+        text: 'Maintenance maison — {{ a_ajouter | count }} nouvelle(s) tâche(s) ajoutée(s) à la liste
+          : {% for t in a_ajouter %}{{ t.summary }} ({{ t.description }}){% if not loop.last %}, {% endif
+          %}{% endfor %}. Préviens Maxime en une phrase courte et non urgente ; la liste Maintenance dans
+          Home Assistant contient le détail. N''invente rien d''autre.'
+  mode: single
