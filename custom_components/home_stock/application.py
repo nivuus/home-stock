@@ -855,6 +855,13 @@ class StockManager:
             # `product_id` alone is still refused on a built_in battery whose
             # kind is not in the same request, because the kind is in the row.
             merged = {**dict(row), **fields}
+            # SQLite gives `tracked` back as 0/1, and `tracked_flag` refuses
+            # an int on purpose (0/1/"oui" must not stand in for the three
+            # meanings). Normalise the STORED value before merging, or every
+            # update of an already-declared battery is refused for a reason
+            # that has nothing to do with what the caller sent.
+            if "tracked" not in fields and merged.get("tracked") is not None:
+                merged["tracked"] = bool(merged["tracked"])
             check_battery_fields(merged, kind=merged["kind"])
             repo.update_battery_fields(conn, battery_id, fields)
 

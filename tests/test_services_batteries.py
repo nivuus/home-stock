@@ -152,3 +152,45 @@ async def test_the_two_services_are_described_in_services_yaml(hass, setup_entry
         (Path(home_stock.__file__).parent / "services.yaml").read_text(encoding="utf-8"))
     assert "maintenance_plan" in decrit and "record_battery_event" in decrit
     assert "maintenance_sync_taches" in decrit["maintenance_plan"]["description"]
+
+
+async def test_import_grocy_equipment_is_a_dry_run_by_default(hass, setup_entry, tmp_path):
+    """`apply` faux parcourt tout et rapporte tout : c'est le seul contrôle
+    avant une bascule irréversible côté tâches."""
+    import sqlite3
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql"
+    copie = tmp_path / "grocy.db"
+    conn = sqlite3.connect(str(copie))
+    conn.executescript(fixture.read_text(encoding="utf-8"))
+    conn.commit()
+    conn.close()
+
+    integration = await setup_entry()
+    reponse = await hass.services.async_call(
+        DOMAIN, "import_grocy_equipment", {"database_path": str(copie)},
+        blocking=True, return_response=True)
+    assert reponse["applied"] is False
+    assert reponse["equipment"] == 34
+    assert integration.runtime_data.manager.list_batteries() == []
+
+
+async def test_import_grocy_equipment_writes_when_asked(hass, setup_entry, tmp_path):
+    import sqlite3
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql"
+    copie = tmp_path / "grocy.db"
+    conn = sqlite3.connect(str(copie))
+    conn.executescript(fixture.read_text(encoding="utf-8"))
+    conn.commit()
+    conn.close()
+
+    integration = await setup_entry()
+    reponse = await hass.services.async_call(
+        DOMAIN, "import_grocy_equipment",
+        {"database_path": str(copie), "apply": True},
+        blocking=True, return_response=True)
+    assert reponse["applied"] is True
+    assert len(integration.runtime_data.manager.list_equipment()) == 34

@@ -267,3 +267,33 @@ record_battery_event:
       example: "b7e1-…"
       selector:
         text:
+
+import_grocy_equipment:
+  name: Importer les piles et équipements Grocy
+  description: >-
+    Reprend les piles, leurs rechanges et les équipements depuis une COPIE de
+    grocy.db, puis balaye le registre pour proposer une décision sur chaque
+    capteur de pile. Sans `apply`, rien n'est écrit : le rapport est rendu tel
+    qu'un vrai passage le rendrait. À lire avant d'appliquer : `summary_diff`
+    doit être vide et `ok` doit être vrai, sinon la bascule fermerait des
+    tâches et en rouvrirait d'autres.
+  fields:
+    database_path:
+      name: Chemin de la base Grocy
+      description: >-
+        Chemin d'une COPIE de grocy.db, lisible par Home Assistant. Jamais la
+        base de production : l'import ne l'ouvre qu'en lecture seule, mais la
+        copie reste la règle.
+      required: true
+      example: /config/grocy-copie.db
+      selector:
+        text:
+    apply:
+      name: Appliquer
+      description: >-
+        Faux par défaut. Vrai écrit réellement les produits, les piles et les
+        équipements.
+      required: false
+      default: false
+      selector:
+        boolean:

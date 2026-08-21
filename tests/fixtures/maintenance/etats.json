@@ -1,0 +1,663 @@
+[
+  {
+    "entity_id": "sensor.0xa4c1384b6699bc6e_battery",
+    "state": "59",
+    "last_changed": "2026-07-31T16:10:05.787718+00:00",
+    "attributes": {
+      "friendly_name": "Rideau Salon Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.0xa4c1386d02de3c39_battery",
+    "state": "32",
+    "last_changed": "2026-07-31T12:18:55.693662+00:00",
+    "attributes": {
+      "friendly_name": "Rideau Cuisine Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.aqara_smart_lock_u200_lite_batterie",
+    "state": "78",
+    "last_changed": "2026-07-31T13:21:51.906025+00:00",
+    "attributes": {
+      "friendly_name": "Aqara Smart lock U200 Lite Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_battery_level",
+    "state": "100",
+    "last_changed": "2026-07-31T01:48:39.969916+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Battery level",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_current_statistics_area",
+    "state": "38150",
+    "last_changed": "2026-07-31T01:48:39.969825+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Current Statistics Area",
+      "device_class": "area",
+      "unit_of_measurement": "cm²"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_current_statistics_time",
+    "state": "473",
+    "last_changed": "2026-07-31T01:48:39.968946+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Current Statistics Time",
+      "device_class": "duration",
+      "unit_of_measurement": "s"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_error",
+    "state": "No error",
+    "last_changed": "2026-07-31T01:48:39.969868+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Error"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_events",
+    "state": "1",
+    "last_changed": "2026-07-31T01:49:09.999602+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Events"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_main_brush",
+    "state": "16039",
+    "last_changed": "2026-07-31T01:48:39.969531+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Main Brush",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_main_filter",
+    "state": "7039",
+    "last_changed": "2026-07-31T01:48:39.969957+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Main Filter",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_map_segments",
+    "state": "1",
+    "last_changed": "2026-07-31T01:48:39.969996+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Map segments"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_right_brush",
+    "state": "10039",
+    "last_changed": "2026-07-31T01:48:39.969451+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Right Brush",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_sensor_cleaning",
+    "state": "0",
+    "last_changed": "2026-07-31T01:48:39.969241+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Sensor Cleaning",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_status_flag",
+    "state": "none",
+    "last_changed": "2026-07-31T01:48:39.969356+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Status Flag"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_total_statistics_area",
+    "state": "183345100",
+    "last_changed": "2026-07-31T01:48:39.969044+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Area",
+      "device_class": "area",
+      "unit_of_measurement": "cm²"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_total_statistics_count",
+    "state": "672",
+    "last_changed": "2026-07-31T01:48:39.969492+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Count"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_total_statistics_time",
+    "state": "1345624",
+    "last_changed": "2026-07-31T01:48:39.969772+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Time",
+      "device_class": "duration",
+      "unit_of_measurement": "s"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_chambre_wi_fi_configuration",
+    "state": "-61",
+    "last_changed": "2026-07-31T18:37:14.287202+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Wi-Fi configuration",
+      "device_class": "signal_strength",
+      "unit_of_measurement": "dBm"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_battery_level",
+    "state": "100",
+    "last_changed": "2026-07-31T15:34:47.275658+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Battery level",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_current_statistics_area",
+    "state": "148000",
+    "last_changed": "2026-07-31T14:43:46.754667+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Current Statistics Area",
+      "device_class": "area",
+      "unit_of_measurement": "cm²"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_current_statistics_time",
+    "state": "2975",
+    "last_changed": "2026-07-31T14:48:16.497645+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Current Statistics Time",
+      "device_class": "duration",
+      "unit_of_measurement": "s"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_error",
+    "state": "No error",
+    "last_changed": "2026-07-30T19:24:12.429395+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Error"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_events",
+    "state": "1",
+    "last_changed": "2026-07-30T19:24:43.873348+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Events"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_main_brush",
+    "state": "9958",
+    "last_changed": "2026-07-31T14:48:16.325391+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Main Brush",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_main_filter",
+    "state": "8115",
+    "last_changed": "2026-07-31T14:48:16.366467+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Main Filter",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_map_segments",
+    "state": "3",
+    "last_changed": "2026-07-30T19:24:12.441212+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Map segments"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_right_brush",
+    "state": "7155",
+    "last_changed": "2026-07-31T14:48:16.349906+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Right Brush",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_sensor_cleaning",
+    "state": "0",
+    "last_changed": "2026-07-31T18:13:19.806639+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Sensor Cleaning",
+      "device_class": "duration",
+      "unit_of_measurement": "min"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_status_flag",
+    "state": "none",
+    "last_changed": "2026-07-31T14:48:02.056216+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Status Flag"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_total_statistics_area",
+    "state": "241966850",
+    "last_changed": "2026-07-31T14:48:16.466908+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Area",
+      "device_class": "area",
+      "unit_of_measurement": "cm²"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_total_statistics_count",
+    "state": "2286",
+    "last_changed": "2026-07-31T14:48:16.475906+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Count"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_total_statistics_time",
+    "state": "2073825",
+    "last_changed": "2026-07-31T14:48:16.419487+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Total Statistics Time",
+      "device_class": "duration",
+      "unit_of_measurement": "s"
+    }
+  },
+  {
+    "entity_id": "sensor.aspirateur_cuisine_wi_fi_configuration",
+    "state": "-64",
+    "last_changed": "2026-07-31T18:37:20.777183+00:00",
+    "attributes": {
+      "friendly_name": "Aspirateur Wi-Fi configuration",
+      "device_class": "signal_strength",
+      "unit_of_measurement": "dBm"
+    }
+  },
+  {
+    "entity_id": "sensor.bilresa_scroll_wheel_batterie",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:13.923935+00:00",
+    "attributes": {
+      "friendly_name": "BILRESA scroll wheel Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.browser_mod_606bfd06_e19c0286_browser_battery",
+    "state": "100",
+    "last_changed": "2026-07-31T18:33:55.950551+00:00",
+    "attributes": {
+      "friendly_name": "tablette-cuisine Browser battery",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.browser_salon_browser_battery",
+    "state": "100",
+    "last_changed": "2026-07-31T18:29:42.310688+00:00",
+    "attributes": {
+      "friendly_name": "tablette-salon Browser battery",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.brya_battery_level",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:30.325342+00:00",
+    "attributes": {
+      "friendly_name": "brya Battery level",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_batterie",
+    "state": "5",
+    "last_changed": "2026-07-27T14:12:24.312940+00:00",
+    "attributes": {
+      "friendly_name": "Batterie Capteur Salle de Bain",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_batterie_2",
+    "state": "10",
+    "last_changed": "2026-07-29T10:28:45.269955+00:00",
+    "attributes": {
+      "friendly_name": "Batterie Capteur Chambre",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_humain_batterie",
+    "state": "5",
+    "last_changed": "2026-07-27T21:01:02.014453+00:00",
+    "attributes": {
+      "friendly_name": "Batterie Capteur Cuisine",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_humain_humidite",
+    "state": "64",
+    "last_changed": "2026-07-31T18:20:24.293706+00:00",
+    "attributes": {
+      "friendly_name": "Humidité Cuisine",
+      "device_class": "humidity",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_humidite",
+    "state": "65",
+    "last_changed": "2026-07-31T18:17:37.290082+00:00",
+    "attributes": {
+      "friendly_name": "Humidité Salle de Bain",
+      "device_class": "humidity",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.capteur_humidite_2",
+    "state": "57",
+    "last_changed": "2026-07-31T18:22:54.306067+00:00",
+    "attributes": {
+      "friendly_name": "Humidité Chambre",
+      "device_class": "humidity",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.cle_de_la_peugeot_e208_batterie_ble",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:46.311723+00:00",
+    "attributes": {
+      "friendly_name": "Sac Batterie BLE",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.collier_soraya_batterie_ble",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:46.314271+00:00",
+    "attributes": {
+      "friendly_name": "Collier Soraya Batterie BLE",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.eversweet_3_pro_uvc_filtre",
+    "state": "38",
+    "last_changed": "2026-07-30T09:39:40.789356+00:00",
+    "attributes": {
+      "friendly_name": "EVERSWEET 3 PRO (UVC) Filtre",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.fenetre_c_batterie",
+    "state": "68",
+    "last_changed": "2026-07-30T12:48:50.128218+00:00",
+    "attributes": {
+      "friendly_name": "Fenêtre (C) Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.imprimante_3d_ams_1_humidite",
+    "state": "32",
+    "last_changed": "2026-07-31T18:13:04.299201+00:00",
+    "attributes": {
+      "friendly_name": "P1S_01P00C470500725_AMS_1 Humidité",
+      "device_class": "humidity",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.imprimante_3d_ams_1_indice_d_humidite",
+    "state": "4",
+    "last_changed": "2026-07-28T07:08:23.397285+00:00",
+    "attributes": {
+      "friendly_name": "P1S_01P00C470500725_AMS_1 Indice d'humidité"
+    }
+  },
+  {
+    "entity_id": "sensor.interrupteur_c_batterie",
+    "state": "80",
+    "last_changed": "2026-07-27T14:12:47.575425+00:00",
+    "attributes": {
+      "friendly_name": "Interrupteur cuisine Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.interrupteur_ch_batterie_2",
+    "state": "75",
+    "last_changed": "2026-07-31T09:58:48.391656+00:00",
+    "attributes": {
+      "friendly_name": "Interrupteur chambre Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.interrupteur_sdb_batterie",
+    "state": "100",
+    "last_changed": "2026-07-27T14:12:47.585391+00:00",
+    "attributes": {
+      "friendly_name": "Interrupteur salle de bain Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.peugeot_e208_batterie_de_service",
+    "state": "89.0",
+    "last_changed": "2026-07-31T08:53:41.400051+00:00",
+    "attributes": {
+      "friendly_name": "Peugeot e208 Batterie de service",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.peugeot_e208_batterie_niveau",
+    "state": "34",
+    "last_changed": "2026-07-31T10:35:02.410632+00:00",
+    "attributes": {
+      "friendly_name": "Peugeot e208 Niveau batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.pixel_10_pro_battery_level_2",
+    "state": "80",
+    "last_changed": "2026-07-31T16:16:24.770621+00:00",
+    "attributes": {
+      "friendly_name": "Pixel 10 Pro Battery level",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_batterie",
+    "state": "middle",
+    "last_changed": "2026-07-27T14:12:47.611065+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Batterie Cuisine"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_bureau_batterie",
+    "state": "middle",
+    "last_changed": "2026-07-27T14:12:47.635775+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Batterie Bureau"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_bureau_humidite",
+    "state": "100",
+    "last_changed": "2026-07-27T14:12:47.634366+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Humidité sol Bureau",
+      "device_class": "moisture",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_humidite",
+    "state": "94",
+    "last_changed": "2026-07-31T18:36:20.241419+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Humidité sol Cuisine",
+      "device_class": "moisture",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_television_batterie",
+    "state": "middle",
+    "last_changed": "2026-07-27T14:12:47.604344+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Batterie TV"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_television_humidite",
+    "state": "100",
+    "last_changed": "2026-07-27T14:12:47.604895+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Humidité sol TV",
+      "device_class": "moisture",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.plante_television_temperature",
+    "state": "27.7",
+    "last_changed": "2026-07-31T18:28:01.783344+00:00",
+    "attributes": {
+      "friendly_name": "Plantes - Température TV",
+      "device_class": "temperature",
+      "unit_of_measurement": "°C"
+    }
+  },
+  {
+    "entity_id": "sensor.porte_balcon_s_batterie",
+    "state": "69",
+    "last_changed": "2026-07-30T01:42:35.477451+00:00",
+    "attributes": {
+      "friendly_name": "Porte balcon (S) Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.porte_entree_s_batterie",
+    "state": "50",
+    "last_changed": "2026-07-31T16:37:59.237272+00:00",
+    "attributes": {
+      "friendly_name": "Porte entrée (S) Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.sac_batterie_ble",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:46.317438+00:00",
+    "attributes": {
+      "friendly_name": "Clé Peugeot Batterie BLE",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.tablette_bureau_batterie",
+    "state": "100",
+    "last_changed": "2026-07-30T13:57:00.333008+00:00",
+    "attributes": {
+      "friendly_name": "Tablette Bureau Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.tablette_cuisine_batterie",
+    "state": "100",
+    "last_changed": "2026-07-30T19:44:50.702208+00:00",
+    "attributes": {
+      "friendly_name": "Tablette Cuisine Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.tablette_salon_batterie",
+    "state": "100",
+    "last_changed": "2026-07-27T14:11:41.042366+00:00",
+    "attributes": {
+      "friendly_name": "Tablette Salon Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  },
+  {
+    "entity_id": "sensor.velux_ch_batterie",
+    "state": "46",
+    "last_changed": "2026-07-29T14:15:26.586289+00:00",
+    "attributes": {
+      "friendly_name": "Velux (CH) Batterie",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    }
+  }
+]

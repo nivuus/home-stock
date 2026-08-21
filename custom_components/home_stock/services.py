@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .application import PartsError
@@ -17,6 +18,7 @@ from .const import BATTERY_EVENT_KINDS, CONSUME_REASONS, DOMAIN, REASON_CONSUMPT
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
+from .import_grocy_equipment import import_grocy_equipment
 from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
@@ -139,6 +141,11 @@ def _plain_list(value: Any) -> list:
 MAINTENANCE_PLAN_SCHEMA = vol.Schema({
     vol.Optional("extra_items"): _plain_list,
     vol.Optional("extra_keep"): _plain_list,
+})
+
+IMPORT_EQUIPMENT_SCHEMA = vol.Schema({
+    vol.Required("database_path"): cv.string,
+    vol.Optional("apply", default=False): cv.boolean,
 })
 
 BATTERY_EVENT_SCHEMA = vol.Schema({
@@ -472,6 +479,37 @@ def async_register_services(hass: HomeAssistant) -> None:
             extra_items=call.data.get("extra_items"),
             extra_keep=call.data.get("extra_keep"))
 
+    async def import_grocy_equipment_service(call: ServiceCall) -> ServiceResponse:
+        """Copy Grocy's batteries and equipment over. Dry run by default.
+
+        The registry sweep and the states both have to be read on the event
+        loop, so they are gathered here and handed to a pure function that
+        knows nothing about `hass` — which is also what makes the whole import
+        testable without starting Home Assistant.
+        """
+        runtime = _entry(hass).runtime_data
+        registry = er.async_get(hass)
+        registry_rows = [
+            {"entity_registry_id": entry.id, "entity_id": entry.entity_id,
+             "device_id": entry.device_id, "name": entry.name or entry.original_name,
+             "model": None}
+            for entry in registry.entities.values()
+            if entry.domain == "sensor"
+            and (entry.device_class or entry.original_device_class) == "battery"
+        ]
+        states = [
+            {"entity_id": state.entity_id, "state": state.state,
+             "attributes": dict(state.attributes)}
+            for state in hass.states.async_all("sensor")
+        ]
+        report = await _run(hass, partial(
+            import_grocy_equipment, runtime.manager.db, call.data["database_path"],
+            hass_states=states, registry_rows=registry_rows,
+            apply=call.data["apply"]))
+        if call.data["apply"]:
+            await runtime.coordinator.async_request_refresh()
+        return report.as_dict()
+
     async def record_battery_event(call: ServiceCall) -> None:
         runtime = _entry(hass).runtime_data
         await _run(hass, partial(
@@ -508,3 +546,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                                  supports_response=SupportsResponse.ONLY)
     hass.services.async_register(DOMAIN, "record_battery_event", record_battery_event,
                                  schema=BATTERY_EVENT_SCHEMA)
+    hass.services.async_register(DOMAIN, "import_grocy_equipment",
+                                 import_grocy_equipment_service,
+                                 schema=IMPORT_EQUIPMENT_SCHEMA,
+                                 supports_response=SupportsResponse.ONLY)
