@@ -585,6 +585,7 @@ def _insert_recipe(conn, *, name, source="manual", source_ref=None, servings=1) 
 @pytest.mark.parametrize("values, why", [
     ({"packaging_id": 1, "measure_id": 1}, "une quantité se dit dans UNE mesure"),
     ({"match_state": "auto", "product_id": None}, "un appariement suppose un produit"),
+    ({"match_state": "confirmed", "product_id": None}, "confirmer, c'est désigner"),
 ])
 def test_m004_recipe_ingredient_refuses_the_impossible(tmp_path, values, why):
     conn = _migrated(tmp_path)
@@ -628,3 +629,14 @@ def test_m004_servings_and_timer_bounds(tmp_path):
         _insert_recipe(conn, name="Zéro", servings=0)
     with pytest.raises(sqlite3.IntegrityError):
         _insert_instruction(conn, timer_label="Repos", timer_seconds=0)
+
+
+def test_m004_lets_an_ignored_line_have_no_product(tmp_path):
+    """« Ignoré » est un état de plein droit : sel, poivre, eau du robinet.
+
+    On ignore précisément une ligne qu'on ne veut pas suivre — exiger de lui
+    apparier un produit pour pouvoir l'ignorer serait se mordre la queue.
+    """
+    conn = _migrated(tmp_path)
+    _insert_ingredient(conn, position=1, match_state="ignored", product_id=None)
+    _insert_ingredient(conn, position=2, match_state="unmatched", product_id=None)

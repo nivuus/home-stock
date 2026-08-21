@@ -4,14 +4,16 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from .const import (
     MACRO_COLUMNS,
+    MATCH_STATES,
     MAX_PARTS,
     NUTRITION_COLUMNS,
     QUANTITY_EPSILON,
@@ -23,6 +25,7 @@ from .const import (
     REASONS,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.matching import Candidate, candidates, normalise, preselect
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
@@ -782,3 +785,137 @@ class StockManager:
     def export_journal(self) -> list[dict[str, Any]]:
         """The whole append-only journal. It is enough to rebuild everything."""
         return repo.list_movements(self.db.read())
+
+    # --- lot 3 -------------------------------------------------------------
+
+    def match_ingredient(self, ingredient_id: int, *, product_id: int | None,
+                         state: str, create_alias: bool = False) -> dict[str, Any]:
+        """Record which product a recipe line means. Returns the updated line.
+
+        `state` is checked against MATCH_STATES, and a state other than
+        `unmatched` is refused without a product BEFORE the transaction opens.
+        The schema's CHECK would refuse it too, but as an IntegrityError with
+        no context — this says which line and why, in French, and it does not
+        take the write lock just to give up inside it.
+        """
+        if state not in MATCH_STATES:
+            raise ValueError(
+                f"état d'appariement inconnu : {state!r}. "
+                f"Attendu l'un de {', '.join(MATCH_STATES)}")
+        if state in ("auto", "confirmed") and product_id is None:
+            raise ValueError(
+                f"un appariement « {state} » suppose un produit : "
+                "seuls « unmatched » et « ignored » peuvent rester sans produit")
+        moment = _now()
+        with self.db.write() as conn:
+            return _match_ingredient_within(
+                conn, ingredient_id, product_id=product_id, state=state,
+                create_alias=create_alias, moment=moment)
+
+
+# =============================================================================
+# Lot 3 — matching a recipe ingredient onto a catalogue product.
+# =============================================================================
+
+# A leading quantity, as recipe text writes it: a number (decimal, fraction or
+# vulgar fraction glyph), then optionally a unit word, then an optional "de".
+# Stripped so "2 cs d'huile d'olive" can be compared as "huile d'olive".
+#
+# This is normalisation of SOURCE TEXT, which is why it lives here and not in
+# `domain/units`: the domain converts what it is told, it does not parse prose.
+_QUANTITY_WORDS: Final = (
+    "g", "kg", "mg", "ml", "cl", "dl", "l", "cs", "cc", "cuillère", "cuillères",
+    "cuiller", "cuillerée", "cuillerées", "pincée", "pincées", "sachet", "sachets",
+    "tranche", "tranches", "verre", "verres", "gousse", "gousses", "brin", "brins",
+    "botte", "bottes", "poignée", "poignées", "boîte", "boîtes", "pot", "pots",
+    "bouquet", "feuille", "feuilles", "goutte", "gouttes", "filet", "filets",
+    "à", "soupe", "café", "de", "d", "du", "des", "la", "le", "les", "un", "une",
+)
+_LEADING_NUMBER: Final = re.compile(
+    r"^\s*[0-9]+(?:[.,][0-9]+)?(?:\s*/\s*[0-9]+)?\s*|^\s*[¼½¾⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞]\s*")
+_WORD_SPLIT: Final = re.compile(r"[\s'’]+")
+
+
+def _without_quantity(raw_text: str) -> str:
+    """`raw_text` with any leading quantity and unit words removed.
+
+    "2 cs d'huile d'olive" becomes "huile d'olive"; "½ concombre" becomes
+    "concombre". Only the LEADING run is stripped, so "pain burger" keeps
+    both words and "filet de poulet" keeps "poulet" — a filet is a unit word
+    at the front and part of the name nowhere else.
+    """
+    text = _LEADING_NUMBER.sub("", raw_text, count=1).strip()
+    words = [w for w in _WORD_SPLIT.split(text) if w]
+    while words and words[0].casefold().strip(".") in _QUANTITY_WORDS:
+        words.pop(0)
+        # A second number may follow the unit ("1 boîte 400 g de tomates").
+        if words and _LEADING_NUMBER.match(words[0]):
+            words.pop(0)
+    return " ".join(words) or text
+
+
+def resolve_ingredient_match(
+    conn, *, raw_text: str, ingredient_name: str | None,
+    products: Sequence[dict[str, Any]],
+) -> tuple[str, int | None, float | None, list[Candidate]]:
+    """Decide what product a recipe line means (spec §8).
+
+    Returns `(match_state, product_id, match_score, candidates_to_offer)`.
+
+    The order is normative and it stops at the first answer:
+
+    1. **An alias.** What a human already decided, looked up on the normalised
+       text. It wins outright, and it wins even against a higher-scoring
+       preselect: that is what makes the work shrink over time instead of
+       being re-litigated at every import.
+    2. **Scoring**, over three spellings of the same line — the isolated
+       ingredient name, the text without its leading quantity, and the raw
+       text. The best of the three wins, exactly as lot 1 tries
+       `generic_name_fr`, `product_name_fr` and the de-branded name.
+    3. **`preselect()`**, with lot 1's thresholds untouched. One clear winner
+       becomes `auto`; anything less comes back `unmatched` with the five
+       candidates for a human to arbitrate.
+
+    An `auto` match NEVER writes an alias. Only an explicit human confirmation
+    does. Without that rule a wrong automatic match would become permanent and
+    contaminate every later recipe — which is exactly how re-matching by name
+    produced 35 duplicates in Grocy in April 2026.
+    """
+    alias = repo.find_alias(conn, normalise(raw_text))
+    if alias is not None:
+        return "confirmed", alias["product_id"], 1.0, []
+
+    found = candidates(
+        names=[ingredient_name, _without_quantity(raw_text), raw_text],
+        products=products,
+    )
+    chosen = preselect(found)
+    if chosen is not None:
+        return "auto", chosen.product_id, chosen.score, []
+    return "unmatched", None, None, list(found)
+
+
+def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None,
+                             state: str, create_alias: bool,
+                             moment: str) -> dict[str, Any]:
+    """The body of `match_ingredient`, on a connection the caller already owns.
+
+    Extracted so a later caller inside another transaction can reuse it:
+    `Database._lock` is a plain, non-reentrant lock, and nesting two
+    `db.write()` blocks the process for good, with no error and no traceback.
+    """
+    line = conn.execute(
+        "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone()
+    if line is None:
+        raise ValueError(f"ligne d'ingrédient {ingredient_id} inconnue")
+
+    repo.update_ingredient_match(conn, ingredient_id, product_id=product_id,
+                                 state=state, score=1.0 if product_id else None)
+    # Only an explicit human confirmation teaches an alias. An `auto` match
+    # never does: a wrong guess made permanent would contaminate every later
+    # recipe (Grocy, April 2026 — 35 duplicates from re-matching by name).
+    if create_alias and state == "confirmed" and product_id is not None:
+        repo.upsert_alias(conn, normalised=normalise(line["raw_text"]),
+                          product_id=product_id, created_at=moment)
+    return dict(conn.execute(
+        "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone())

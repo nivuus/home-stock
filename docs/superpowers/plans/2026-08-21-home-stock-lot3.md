@@ -1012,11 +1012,11 @@ class StockManager:
 - **Un `auto` n'écrit jamais d'alias.** Seul `match_ingredient` avec `create_alias=True` en crée un. Sans cette règle, un appariement automatique faux deviendrait permanent et contaminerait toutes les recettes suivantes — c'est le ré-appariement par nom qui a produit 35 doublons dans Grocy en avril 2026.
 - **`ignored` est un état de plein droit.** Sel, poivre, eau. Une ligne `ignored` s'affiche, ne décrémente rien, et ne réapparaît jamais dans les manques.
 
-- [ ] **Step 1: Fabriquer les fixtures**
+- [x] **Step 1: Fabriquer les fixtures**
 
 `tests/fixtures/recipes/products.json` : les 299 produits réels (id, `name`), extraits **d'une copie** de la base ou du catalogue déjà utilisé par `tests/fixtures/off/catalogue.json`. `tests/fixtures/recipes/ingredients.json` : les 420 `raw_text` réels de `recipes_pos`, extraits **d'une copie** de `grocy.db`, en lecture seule, une fois. Aucun script de génération n'est versionné et rien n'est écrit ailleurs que dans ces deux fichiers. Si la copie n'est pas disponible au moment de l'implémentation, **réduire l'échantillon plutôt que d'inventer des lignes** : un taux mesuré sur 60 lignes vraies vaut mieux qu'un taux mesuré sur 420 lignes imaginaires, et le test le dit dans son message.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 ```python
 """L'appariement rejoué sur les lignes réelles, avec les seuils du lot 1."""
@@ -1058,15 +1058,15 @@ def test_the_replay_is_deterministic(conn):
 
 **Note pour l'implémenteur :** le plancher de `test_the_automatic_match_rate_on_the_real_lines` s'écrit **après** la première mesure, arrondi vers le bas au multiple de 5 %. Ne pas inventer 0,45 s'il mesure 0,72 ; ne pas non plus baisser le plancher pour faire passer une régression.
 
-- [ ] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_ingredient_matching.py -q`
+- [x] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_ingredient_matching.py -q`
 
-- [ ] **Step 4: Écrire la résolution et `match_ingredient`**
+- [x] **Step 4: Écrire la résolution et `match_ingredient`**
 
 `resolve_ingredient_match` est une fonction module-level de `application.py` (elle prend `conn`, elle n'ouvre rien). `match_ingredient` ouvre une transaction, valide `state` contre `MATCH_STATES`, refuse `state != 'unmatched'` sans `product_id` avec une phrase française, écrit la ligne, et n'écrit l'alias que si `create_alias` **et** `state == 'confirmed'`.
 
-- [ ] **Step 5: Vert** — `./scripts/test.sh tests/test_ingredient_matching.py -q && ./scripts/test.sh -q`
+- [x] **Step 5: Vert** — `./scripts/test.sh tests/test_ingredient_matching.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/fixtures/recipes tests/test_ingredient_matching.py
 git commit -m "feat: ingredient matching with learned aliases, on the real 420 lines"

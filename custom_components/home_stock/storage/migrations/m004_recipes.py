@@ -80,8 +80,11 @@ CREATE TABLE recipe_ingredient (
   UNIQUE (recipe_id, position),
   -- Une quantité se dit dans UNE mesure, jamais deux.
   CHECK (packaging_id IS NULL OR measure_id IS NULL),
-  -- Un état d'appariement autre que 'unmatched' suppose un produit.
-  CHECK (match_state = 'unmatched' OR product_id IS NOT NULL)
+  -- 'auto' et 'confirmed' supposent un produit : ils DÉSIGNENT un produit.
+  -- 'unmatched' et 'ignored' n'en supposent aucun — on ignore justement une
+  -- ligne qu'on ne veut pas suivre (« sel », « eau du robinet »), et exiger
+  -- d'apparier un produit pour pouvoir l'ignorer serait se mordre la queue.
+  CHECK (match_state IN ('unmatched', 'ignored') OR product_id IS NOT NULL)
 );
 
 -- Les mesures de cuisine, valables pour tous les produits. Un `packaging`
