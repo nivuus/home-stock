@@ -6,7 +6,9 @@ service can write a batch and its movement atomically.
 from __future__ import annotations
 
 import sqlite3
+from calendar import monthrange
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from ..const import (
@@ -749,3 +751,217 @@ def list_stores(conn) -> list[str]:
         """
     ).fetchall()
     return [row["store"] for row in rows]
+
+
+# --- lot 5 : piles, équipements, consommables --------------------------------
+
+BATTERY_FIELDS = (
+    "label", "entity_registry_id", "device_id", "equipment_id", "kind",
+    "product_id", "cell_count", "tracked", "exclusion_reason", "low_percent",
+    "keep_percent", "last_percent", "last_reading_at", "installed_on",
+    "expected_life_days", "note", "external_ref", "active",
+)
+EQUIPMENT_FIELDS = (
+    "name", "device_id", "location_id", "brand", "model", "serial",
+    "purchased_on", "purchase_price", "warranty_months", "receipt_media_id",
+    "manual_url", "manual_media_id", "note", "external_ref", "active",
+)
+CONSUMABLE_FIELDS = (
+    "label", "entity_registry_id", "low_value", "keep_value", "unit",
+    "expected_life_days", "installed_on",
+)
+
+
+def insert_battery(conn, *, label: str, kind: str, **fields: Any) -> int:
+    values: dict[str, Any] = {"label": label, "kind": kind}
+    values.update({k: v for k, v in fields.items()
+                   if k in BATTERY_FIELDS and k not in ("label", "kind")})
+    return _insert(conn, "battery", values)
+
+
+def update_battery_fields(conn, battery_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "battery", battery_id, fields)
+
+
+def get_battery(conn, battery_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM battery WHERE id = ?", (battery_id,)).fetchone())
+
+
+def battery_by_anchor(conn, entity_registry_id: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM battery WHERE entity_registry_id = ?",
+        (entity_registry_id,)).fetchone())
+
+
+def list_batteries(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    """Every declared place, with the spare's name and the equipment's.
+
+    The joins are LEFT: a battery with no spare product and no equipment is
+    the ordinary case (a remote nobody has documented yet), not an anomaly.
+    """
+    where = " WHERE b.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT b.*, p.name AS spare_label, e.name AS equipment_name"
+        " FROM battery b"
+        " LEFT JOIN product p ON p.id = b.product_id"
+        " LEFT JOIN equipment e ON e.id = b.equipment_id"
+        f"{where}"
+        " ORDER BY b.label, b.id"
+    ))
+
+
+def set_battery_reading(conn, battery_id: int, *, percent: float, at: str) -> None:
+    """The last NUMERIC reading, and when the device said it.
+
+    Both columns move together on purpose: `last_reading_at` must mean "the
+    device spoke", never "we looked" (spec § 8.4). The coordinator therefore
+    only calls this on a numeric state.
+    """
+    conn.execute(
+        "UPDATE battery SET last_percent = ?, last_reading_at = ? WHERE id = ?",
+        (percent, at, battery_id))
+
+
+def insert_battery_event(conn, *, battery_id: int, occurred_at: str, kind: str,
+                         movement_id: int | None = None, note: str | None = None,
+                         idempotency_key: str | None = None) -> int:
+    return _insert(conn, "battery_event", {
+        "battery_id": battery_id, "occurred_at": occurred_at, "kind": kind,
+        "movement_id": movement_id, "note": note,
+        "idempotency_key": idempotency_key,
+    })
+
+
+def battery_event_by_key(conn, idempotency_key: str) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT * FROM battery_event WHERE idempotency_key = ?",
+        (idempotency_key,)).fetchone())
+
+
+def list_battery_events(conn, battery_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT * FROM battery_event WHERE battery_id = ?"
+        " ORDER BY occurred_at DESC, id DESC LIMIT ?", (battery_id, limit)))
+
+
+def spare_stock(conn, product_ids) -> dict[int, float]:
+    """How many spares are left, per product id.
+
+    A filter over `stock_rows`, never a second formula: the remaining stock of
+    a product is already expressed there, and two formulas for one number
+    start to diverge the day one of them gets a correction — this being the
+    number that decides whether the task says « aucune en stock ».
+
+    A product with no open batch answers 0.0, not "missing": « aucune en
+    stock » and « on ne sait pas » are not the same sentence, and the first is
+    the one the task must say.
+    """
+    wanted = {int(product_id) for product_id in product_ids}
+    if not wanted:
+        return {}
+    totals = {product_id: 0.0 for product_id in wanted}
+    for row in stock_rows(conn):
+        if row["product_id"] in totals:
+            totals[row["product_id"]] += float(row["remaining"] or 0.0)
+    return totals
+
+
+def insert_equipment(conn, *, name: str, **fields: Any) -> int:
+    values: dict[str, Any] = {"name": name}
+    values.update({k: v for k, v in fields.items()
+                   if k in EQUIPMENT_FIELDS and k != "name"})
+    return _insert(conn, "equipment", values)
+
+
+def update_equipment_fields(conn, equipment_id: int, fields: dict[str, Any]) -> None:
+    _update_fields(conn, "equipment", equipment_id, fields)
+
+
+def get_equipment(conn, equipment_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT e.*, l.name AS location_name FROM equipment e"
+        " LEFT JOIN location l ON l.id = e.location_id"
+        " WHERE e.id = ?", (equipment_id,)).fetchone())
+
+
+def list_equipment(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    where = " WHERE e.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT e.*, l.name AS location_name,"
+        "       (SELECT COUNT(*) FROM equipment_consumable c"
+        "         WHERE c.equipment_id = e.id) AS consumable_count"
+        " FROM equipment e"
+        " LEFT JOIN location l ON l.id = e.location_id"
+        f"{where}"
+        " ORDER BY l.name IS NULL, l.name, e.name"
+    ))
+
+
+def link_consumable(conn, *, equipment_id: int, product_id: int, role: str,
+                    **fields: Any) -> int:
+    values: dict[str, Any] = {
+        "equipment_id": equipment_id, "product_id": product_id, "role": role}
+    values.update({k: v for k, v in fields.items() if k in CONSUMABLE_FIELDS})
+    return _insert(conn, "equipment_consumable", values)
+
+
+def unlink_consumable(conn, consumable_id: int) -> None:
+    """Unlinking deletes the link, never the product: the filter stays in the
+    catalogue with its stock and its price history."""
+    conn.execute("DELETE FROM equipment_consumable WHERE id = ?", (consumable_id,))
+
+
+def list_consumables(conn, equipment_id: int | None = None) -> list[dict[str, Any]]:
+    where = " WHERE c.equipment_id = ?" if equipment_id is not None else ""
+    params = (equipment_id,) if equipment_id is not None else ()
+    return _rows(conn.execute(
+        "SELECT c.*, p.name AS product_name, e.name AS equipment_name"
+        " FROM equipment_consumable c"
+        " JOIN product p ON p.id = c.product_id"
+        " JOIN equipment e ON e.id = c.equipment_id"
+        f"{where}"
+        " ORDER BY c.equipment_id, c.role, c.id", params))
+
+
+def add_months(start: date, months: int) -> date:
+    """`start` plus `months`, clamped to the last day of the arrival month.
+
+    The only arithmetic in this file that is not SQL, and it is here rather
+    than in a column because a derived date that is STORED ends up diverging
+    from the two values it derives from — someone edits the purchase date and
+    the warranty silently keeps the old end. 31 January + 1 month does not
+    exist; the answer kept is 28/29 February, never a spill into March.
+    """
+    month_index = start.month - 1 + months
+    year = start.year + month_index // 12
+    month = month_index % 12 + 1
+    last_day = monthrange(year, month)[1]
+    return date(year, month, min(start.day, last_day))
+
+
+def warranty_rows(conn) -> list[dict[str, Any]]:
+    """Every equipment whose warranty end can be COMPUTED, soonest first.
+
+    A duration without a purchase date is not computable, so the line is
+    simply absent rather than returned with a `None` somebody will eventually
+    render as an empty cell. Expired warranties are still here: filtering to
+    what is still ahead is `application.warranties()`'s job, which is the one
+    that knows today's date.
+    """
+    computed: list[dict[str, Any]] = []
+    for row in _rows(conn.execute(
+            "SELECT id, name, purchased_on, warranty_months FROM equipment"
+            " WHERE active = 1 AND purchased_on IS NOT NULL"
+            "   AND warranty_months IS NOT NULL")):
+        try:
+            ends_on = add_months(date.fromisoformat(row["purchased_on"]),
+                                 int(row["warranty_months"]))
+        except (TypeError, ValueError):
+            # A malformed date stored before `iso_date` guarded this column:
+            # skipped, never raised — this function runs on every coordinator
+            # refresh, and raising here would take every entity unavailable.
+            continue
+        computed.append({**row, "warranty_ends_on": ends_on.isoformat()})
+    computed.sort(key=lambda row: (row["warranty_ends_on"], row["name"]))
+    return computed
