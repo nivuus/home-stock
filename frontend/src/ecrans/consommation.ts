@@ -17,6 +17,9 @@ import type { FileAttente } from '../file-attente';
 import type { UniteBase } from './fiche';
 import { analyserNombre, formaterNombre } from '../nombres';
 import { raccourcisQuantite } from '../portion';
+import type { SourcePortion } from '../portion';
+import { consigneDeTri } from '../tri';
+import type { Bac } from '../tri';
 
 export type Motif = 'consumption' | 'waste' | 'expired';
 
@@ -59,6 +62,11 @@ export class EcranConsommation extends LitElement {
   @state() produit: { id: number; name: string; base_unit: UniteBase } | null = null;
   @state() lot: { id: number; remaining: number; best_before: string | null } | null = null;
   @state() portion: number | null = null;
+  @state() portionSource: SourcePortion = null;
+  /** L'emballage du lot visé, tel que le serveur l'a lu dans `off_raw`.
+   *  `null` sur tout ce qui n'a pas été rescanné depuis le lot 2bis — le
+   *  champ n'avait jamais été demandé à Open Food Facts. */
+  @state() emballage: { bins: Bac[]; materials: string[] } | null = null;
   @state() quantite: number | null = null;
   @state() motif: Motif = 'consumption';
   @state() partage = false;
@@ -86,6 +94,8 @@ export class EcranConsommation extends LitElement {
     this.produit = reponse.produit ?? reponse.product;
     this.lot = reponse.next_batch;
     this.portion = reponse.suggested_portion;
+    this.portionSource = reponse.portion_source ?? null;
+    this.emballage = reponse.packaging ?? null;
     // Un produit à la pièce a « 1 » déjà armé : un appui suffit, et c'est le
     // cas de 239 des 299 produits du catalogue.
     this.quantite = this.produit?.base_unit === 'piece' && this.lot ? 1 : null;
@@ -219,6 +229,19 @@ export class EcranConsommation extends LitElement {
     `;
   }
 
+  /** La consigne, aux deux seuls moments où l'on trie vraiment : le rebut
+   *  déclaré (« Jeté », « Périmé »), ou une quantité qui VIDE le lot visé —
+   *  le pot de yaourt qu'on finit. Au rangement l'emballage est plein et part
+   *  dans un placard : l'afficher alors encombrerait l'écran le plus chargé
+   *  du panneau. Rien de connu → rien d'affiché. */
+  private consigneAffichee(): string | null {
+    if (!this.emballage || !this.lot) return null;
+    const rebut = this.motif === 'waste' || this.motif === 'expired';
+    const vide = this.quantite !== null && this.quantite >= this.lot.remaining;
+    if (!rebut && !vide) return null;
+    return consigneDeTri(this.emballage.bins);
+  }
+
   render() {
     if (!this.produit) return nothing;
 
@@ -231,7 +254,9 @@ export class EcranConsommation extends LitElement {
       `;
     }
 
-    const raccourcis = raccourcisQuantite(this.lot.remaining, this.produit.base_unit, this.portion);
+    const raccourcis = raccourcisQuantite(this.lot.remaining, this.produit.base_unit,
+                                          this.portion, this.portionSource);
+    const consigne = this.consigneAffichee();
 
     return html`
       <section class="entete">
@@ -249,6 +274,8 @@ export class EcranConsommation extends LitElement {
           </button>
         `)}
       </section>
+
+      ${consigne ? html`<p class="tri">Emballage : ${consigne}</p>` : nothing}
 
       <label class="pave-label">
         Autre quantité
@@ -275,6 +302,7 @@ export class EcranConsommation extends LitElement {
     .nom { margin: 0; font-size: 1.2rem; }
     .reste { margin: 2px 0; color: var(--secondary-text-color); }
     .plus-rien { color: var(--secondary-text-color); }
+    .tri { margin: 4px 0; color: var(--primary-text-color); font-size: 0.95rem; }
     .raccourcis { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
     .raccourci {
       min-height: 62px; min-width: 62px; flex: 1 1 auto; font-size: 1rem; border-radius: 8px; border: none;

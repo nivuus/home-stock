@@ -282,3 +282,72 @@ describe('<home-stock-consommation>', () => {
     expect(element.shadowRoot.textContent).not.toContain('2026-09-01');
   });
 });
+
+/** L'emballage tel que `home_stock/product/get` le rend depuis le lot 2bis. */
+const EMBALLAGE = { bins: ['yellow', 'glass'], materials: ['en:pp-polypropylene', 'en:glass'] };
+
+describe('<home-stock-consommation> — la consigne de tri', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  async function monterAvecEmballage(reponse: unknown = { ...PRODUIT_G, packaging: EMBALLAGE }) {
+    const element = monter(reponse);
+    await element.updateComplete;
+    await element.updateComplete;
+    return element;
+  }
+
+  it('s’affiche sur « Jeté » et sur « Périmé »', async () => {
+    for (const motif of ['waste', 'expired'] as const) {
+      document.body.innerHTML = '';
+      const element = await monterAvecEmballage();
+      element.motif = motif;
+      await element.updateComplete;
+      expect(element.shadowRoot.textContent).toContain('Bac jaune et bac à verre');
+    }
+  });
+
+  it('s’affiche quand la quantité choisie vide le lot visé', async () => {
+    const element = await monterAvecEmballage();
+    element.choisirRaccourci(500);
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('Bac jaune et bac à verre');
+  });
+
+  it('s’affiche pour une saisie manuelle supérieure au reste', async () => {
+    const element = await monterAvecEmballage();
+    element.saisirQuantite('600');
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('Bac jaune et bac à verre');
+  });
+
+  it('reste absente sur une sortie partielle en « Mangé »', async () => {
+    // Au rangement comme à la bouchée, l'emballage est encore plein : le bon
+    // moment est le rebut, pas la mise au placard.
+    const element = await monterAvecEmballage();
+    element.choisirRaccourci(80);
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).not.toContain('Bac jaune');
+  });
+
+  it('reste absente quand le serveur ne connaît pas l’emballage', async () => {
+    const element = await monterAvecEmballage({ ...PRODUIT_G, packaging: null });
+    element.motif = 'waste';
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).not.toContain('Bac');
+  });
+
+  it('reste absente quand la liste des bacs est vide', async () => {
+    const element = await monterAvecEmballage({ ...PRODUIT_G, packaging: { bins: [], materials: [] } });
+    element.motif = 'waste';
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).not.toContain('Bac');
+  });
+
+  it('dit « Ma portion » quand la portion vient d’une saisie', async () => {
+    const element = await monterAvecEmballage({
+      ...PRODUIT_G, suggested_portion: 45, portion_source: 'manual' });
+    const libelles = [...element.shadowRoot.querySelectorAll('.raccourci')]
+      .map((b: Element) => b.textContent?.trim());
+    expect(libelles[0]).toContain('Ma portion (45 g)');
+  });
+});
