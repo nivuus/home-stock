@@ -112,7 +112,7 @@ Dans **tous** ces fichiers : **ajouter en fin de liste / en fin de dict / en fin
 **Interfaces:**
 - Produit : `off.client.FIELDS` contient `packagings` et `packaging_tags`. Rien d'autre ne change : zéro requête de plus, quelques centaines d'octets par fiche, très loin du plafond `MAX_OFF_RAW_BYTES` de 256 kB.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/off/test_client.py`, étendre la boucle de `test_the_requested_fields_are_the_ones_the_mapping_reads` avec `"packagings"` et `"packaging_tags"` (**ajouter en fin de tuple**, ne pas réordonner), puis ajouter à la fin du fichier :
 
@@ -128,12 +128,12 @@ def test_the_packaging_fields_are_asked_for_by_name():
     assert "packaging_tags" in FIELDS
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/off/test_client.py -q`
 Expected: FAIL — `assert 'packagings' in FIELDS`
 
-- [ ] **Step 3: Ajouter les deux champs**
+- [x] **Step 3: Ajouter les deux champs**
 
 Dans `custom_components/home_stock/off/client.py`, **à la fin** de la chaîne `FIELDS`, en gardant la virgule de continuation :
 
@@ -145,7 +145,7 @@ Dans `custom_components/home_stock/off/client.py`, **à la fin** de la chaîne `
     "packagings,packaging_tags"
 ```
 
-- [ ] **Step 4: Enrichir deux fixtures**
+- [x] **Step 4: Enrichir deux fixtures**
 
 Dans `tests/fixtures/off/catalogue.json`, ajouter les deux clés à **exactement deux** fiches, choisies pour couvrir les deux formes du § 9.2 :
 
@@ -155,7 +155,7 @@ Dans `tests/fixtures/off/catalogue.json`, ajouter les deux clés à **exactement
 
 Les autres fiches restent **sans** emballage : c'est le cas majoritaire en base, et il doit rester couvert.
 
-- [ ] **Step 5: Écrire le test qui interdit le rattrapage**
+- [x] **Step 5: Écrire le test qui interdit le rattrapage**
 
 Dans `tests/off/test_client.py`, à la fin :
 
@@ -175,12 +175,12 @@ def test_the_existing_fixtures_carry_no_packaging_which_is_the_point():
         assert "packaging_tags" not in fiche, code
 ```
 
-- [ ] **Step 6: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 6: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/off/ -q`
 Expected: PASS. Puis `./scripts/test.sh -q` : les 1390 restent verts — un champ de plus dans `fields=` ne change aucune réponse de fixture existante.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/off/client.py tests/off/test_client.py tests/fixtures/off/catalogue.json
@@ -204,7 +204,7 @@ git commit -m "fix: ask Open Food Facts for the packaging fields it was never as
 
 **Discipline.** Ce module applique la défense de `serving_from_raw` : `off_raw` absent, tronqué, non-objet, ou liste contenant autre chose que des dictionnaires → `None` **sans lever**. C'est un confort d'affichage, jamais une donnée dont dépend le stock. `packagings` d'abord, repli sur `packaging_tags` **seulement** s'il est absent ou vide. **Rien de connu → rien d'affiché** : jamais de bac deviné, une consigne inventée envoie du verre dans le bac jaune avec l'assurance de l'écran.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/off/test_packaging.py` :
 
@@ -290,12 +290,12 @@ def test_the_bins_returned_are_all_declared_in_the_constant():
     assert set(bins_from_raw(raw)["bins"]) <= set(RECYCLING_BINS)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/off/test_packaging.py -q`
 Expected: FAIL — `ModuleNotFoundError: custom_components.home_stock.off.packaging`
 
-- [ ] **Step 3: Écrire la constante et le module**
+- [x] **Step 3: Écrire la constante et le module**
 
 Dans `const.py`, **en fin de fichier** (conflit lot 4 : ajouter, ne pas réordonner) :
 
@@ -310,16 +310,16 @@ Créer `custom_components/home_stock/off/packaging.py`. Une table `_MATERIAL_BIN
 
 L'ordre de sortie de `bins` suit **`RECYCLING_BINS`**, pas l'ordre de lecture : deux fiches décrivant le même emballage doivent rendre la même liste, sinon la ligne de l'écran « manger » change de mot d'un article à l'autre. `materials` garde en revanche l'ordre de la fiche, dédupliqué, **et ne contient que les matériaux reconnus** — un matériau ignoré ne doit pas ressortir dans une clé que le panneau pourrait afficher.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/off/test_packaging.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Remplacer le repli `if not packagings:` par `if "packagings" not in payload:`. `test_an_empty_packagings_list_falls_back_to_the_tags` doit tomber — une liste vide est le cas réel d'une fiche Open Food Facts à moitié remplie. Remettre le code correct.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/off/packaging.py custom_components/home_stock/const.py tests/off/test_packaging.py
@@ -344,7 +344,7 @@ git commit -m "feat: read recycling bins out of a stored Open Food Facts record"
   - `repo.max_net_quantity(conn, product_id: int) -> float | None` — le **plus grand** `net_quantity` connu parmi les articles du produit, `None` si aucun.
 - Aucun hook `apply()` : cette migration est purement schéma, et c'est ce qui la rend renumérotable sans risque (voir « Migration » en tête de plan).
 
-- [ ] **Step 1: Écrire les tests de la migration**
+- [x] **Step 1: Écrire les tests de la migration**
 
 Dans `tests/storage/test_migrations.py`, à la fin du fichier, en réutilisant les helpers déjà présents (`_migrated`, `_migrated_to`) :
 
@@ -396,12 +396,12 @@ def test_migration_versions_are_contiguous_from_one():
 
 `test_migration_modules_are_named_after_their_version` **ne bouge pas** : il reste la garde qui attrape un module renuméroté à moitié.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q --timeout=60`
 Expected: FAIL — `assert 'manual_portion' in columns`
 
-- [ ] **Step 3: Écrire la migration**
+- [x] **Step 3: Écrire la migration**
 
 Créer `custom_components/home_stock/storage/migrations/m007_portion.py` :
 
@@ -429,12 +429,12 @@ ALTER TABLE product ADD COLUMN manual_portion REAL;
 
 Dans `storage/migrations/__init__.py`, ajouter `m007_portion` **en fin** de l'import groupé **et** en fin du tuple `MIGRATIONS`. Ne rien réordonner (fichier à fort risque de conflit).
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q --timeout=60`
 Expected: PASS
 
-- [ ] **Step 5: Écrire les tests des deux lectures**
+- [x] **Step 5: Écrire les tests des deux lectures**
 
 Dans `tests/storage/test_repositories.py`, à la fin :
 
@@ -459,7 +459,7 @@ def test_max_net_quantity_is_the_largest_pack_known_for_the_product(db):
 
 Écrire ces trois tests en entier en reprenant les helpers de fixture du fichier (`db`, création de produit/article) plutôt qu'en inventant d'autres.
 
-- [ ] **Step 6: Écrire les deux lectures**
+- [x] **Step 6: Écrire les deux lectures**
 
 Dans `repositories.py` : ajouter `"manual_portion"` **en fin** de `PRODUCT_FIELDS`, puis deux fonctions à la suite des lectures d'article existantes.
 
@@ -468,12 +468,12 @@ Dans `repositories.py` : ajouter `"manual_portion"` **en fin** de `PRODUCT_FIELD
 
 **Piège du dépôt :** ne **jamais** aliaser une table en `b` (un test épingle littéralement le motif `SELECT b.*` dans tout `custom_components/`). Ces deux requêtes n'ont besoin d'aucun alias.
 
-- [ ] **Step 7: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 7: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/ -q --timeout=60`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/ tests/storage/
@@ -500,7 +500,7 @@ git commit -m "feat: a product can carry the portion its household decided on"
 
 **Pourquoi ici et pas dans `websocket_api.py`.** `product/update` est aujourd'hui la seule surface qui édite un produit, mais la règle du lot 1 tient : aucune des deux surfaces n'a le droit d'être la plus faible. Le validateur est écrit dans `validators.py` **précisément pour qu'un futur service n'ait rien à réécrire**. Les trois refus sont ceux de `off/mapping.plausible_serving()`, dans le même ordre — mais celui-ci **lève un message français** au lieu de rendre `None`, parce qu'ici quelqu'un a tapé quelque chose et attend qu'on lui dise pourquoi c'est refusé.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_validators.py`, à la fin :
 
@@ -561,23 +561,23 @@ def test_the_nine_goal_nutrients_are_the_nine_journal_columns():
     assert len(GOAL_NUTRIENTS) == 9
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_validators.py -q`
 Expected: FAIL — `ImportError: cannot import name 'check_manual_portion'`
 
-- [ ] **Step 3: Écrire les constantes et les validateurs**
+- [x] **Step 3: Écrire les constantes et les validateurs**
 
 Dans `const.py`, **en fin de fichier** : `CONF_GOALS`, `GOAL_NUTRIENTS`, `MAX_GOAL`, `GOAL_WINDOW_DAYS`, avec le commentaire disant que `GOAL_NUTRIENTS` est dérivé de `MACRO_COLUMNS` et non recopié.
 
 Dans `validators.py`, réutiliser `finite_float` et `preview` déjà présents ; importer `MAX_GOAL` et `MAX_SERVING` depuis `.const`. `check_manual_portion` refuse dans l'ordre : unité (`base_unit not in ("g", "ml")`), puis lecture du nombre, puis `]0 ; MAX_SERVING]`, puis `> max_net_quantity`. Chaque message est en français et **nomme la borne** — « au plus 5000 », « au plus 1000 g, le plus gros paquet connu ».
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_validators.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/validators.py custom_components/home_stock/const.py tests/test_validators.py
@@ -600,7 +600,7 @@ git commit -m "feat: validate a manual portion and a daily goal, once, for every
 
 **Ce que ce module ne fait pas, et pourquoi.** Il ne lit **aucune entité** : cinq des neuf capteurs quotidiens sont créés éteints, et un objectif posé sur l'un d'eux doit fonctionner sans qu'on l'allume. Il n'a **aucune notion de plancher** : c'est ce qui rend impossible par construction l'alerte de 4 h 01 sur une journée vide. Et il ne calcule **aucune borne de journée** — elles arrivent déjà calculées par `domain/foodday.py`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/domain/test_goals.py` :
 
@@ -681,27 +681,27 @@ def test_no_entity_is_ever_read():
         assert forbidden not in source
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_goals.py -q`
 Expected: FAIL — `ModuleNotFoundError: custom_components.home_stock.domain.goals`
 
-- [ ] **Step 3: Écrire le module**
+- [x] **Step 3: Écrire le module**
 
 Créer `custom_components/home_stock/domain/goals.py` : pour chaque nutriment de `GOAL_NUTRIENTS`, si l'objectif est un nombre strictement positif et que le total de la fenêtre est un nombre, comparer avec `>`. Deux fenêtres, `"day"` puis `"week"`. Tri final par `ratio` décroissant, puis par nom de nutriment pour que deux ratios égaux sortent dans un ordre stable. `ratio` arrondi à trois décimales, `value` et `goal` rendus tels quels.
 
 Le seul import autorisé est `from ..const import GOAL_NUTRIENTS`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/domain/test_goals.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Remplacer `>` par `>=`. `test_a_goal_reached_exactly_is_not_exceeded` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/goals.py tests/domain/test_goals.py
@@ -724,7 +724,7 @@ git commit -m "feat: compare a day and a weekly mean against nutrition caps"
 
 Coût : **une** requête agrégée de plus par rafraîchissement, sur la **même connexion** et dans le **même travail d'exécuteur** que le reste de `summary()` — pas de second `db.read()`, pas de second `async_add_executor_job`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_application_journal.py`, à la fin. Points à couvrir :
 
@@ -736,12 +736,12 @@ Dans `tests/test_application_journal.py`, à la fin. Points à couvrir :
 
 Réutiliser les helpers d'écriture du fichier (`_consume_within` via `manager.consume`, jamais un `db.write()` maison — `Database._lock` n'est pas réentrant).
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_journal.py -q --timeout=120`
 Expected: FAIL — `KeyError: 'week_mean'`
 
-- [ ] **Step 3: Écrire le calcul**
+- [x] **Step 3: Écrire le calcul**
 
 Dans `summary()`, juste après `today_totals`, sur la **même** `conn` :
 
@@ -757,16 +757,16 @@ Dans `summary()`, juste après `today_totals`, sur la **même** `conn` :
 
 et la clé `"week_mean"` dans le dictionnaire rendu, **après `today`** (ajouter en fin, ne pas réordonner — fichier à fort risque de conflit avec le lot 4), avec les mêmes arrondis que `today` : `kcal` à 1 décimale, les macros à 3, les euros à 2, `unvalued` en entier — chacun **divisé par `GOAL_WINDOW_DAYS` avant arrondi**.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_journal.py tests/test_application.py -q --timeout=120`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Remplacer la borne haute `day_start` par `day_end` (donc inclure la journée courante). Le test d'exclusion doit tomber. Puis remplacer le diviseur `GOAL_WINDOW_DAYS` par `(fin - début).days` : le test des journées de 23 h / 25 h doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/application.py tests/test_application_journal.py
@@ -791,7 +791,7 @@ git commit -m "feat: the summary carries the mean of the seven closed food days"
 
 **Ni un attribut sur `kcal_today`** (illisible sur un capteur éteint), **ni une entité par nutriment** (neuf fois la même phrase dans le registre), **ni une entité `event`** : un dépassement est un **état** qui dure jusqu'à 4 h, pas un franchissement daté ; un `event` obligerait à retenir en base ce qui a été annoncé, donc une table, donc la migration que ce lot refuse.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_entities.py`, à la fin :
 
@@ -806,12 +806,12 @@ Dans `tests/test_coordinator_foodday.py`, à la fin :
 - Après le rendez-vous de 4 h (`_schedule_food_day_rollover` / `_on_food_day_rollover`), un dépassement de la veille est **retombé à `off`** — sans ce rendez-vous, il resterait `on` toute la matinée.
 - `coordinator.py` ne calcule aucune date locale de son côté : le test relit `data["goals"]["food_day"]` et le compare à `data["today"]["food_day"]`, qui vient de `food_day_bounds()`.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_entities.py tests/test_coordinator_foodday.py -q --timeout=120`
 Expected: FAIL — `KeyError: 'goals'`
 
-- [ ] **Step 3: Publier `goals` et créer le capteur**
+- [x] **Step 3: Publier `goals` et créer le capteur**
 
 Dans `coordinator._async_update_data`, après le `_read()` en exécuteur (le calcul est pur, il n'a rien à faire dans l'exécuteur) :
 
@@ -834,12 +834,12 @@ Dans `binary_sensor.py`, une troisième classe sur le modèle exact des deux exi
 
 Dans `translations/fr.json` et `en.json`, ajouter `entity.binary_sensor.nutrition_goals.name` **en fin** de l'objet `binary_sensor`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_entities.py tests/test_coordinator_foodday.py -q --timeout=120`
 Expected: PASS
 
-- [ ] **Step 5: Écrire le blueprint**
+- [x] **Step 5: Écrire le blueprint**
 
 Créer `blueprints/automation/home_stock/objectifs_bleuenn.yaml`, calqué sur `dlc_bleuenn.yaml` — **livré dans le dépôt, jamais installé par le composant** : `home_stock` part sur HACS et n'a pas à coder l'assistant vocal d'un foyer en dur.
 
@@ -849,12 +849,12 @@ Créer `blueprints/automation/home_stock/objectifs_bleuenn.yaml`, calqué sur `d
 - Action : `conversation.process`, phrase construite depuis l'attribut `exceeded`, **en distinguant les deux fenêtres** (« aujourd'hui » pour `day`, « en moyenne sur la semaine » pour `week`).
 - **Aucune référence à un capteur par nutriment** : `state('sensor.home_stock_fiber_today')` rendrait `unavailable` sur une entité éteinte, et une automation qui ne se déclenche jamais est le pire des états.
 
-- [ ] **Step 6: Vérifier le blueprint sans toucher à l'instance**
+- [x] **Step 6: Vérifier le blueprint sans toucher à l'instance**
 
 Run: `python3 -c "import yaml,sys; d=yaml.safe_load(open('blueprints/automation/home_stock/objectifs_bleuenn.yaml')); print(sorted(d['blueprint']['input'])); assert d['triggers'][0]['trigger']=='time'"`
 Expected: `['agent', 'capteur', 'heure']`, aucune assertion tombée. **Ne pas** copier ce fichier dans `/opt/nivuus/HomeAssistant/config/`, ne pas recharger quoi que ce soit : l'import est le geste du propriétaire.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/coordinator.py custom_components/home_stock/binary_sensor.py custom_components/home_stock/translations/ blueprints/automation/home_stock/objectifs_bleuenn.yaml tests/
@@ -876,7 +876,7 @@ git commit -m "feat: one binary sensor for nutrition goals, and a blueprint nobo
 
 **Un champ vidé omet la clé, il n'écrit pas `0`.** Même mécanique que `CONF_RECIPE_AGENT` au lot 3, pour la même raison : « pas d'objectif » doit rester exprimable, et `0` voudrait dire « tout est un dépassement ». Les valeurs existantes sont passées en `description={"suggested_value": …}`, jamais en `default=` — un `default` réintroduirait la valeur dans un formulaire qu'on vient de vider.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_config_flow.py`, à la fin :
 
@@ -886,23 +886,23 @@ Dans `tests/test_config_flow.py`, à la fin :
 - Une valeur hors bornes (`0`, `-1`, `MAX_GOAL + 1`, `"beaucoup"`) fait **échouer** le formulaire : l'entrée n'est pas enregistrée, et les options d'avant sont intactes.
 - Un objectif sur un nutriment inconnu est **impossible** : le schéma est fermé sur `GOAL_NUTRIENTS` (test de forme sur les clés du schéma).
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_config_flow.py -q`
 Expected: FAIL — les neuf champs sont absents du schéma
 
-- [ ] **Step 3: Écrire le flux**
+- [x] **Step 3: Écrire le flux**
 
 Dans `HomeStockOptionsFlow.async_step_init`, **ajouter** au schéma existant les neuf `vol.Optional(f"goal_{nutrient}")` construits par compréhension sur `GOAL_NUTRIENTS` (ne rien réordonner : fichier à fort risque de conflit). À l'entrée, replier les clés `goal_*` non vides en `user_input[CONF_GOALS]` et les retirer du dict plat avant `async_create_entry`.
 
 Dans les deux fichiers de traduction, ajouter les neuf libellés sous `options.step.init.data.goal_*`, **en fin** de l'objet `data` : « Objectif maximal de sel par jour (g) », « Objectif maximal d'énergie par jour (kcal) », etc. — l'unité doit être dans le libellé, sinon personne ne sait s'il faut taper 6 ou 6000.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_config_flow.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les deux traductions sont alignées**
+- [x] **Step 5: Vérifier que les deux traductions sont alignées**
 
 Run: `python3 -c "
 import json
@@ -913,7 +913,7 @@ assert a==b, a^b
 print(sorted(k for k in a if k.startswith('goal_')))"`
 Expected: les neuf clés, et aucune différence entre les deux langues.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/config_flow.py custom_components/home_stock/translations/ tests/test_config_flow.py
@@ -949,7 +949,7 @@ git commit -m "feat: nine optional daily caps in the options flow"
 
 Une valeur **saisie par une personne** l'emporte toujours sur une valeur **déduite**, sinon la saisie n'a servi à rien — même règle que `article.manual_fields`, qui protège d'une resynchronisation Open Food Facts tout champ corrigé à la main.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_websocket_consume.py`, à la fin :
 
@@ -968,12 +968,12 @@ Dans `tests/test_websocket_write.py`, à la fin :
 
 Dans `tests/test_websocket.py`, à la fin : `journal/day` rend `goals` = les plafonds réglés (`{}` si aucun), lus depuis les options de l'entrée, **sans** que `application.journal_day` en entende parler.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_websocket_consume.py tests/test_websocket_write.py tests/test_websocket.py -q --timeout=120`
 Expected: FAIL — `KeyError: 'packaging'`
 
-- [ ] **Step 3: Écrire les trois extensions**
+- [x] **Step 3: Écrire les trois extensions**
 
 1. `PRODUCT_EDITABLE` gagne `"manual_portion"` **en fin de dict** (conflit lot 4). Sa valeur est un validateur qui accepte `None` et délègue le reste ; les deux arguments contextuels (`base_unit`, `max_net_quantity`) n'étant pas disponibles dans un schéma `voluptuous`, la vérification complète se fait dans `product_update` **juste après** `_validate_fields`, en appelant `check_manual_portion` avec le `base_unit` du produit relu et `repo.max_net_quantity(conn, product_id)`. L'erreur `vol.Invalid` est renvoyée en `connection.send_error(..., "invalid_format", str(err))`, comme les autres refus de ce fichier.
 2. `product_get` : lire `manual_portion` depuis le produit déjà chargé, appliquer la cascade ci-dessus, et ajouter `manual_portion` et `packaging` au résultat. `packaging` vient de `off.packaging.bins_from_raw(repo.article_off_raw(conn, article_id))`, l'`article_id` étant celui du lot FIFO déjà calculé — **une** lecture de plus, dans le même `_read`.
@@ -981,12 +981,12 @@ Expected: FAIL — `KeyError: 'packaging'`
 
 **Piège :** ne pas ouvrir de `db.write()` dans ces chemins — `product_update` utilise déjà l'écriture existante, et `Database._lock` n'est pas réentrant : deux `db.write()` imbriqués figent le processus **sans exception**. D'où le `--timeout` sur ces suites.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh -q --timeout=120`
 Expected: PASS, et le compte total est monté depuis 1390 sans qu'aucun test existant n'ait été modifié — sauf les deux assouplis/étendus explicitement (contiguïté des migrations, champs demandés à Open Food Facts).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/websocket_api.py tests/
@@ -1012,7 +1012,7 @@ git commit -m "feat: a manual portion wins, and the panel learns which bin the p
 - La consigne s'affiche **sur l'écran « manger » et nulle part ailleurs**, dans **deux cas et deux seulement** : le motif choisi est `waste` (« Jeté ») ou `expired` (« Périmé ») ; **ou** la quantité choisie **vide le lot visé** (« Tout le reste », ou une saisie ≥ au reste) — le cas réel, le pot de yaourt qu'on finit. Au rangement, l'emballage est plein et part dans un placard : personne ne trie alors.
 - **Une ligne, jamais une carte** : la hauteur de l'écran ne doit pas bouger selon qu'un emballage est connu ou non. **Rien de connu → rien d'affiché**, et pas de bac deviné.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 `frontend/tests/tri.test.ts` : une phrase par bac ; deux bacs joints par « et » ; liste vide → `null` ; bac inconnu ignoré ; deux bacs identiques ne se répètent pas.
 
@@ -1020,12 +1020,12 @@ git commit -m "feat: a manual portion wins, and the panel learns which bin the p
 
 `frontend/tests/consommation.test.ts`, à la fin : consigne présente sur `Jeté`, sur `Périmé`, et sur « Tout le reste » en `Mangé` ; **absente** sur une sortie partielle en `Mangé` ; absente quand `packaging` vaut `null` ; absente quand `packaging.bins` est vide ; une saisie manuelle ≥ au reste la fait apparaître.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: FAIL — `Cannot find module '../src/tri'`
 
-- [ ] **Step 3: Écrire les trois changements**
+- [x] **Step 3: Écrire les trois changements**
 
 `tri.ts` : une table `LIBELLE_BAC` et la mise en phrase. Aucun import de `lit`.
 
@@ -1033,16 +1033,16 @@ Expected: FAIL — `Cannot find module '../src/tri'`
 
 `consommation.ts` : mémoriser `packaging` et `portion_source` à la réponse de `product/get` (à côté de `this.portion`, ligne 88), passer la source à `raccourcisQuantite` (ligne 234), et rendre **une ligne** sous les boutons de quantité, aux deux conditions ci-dessus.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Remplacer la condition « la quantité vide le lot » par « la quantité égale exactement le restant » (`===` au lieu de `>=`). Le test de la saisie manuelle supérieure au reste doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/tri.ts frontend/src/portion.ts frontend/src/ecrans/consommation.ts frontend/tests/
@@ -1070,27 +1070,27 @@ Le champ est **masqué** pour un produit suivi à la pièce — la borne est aus
 
 Au Journal, sous les totaux du jour : une ligne par objectif réglé — « Sel 8,4 / 6 g » — et **la même en gris** pour la moyenne des sept journées closes **quand elle dépasse**. Aucun objectif réglé → **aucune ligne**, écran identique au lot 2.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 `frontend/tests/catalogue.test.ts`, à la fin : le champ est absent pour un produit `base_unit: 'piece'` ; une saisie vide produit `{manual_portion: null}` ; « 45,5 » produit `45.5` ; une saisie illisible fait échouer l'édition **entière** (`{ok: false}`), sans envoyer les autres champs ; une valeur inchangée n'est **pas** renvoyée dans `fields` ; `CHAMPS_CATALOGUE_MODIFIABLES` contient bien `manual_portion` (le filet statique du fichier).
 
 `frontend/tests/journal.test.ts`, à la fin : trois objectifs réglés → trois lignes ; aucun objectif → aucune ligne et un rendu **identique** à celui du lot 2 ; un objectif dépassé sur la seule moyenne rend la ligne grise ; la virgule décimale est utilisée à l'affichage (`formaterNombre`).
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: FAIL
 
-- [ ] **Step 3: Écrire les deux écrans**
+- [x] **Step 3: Écrire les deux écrans**
 
 Suivre à la lettre les mécanismes existants : `appliquerChampNumerique` pour le catalogue (rien de nouveau à écrire, juste une entrée de plus dans `LIBELLE_CHAMP_NUMERIQUE` et un appel de plus dans `champsModifies`), `formaterNombre` pour le journal.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS — 405 tests de départ, plus les nouveaux, aucun tombé.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/ecrans/catalogue.ts frontend/src/ecrans/journal.ts frontend/tests/
@@ -1106,7 +1106,7 @@ git commit -m "feat: set your own portion in the catalogue, see your caps in the
 - Modify: `docs/exploitation.md`
 - Modify: `custom_components/home_stock/panel/home-stock-panel.js` (artefact de build, **dernière tâche uniquement**)
 
-- [ ] **Step 1: Ajouter deux scénarios**
+- [x] **Step 1: Ajouter deux scénarios**
 
 Dans `frontend/outils/verifier-rendu.mjs`, **en fin** du tableau `SCENARIOS` (fichier à fort risque de conflit avec le lot 4 : ajouter, ne jamais réordonner), et dans `SCENARIOS_MINIFIES` si les scénarios voisins y figurent :
 
@@ -1115,12 +1115,12 @@ Dans `frontend/outils/verifier-rendu.mjs`, **en fin** du tableau `SCENARIOS` (fi
 
 Les deux formats obligatoires restent **412 × 915** et **1280 × 800**, avec les règles automatiques du script : pas de débordement, cible tactile ≥ 62 px, contraste ≥ 5:1, aucun texte tronqué.
 
-- [ ] **Step 2: Lancer la vérification de rendu (bundle en mémoire, aucun déploiement)**
+- [x] **Step 2: Lancer la vérification de rendu (bundle en mémoire, aucun déploiement)**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: **41 scénarios**, tous verts (39 au départ + 2).
 
-- [ ] **Step 3: Écrire la section « Lot 2bis » de `docs/exploitation.md`**
+- [x] **Step 3: Écrire la section « Lot 2bis » de `docs/exploitation.md`**
 
 **En fin de fichier**, après « Lot 5 », trois paragraphes et pas davantage :
 
@@ -1128,7 +1128,7 @@ Expected: **41 scénarios**, tous verts (39 au départ + 2).
 2. **Rien n'est annoncé sans importer le blueprint** `blueprints/automation/home_stock/objectifs_bleuenn.yaml`, exactement comme pour les dates limites au lot 2. Déclencheur horaire (défaut 21:30), agent par défaut `conversation.personas_studio_home_manager`.
 3. **La consigne de tri n'apparaît que sur les articles scannés ou resynchronisés après cette version** : le champ d'emballage n'avait jamais été demandé à Open Food Facts, **aucun rattrapage rétroactif n'est possible**. Une passe `home_stock.resync_off` (une quarantaine de minutes) la ramène pour tout le catalogue. Mentionner aussi le champ « Ma portion » du Catalogue et le fait qu'un champ vidé rend la main à la médiane apprise.
 
-- [ ] **Step 4: Construire le bundle — une seule fois, ici**
+- [x] **Step 4: Construire le bundle — une seule fois, ici**
 
 Run (depuis `frontend/`) : `npm run build`
 
@@ -1140,12 +1140,12 @@ git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/
 
 Un seul fichier doit avoir changé. **Ne rien copier dans `/opt/nivuus/HomeAssistant/config/`, ne redémarrer ni recharger quoi que ce soit** : le déploiement reste le geste du propriétaire.
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: les 41 scénarios verts, cette fois sur le bundle construit.
 
-- [ ] **Step 6: Lancer les deux suites une dernière fois**
+- [x] **Step 6: Lancer les deux suites une dernière fois**
 
 ```bash
 ./scripts/test.sh -q --timeout=120
@@ -1153,7 +1153,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: tout vert.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js
