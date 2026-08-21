@@ -1,0 +1,389 @@
+"""Le calcul des 108 lots, avant toute écriture.
+
+Toute cette partie est pure : elle reçoit des lignes et rend des lots. Ce qui
+touche SQLite vient ensuite, et la séparation est ce qui permet de tester les
+sept prix aberrants sans ouvrir une base.
+"""
+import pytest
+
+from custom_components.home_stock.grocy.units import base_unit
+from custom_components.home_stock.import_grocy_stock import (
+    CatalogueEntry,
+    Locations,
+    StockImportError,
+    plan_batches,
+)
+
+# Le jour de la bascule, tel que les fixtures l'ont figé.
+AUJOURD_HUI = "2026-08-21"
+# La date de l'import du catalogue par le lot 0. Un produit Grocy créé après
+# n'est PAS au catalogue de home_stock : c'est le Sorbet Fraise, et c'est ce
+# que le rejeu du catalogue (geste 6) rattrape.
+IMPORT_LOT0 = "2026-08-19"
+
+# Les emplacements de home_stock ne portent pas les identifiants de Grocy :
+# l'import du lot 0 les a créés par NOM. Le décalage est volontaire ici, pour
+# qu'un test qui confondrait les deux échoue.
+_LOCATIONS_HOME = {2: 102, 3: 103, 4: 104, 5: 105}
+
+
+def _catalogue(grocy_reel, *, cree_avant: str | None = None
+               ) -> dict[int, CatalogueEntry]:
+    unites = {q["id"]: q["name"] for q in grocy_reel["quantity_units"]}
+    catalogue: dict[int, CatalogueEntry] = {}
+    for numero, ligne in enumerate(grocy_reel["products"]):
+        if not ligne["active"]:
+            continue
+        if cree_avant and (ligne["row_created_timestamp"] or "") >= cree_avant:
+            continue
+        mappee = base_unit(unites.get(ligne["qu_id_stock"], "?"))
+        if mappee is None:
+            continue
+        catalogue[ligne["id"]] = CatalogueEntry(
+            product_id=1000 + numero,
+            article_id=2000 + numero,
+            name=ligne["name"],
+            base_unit=mappee[0],
+            default_location_id=_LOCATIONS_HOME.get(ligne["location_id"]),
+        )
+    return catalogue
+
+
+@pytest.fixture
+def catalogue_reel(grocy_reel) -> dict[int, CatalogueEntry]:
+    """Le catalogue de home_stock APRÈS le rejeu de l'import du catalogue.
+
+    C'est l'état dans lequel l'import du stock est lancé : le geste 6 de la
+    procédure rejoue `import_grocy_catalog` en tête de bascule, précisément
+    pour que les 108 lots aient tous leur produit. Les 300 produits actifs
+    dont l'unité de stock se convertit y sont, Sorbet Fraise compris.
+    """
+    return _catalogue(grocy_reel)
+
+
+@pytest.fixture
+def catalogue_avant_rejeu(grocy_reel) -> dict[int, CatalogueEntry]:
+    """Le catalogue tel qu'il est AUJOURD'HUI, avant le rejeu : 299 produits.
+
+    Le Sorbet Fraise, créé le 21 août à 18 h 54, en est absent. C'est la cible
+    mobile, et c'est le seul lot des 108 qui ne se résout pas contre lui.
+    """
+    return _catalogue(grocy_reel, cree_avant=IMPORT_LOT0)
+
+
+@pytest.fixture
+def locations_reelles() -> Locations:
+    """Les quatre emplacements de Grocy, appariés par nom au lot 0.
+
+    L'identifiant 1 n'y est PAS : il a été supprimé du référentiel de Grocy,
+    et deux lots le désignent encore. C'est le troisième cran de la cascade.
+    """
+    return Locations(by_grocy_id=dict(_LOCATIONS_HOME), fallback_id=105)
+
+
+@pytest.fixture
+def lignes_reelles(grocy_reel) -> list[dict]:
+    """Les 108 lignes de stock, jointes à leur produit comme la requête du
+    §8.1 le fait : `s` pour stock, `prod` pour products, aucun alias `b`."""
+    produits = {p["id"]: p for p in grocy_reel["products"]}
+    unites = {q["id"]: q["name"] for q in grocy_reel["quantity_units"]}
+    lignes = []
+    for ligne in grocy_reel["stock"]:
+        produit = produits[ligne["product_id"]]
+        lignes.append({**ligne,
+                       "unit": unites.get(produit["qu_id_stock"], "?"),
+                       "product_name": produit["name"]})
+    return lignes
+
+
+def _lot(*, product_id=7, amount=1.0, unit="g", best_before="2026-12-31",
+         price=None, note=None, open=0, opened_date=None,
+         purchased="2026-05-02", location_id=2, stock_id=900,
+         product_name="Mozzarella"):
+    """Une ligne de stock de Grocy, jointe à son produit."""
+    return {"id": stock_id, "product_id": product_id, "amount": amount,
+            "best_before_date": best_before, "purchased_date": purchased,
+            "price": price, "open": open, "opened_date": opened_date,
+            "location_id": location_id, "note": note,
+            "row_created_timestamp": "2026-05-02 10:00:00",
+            "unit": unit, "product_name": product_name}
+
+
+def test_the_hundred_and_eight_batches_resolve_after_the_replay(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    """Cent-huit, pas cent-sept.
+
+    La spec (§ 8.1) et le plan disent l'un « 107 lots sur 108 se résolvent »,
+    l'autre « un lot non résolu ARRÊTE l'import », et les deux à la fois sont
+    impossibles : si le 108ᵉ arrête tout, l'import ne rend pas 107 lots, il ne
+    rend rien. Les deux phrases décrivent en fait deux MOMENTS.
+
+    Le contrat retenu est celui du contrôle C1, qui attend 108 chez Grocy et
+    108 chez nous : l'import tourne APRÈS le rejeu du catalogue (geste 6), et
+    les 108 se résolvent. Le « 107 sur 108 » de la spec est une mesure de
+    l'état d'aujourd'hui, épinglée par le test suivant. Amendement A4 du § 22.
+    """
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    assert len(lots) == 108
+
+
+def test_today_one_batch_of_the_hundred_and_eight_stops_the_import(
+        lignes_reelles, catalogue_avant_rejeu, locations_reelles):
+    """LE seul arrêt dur du §8, et il se déclenche pour de vrai aujourd'hui.
+
+    107 des 108 lots se résolvent contre le catalogue actuel ; le 108ᵉ est le
+    Sorbet Fraise créé le 21 août à 18 h 54. Lancer l'import sans avoir rejoué
+    le catalogue s'arrête là, en le nommant — c'est ce qui rend le geste 6
+    obligatoire au lieu de recommandé.
+    """
+    resolus = [l for l in lignes_reelles
+               if l["product_id"] in catalogue_avant_rejeu]
+    assert len(resolus) == 107
+    with pytest.raises(StockImportError) as err:
+        plan_batches(lignes_reelles, catalogue_avant_rejeu, locations_reelles,
+                     today=AUJOURD_HUI)
+    assert "350" in str(err.value)
+    assert "import_grocy_catalog" in str(err.value)
+
+
+def test_a_batch_without_a_product_stops_the_import(catalogue_reel,
+                                                    locations_reelles):
+    """S'il existe après le rejeu, quelqu'un a écrit dans Grocy pendant la
+    bascule, et alors rien de ce qui suit n'a de valeur."""
+    with pytest.raises(StockImportError) as err:
+        plan_batches([_lot(product_id=99999)], catalogue_reel,
+                     locations_reelles, today=AUJOURD_HUI)
+    assert "99999" in str(err.value)
+
+
+def test_kilograms_become_grams(catalogue_reel, locations_reelles):
+    lots, _ = plan_batches([_lot(product_id=7, amount=1.5, unit="kg")],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].quantity == 1500.0
+    assert lots[0].base_unit == "g"
+
+
+def test_no_unit_is_unknown_on_the_real_data(lignes_reelles, catalogue_reel,
+                                             locations_reelles):
+    """0 unité inconnue, 0 divergence entre l'unité du lot et l'unité de base
+    du produit : c'est ce que la spec a mesuré, et c'est ce qui rend
+    reference_kcal juste sans reconversion."""
+    _, anomalies = plan_batches(lignes_reelles, catalogue_reel,
+                                locations_reelles, today=AUJOURD_HUI)
+    assert not [a for a in anomalies if "unité" in a]
+
+
+def test_a_unit_that_diverges_from_the_catalogue_is_refused(catalogue_reel,
+                                                            locations_reelles):
+    """Le contraire du test précédent, sur une ligne fabriquée. Convertir des
+    kilogrammes dans un produit stocké à la pièce écrirait 1 500 « pièces »
+    de tomates. Aucune devinette : le lot n'entre pas, et l'anomalie nomme
+    les deux unités."""
+    lots, anomalies = plan_batches(
+        [_lot(product_id=3, amount=1.5, unit="kg", product_name="Oignon rouge")],
+        catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots == []
+    assert len([a for a in anomalies if "unité" in a]) == 1
+    assert "piece" in anomalies[0] and "g" in anomalies[0]
+
+
+def test_floating_dust_enters_closed_not_ignored(catalogue_reel,
+                                                 locations_reelles):
+    """Le lot #537 (« Fromage fouetté ») porte 5,55e-17. Sous 0,001 unité de
+    base il entre avec remaining = 0 et un closed_at. Un lot IGNORÉ serait un
+    écart de comptage au contrôle C1 — ce n'est pas la même chose."""
+    lots, _ = plan_batches([_lot(product_id=7, amount=5.55e-17)],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert len(lots) == 1
+    assert lots[0].quantity == 0.0
+    assert lots[0].closed is True
+
+
+def test_fractional_pieces_are_never_rounded(catalogue_reel, locations_reelles):
+    """0,08 concombre et 12,875 œufs existent. L'arrondi est un geste
+    d'affichage, jamais de stockage — le lot 0 stocke des REAL pour ça."""
+    for quantite in (0.08, 12.875, 5.98):
+        lots, _ = plan_batches(
+            [_lot(product_id=3, amount=quantite, unit="Pièce")],
+            catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+        assert lots[0].quantity == quantite
+
+
+def test_the_eighteen_fractional_piece_batches_on_real_data(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    fractionnaires = [l for l in lots
+                      if l.base_unit == "piece" and l.quantity != int(l.quantity)]
+    assert len(fractionnaires) == 18
+
+
+def test_the_sentinel_becomes_null(catalogue_reel, locations_reelles):
+    lots, _ = plan_batches([_lot(product_id=7, best_before="2999-12-31")],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].best_before is None
+
+
+def test_the_ten_sentinels_and_the_ninety_eight_real_dates(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    assert len([l for l in lots if l.best_before is None]) == 10
+    assert len([l for l in lots if l.best_before is not None]) == 98
+
+
+def test_the_six_already_expired_batches_come_in_as_they_are(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    """Ce sont de vrais produits périmés dans un vrai placard, et
+    binary_sensor.home_stock_expirations doit s'allumer dessus le premier
+    jour. Les masquer serait mentir au propriétaire sur son frigo."""
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    perimes = [l for l in lots if l.best_before and l.best_before < AUJOURD_HUI]
+    assert len(perimes) == 6
+
+
+def test_a_batch_worth_more_than_twenty_euros_loses_its_price(catalogue_reel,
+                                                              locations_reelles):
+    lots, anomalies = plan_batches(
+        [_lot(product_id=7, amount=1487, price=2.45, note="Ticket Carrefour")],
+        catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].price_per_base_unit is None
+    assert any("2,45" in a or "2.45" in a for a in anomalies)
+
+
+def test_a_price_is_never_zero_only_null(catalogue_reel, locations_reelles):
+    """Règle du lot 0 §7.4 : zéro voudrait dire « mesuré à zéro », NULL veut
+    dire « inconnu ». sensor.home_stock_stock_value publie unpriced_batches ;
+    un prix inconnu est VISIBLE, un prix à zéro est invisible."""
+    lots, _ = plan_batches([_lot(product_id=7, amount=1487, price=2.45)],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].price_per_base_unit != 0.0
+    assert lots[0].price_per_base_unit is None
+
+
+def test_a_price_recorded_as_zero_is_unknown_not_measured(catalogue_reel,
+                                                          locations_reelles):
+    """41 lignes de stock portent 0.0, et 44 portent NULL : chez Grocy, les
+    deux veulent dire « pas de prix ». Recopier le 0.0 le ferait entrer dans
+    la valeur du stock comme un prix MESURÉ à zéro, donc invisible."""
+    lots, _ = plan_batches([_lot(product_id=7, amount=100, price=0.0)],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].price_per_base_unit is None
+
+
+def test_the_seven_dropped_prices_and_the_sixteen_kept(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    """7 lots portent 8 089 EUR des 8 140 EUR. Les autres pèsent 51 EUR : un
+    chiffre petit et vrai plutôt qu'énorme et faux.
+
+    Seize valorisés, pas cinquante-sept : sur les 108 lignes, 23 portent un
+    prix strictement positif, 41 portent 0.0 et 44 portent NULL. Amendement
+    A3 du § 22 — la valeur de 51 EUR de la spec est juste, son compte ne
+    l'était pas.
+    """
+    lots, anomalies = plan_batches(lignes_reelles, catalogue_reel,
+                                   locations_reelles, today=AUJOURD_HUI)
+    values = [l for l in lots if l.price_per_base_unit is not None]
+    assert len(values) == 16
+    assert len([a for a in anomalies if "prix" in a.lower()]) == 7
+    total = sum(l.quantity * l.price_per_base_unit for l in values)
+    assert 45 <= total <= 60          # ~51 EUR, et surtout pas 8 140
+
+
+def test_the_ninety_two_batches_without_a_usable_price(
+        lignes_reelles, catalogue_reel, locations_reelles):
+    """85 sans prix chez Grocy + les 7 écartés. C'est le compte que C4
+    contrôlera, et il est nommé ici pour qu'un seul chiffre gouverne."""
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    assert len([l for l in lots if l.price_per_base_unit is None]) == 92
+
+
+def test_the_boundary_is_a_ditch_not_a_line(catalogue_reel, locations_reelles):
+    """Le lot le plus cher retenu vaut 13,80 EUR, le premier écarté en vaut
+    46,68. Rien ne vit entre les deux."""
+    garde, _ = plan_batches([_lot(product_id=3, amount=1, price=13.80,
+                                  unit="Pièce")],
+                            catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert garde[0].price_per_base_unit == 13.80
+    ecarte, _ = plan_batches([_lot(product_id=3, amount=1, price=47.0,
+                                   unit="Pièce")],
+                             catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert ecarte[0].price_per_base_unit is None
+
+
+def test_an_anomaly_quotes_the_note_word_for_word(catalogue_reel,
+                                                  locations_reelles):
+    """Les notes sont la PREUVE du défaut : quatre des sept portent le nom
+    d'un autre produit que celui auquel le lot est attaché. Elles doivent se
+    lire dans le rapport, parce que batch.note n'existe pas."""
+    _, anomalies = plan_batches(
+        [_lot(product_id=7, amount=1000, price=1.79,
+              note="Ticket Carrefour 21/04/2026 — Fromage blanc 1kg (CORRIGÉ)")],
+        catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert any("Fromage blanc 1kg" in a for a in anomalies)
+
+
+def test_the_location_cascade_in_its_three_cases(lignes_reelles, catalogue_reel,
+                                                 locations_reelles):
+    """29 lots sur 108 n'ont pas d'emplacement résoluble : 27 tombent sur le
+    default_location du produit, 2 sur « Autre » (ils pointent l'emplacement
+    id 1, SUPPRIMÉ du référentiel — le même défaut que l'unité id 1 que
+    debloquer_unites.py a dû réparer en août)."""
+    lots, anomalies = plan_batches(lignes_reelles, catalogue_reel,
+                                   locations_reelles, today=AUJOURD_HUI)
+    assert all(l.location_id is not None for l in lots)
+    replis = [a for a in anomalies if "Autre" in a]
+    assert len(replis) == 2
+    assert any("Moutarde Burger Complet" in a for a in replis)
+    assert any("Beurre Oméga-3" in a for a in replis)
+
+
+def test_no_batch_is_ever_refused_for_its_location(lignes_reelles,
+                                                   catalogue_reel,
+                                                   locations_reelles):
+    """Un paquet mal rangé reste un paquet qu'on possède."""
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    assert len(lots) == 108
+
+
+def test_an_open_batch_without_an_open_date_uses_its_entry_date(
+        catalogue_reel, locations_reelles):
+    """Un seul lot est ouvert dans la base, et celui-là porte bien une date
+    d'ouverture. La ligne fabriquée ici couvre le cas contraire, qui est
+    celui d'un import futur : ouvert, sans date."""
+    lots, _ = plan_batches(
+        [_lot(product_id=7, open=1, opened_date=None, purchased="2026-05-02")],
+        catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].opened_at.startswith("2026-05-02")
+
+
+def test_a_closed_batch_has_no_open_date(catalogue_reel, locations_reelles):
+    lots, _ = plan_batches([_lot(product_id=7, open=0)],
+                           catalogue_reel, locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].opened_at is None
+
+
+def test_opening_never_recomputes_the_best_before(catalogue_reel,
+                                                  locations_reelles):
+    """La règle du lot 0 §7.6 (avancer la DLC de days_after_opening jours)
+    s'applique au GESTE d'ouverture, pas à la constatation qu'un paquet est
+    ouvert depuis six mois. L'appliquer ici donnerait une DLC calculée depuis
+    une date d'entrée : faux dans les deux sens."""
+    lots, _ = plan_batches(
+        [_lot(product_id=7, open=1, best_before="2026-09-30",
+              purchased="2026-05-02")], catalogue_reel,
+        locations_reelles, today=AUJOURD_HUI)
+    assert lots[0].best_before == "2026-09-30"
+
+
+def test_every_batch_carries_a_grocy_reference(lignes_reelles, catalogue_reel,
+                                               locations_reelles):
+    lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
+                           today=AUJOURD_HUI)
+    refs = {l.external_ref for l in lots}
+    assert len(refs) == 108
+    assert all(r.startswith("grocy:stock:") for r in refs)
