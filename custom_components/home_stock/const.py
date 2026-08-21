@@ -131,3 +131,21 @@ CONSUMABLE_UNITS: Final = ("percent", "minutes")
 # consignes de tri (2023). Le serveur rend ces clés ; les phrases françaises
 # sont l'affaire du panneau (frontend/src/tri.ts).
 RECYCLING_BINS: Final = ("yellow", "glass", "household", "dropoff")
+
+# --- lot 2bis : objectifs nutritionnels --------------------------------------
+# La clé des options de l'entrée où vivent les plafonds journaliers.
+CONF_GOALS: Final = "nutrition_goals"
+
+# Les neuf nutriments qu'un objectif peut viser : ceux, exactement, que le
+# journal fige sur chaque mouvement depuis le lot 2. DÉRIVÉ de MACRO_COLUMNS,
+# jamais recopié — un objectif sur un nutriment que le journal ne chiffre pas
+# ne pourrait être comparé à rien.
+GOAL_NUTRIENTS: Final = ("kcal", *MACRO_COLUMNS)
+
+# Au-delà, ce n'est plus un objectif : c'est une faute de frappe (2000 kcal
+# tapé « 20000 » se remarque, « 200000 » ne se remarquerait jamais).
+MAX_GOAL: Final = 20_000.0
+
+# Sept journées CLOSES, J-7 … J-1 : la journée courante est exclue, sinon la
+# moyenne chuterait chaque matin puis remonterait au dîner.
+GOAL_WINDOW_DAYS: Final = 7

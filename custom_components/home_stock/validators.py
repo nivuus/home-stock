@@ -13,7 +13,7 @@ from typing import Any, Final, Mapping
 
 import voluptuous as vol
 
-from .const import MAX_PARTS
+from .const import MAX_GOAL, MAX_PARTS, MAX_SERVING
 
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
@@ -301,3 +301,50 @@ def media_path(value: Any) -> str | None:
         raise vol.Invalid(
             f"media path must not point under www/, got {preview(value)}")
     return cleaned
+
+
+# --- lot 2bis : la portion qu'on fixe, le plafond qu'on se donne -------------
+
+def goal_quantity(value: Any) -> float:
+    """A daily cap: a real, finite number, above zero and under MAX_GOAL.
+
+    Zero is refused rather than stored: "no goal" is the absence of the key,
+    and a cap of zero would make every single day a breach. Accepts the
+    French decimal comma, like `percent_threshold`, for the same reason.
+    """
+    if isinstance(value, str):
+        value = value.replace(",", ".")
+    number = finite_float(value)
+    if not 0 < number <= MAX_GOAL:
+        raise vol.Invalid(
+            f"un objectif doit être compris entre 0 (exclu) et {MAX_GOAL:.0f},"
+            f" reçu {preview(value)}")
+    return number
+
+
+def check_manual_portion(value: Any, *, base_unit: str,
+                         max_net_quantity: float | None) -> float | None:
+    """The portion a person typed, or `None` to clear it.
+
+    The three refusals are `off/mapping.plausible_serving()`'s, in the same
+    order — but this one raises a French message instead of returning `None`,
+    because here somebody typed something and is owed a reason.
+    """
+    if value is None:
+        return None
+    if base_unit not in ("g", "ml"):
+        raise vol.Invalid(
+            "une portion ne se règle que sur un produit suivi en g ou en ml :"
+            " à la pièce, une portion vaut une pièce")
+    if isinstance(value, str):
+        value = value.replace(",", ".")
+    number = finite_float(value)
+    if not 0 < number <= MAX_SERVING:
+        raise vol.Invalid(
+            f"la portion doit être supérieure à 0 et d'au plus {MAX_SERVING:.0f},"
+            f" reçu {preview(value)}")
+    if max_net_quantity is not None and number > max_net_quantity:
+        raise vol.Invalid(
+            f"la portion doit être d'au plus {max_net_quantity:g} {base_unit},"
+            " le plus gros paquet connu")
+    return number
