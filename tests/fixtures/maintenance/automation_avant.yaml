@@ -1,0 +1,91 @@
+# Copie EXACTE du bloc `maintenance_sync_taches` de config/automations.yaml,
+# prise le 2026-08-21. Lecture seule, jamais modifiée : elle sert de témoin
+# pour prouver que le raccord ne change que ce qu'il annonce.
+- id: maintenance_sync_taches
+  alias: Maintenance - Synchronisation liste de tâches
+  description: 'Réconcilie todo.maintenance avec l''état réel de la maison chaque heure (et au démarrage
+    HA) : ajoute les tâches dont le seuil d''apparition est franchi, rafraîchit leur description, ferme
+    celles dont la condition a disparu. Règles et seuils dans config/custom_templates/maintenance.jinja.
+    Bleuenn n''est prévenue que des NOUVELLES tâches. Remplace 6 automations de notification (consommables,
+    plantes, piles Grocy, pile morte, batterie faible ×2). Créée 2026-07-31.'
+  triggers:
+  - trigger: time_pattern
+    minutes: '5'
+  - trigger: homeassistant
+    event: start
+  conditions: []
+  actions:
+  - variables:
+      plan: '{% from ''maintenance.jinja'' import maintenance_plan %}{{ maintenance_plan() | from_json
+        }}'
+  - action: todo.get_items
+    target:
+      entity_id: todo.maintenance
+    data:
+      status: needs_action
+    response_variable: actuel
+  - action: todo.get_items
+    continue_on_error: true
+    target:
+      entity_id: todo.grocy_batteries
+    data:
+      status: needs_action
+    response_variable: grocy
+  - variables:
+      presents: '{{ actuel[''todo.maintenance''][''items''] | map(attribute=''summary'') | list }}'
+      voulu: "{%- set ns = namespace(l=[]) -%} {%- set gitems = (grocy | default({}, true)).get('todo.grocy_batteries',\
+        \ {}).get('items', []) -%} {%- for it in plan['items'] -%}\n  {%- set g = (gitems\n          \
+        \      | selectattr('description', 'defined')\n                | selectattr('description', 'search',\
+        \ it.entity) | list | first | default(none, true))\n              if it.entity else none -%}\n\
+        \  {%- set suffixe = (' — ' ~ g.description.split(' - ')[0]) if (g is not none and it.summary\
+        \ is search('^(Pile|Recharger)')) else '' -%}\n  {%- set ns.l = ns.l + [{'summary': it.summary,\
+        \ 'description': it.description ~ suffixe}] -%}\n{%- endfor -%} {{ ns.l }}"
+  - variables:
+      a_ajouter: '{{ voulu | rejectattr(''summary'', ''in'', presents) | list }}'
+      a_fermer: '{{ actuel[''todo.maintenance''][''items''] | rejectattr(''summary'', ''in'', plan[''keep''])
+        | map(attribute=''summary'') | list }}'
+      a_rafraichir: "{%- set ns = namespace(l=[]) -%} {%- for it in voulu if it.summary in presents -%}\n\
+        \  {%- set cur = actuel['todo.maintenance']['items'] | selectattr('summary', 'eq', it.summary)\
+        \ | list | first -%}\n  {%- if (cur.description | default('')) != it.description -%}\n    {%-\
+        \ set ns.l = ns.l + [it] -%}\n  {%- endif -%}\n{%- endfor -%} {{ ns.l }}"
+  - repeat:
+      for_each: '{{ a_ajouter }}'
+      sequence:
+      - action: todo.add_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: '{{ repeat.item.summary }}'
+          description: '{{ repeat.item.description }}'
+  - repeat:
+      for_each: '{{ a_rafraichir }}'
+      sequence:
+      - action: todo.update_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: '{{ repeat.item.summary }}'
+          description: '{{ repeat.item.description }}'
+  - repeat:
+      for_each: '{{ a_fermer }}'
+      sequence:
+      - action: todo.update_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: '{{ repeat.item }}'
+          status: completed
+  - action: todo.remove_completed_items
+    target:
+      entity_id: todo.maintenance
+  - if:
+    - condition: template
+      value_template: '{{ a_ajouter | count > 0 }}'
+    then:
+    - action: personas_home.send_event
+      data:
+        text: 'Maintenance maison — {{ a_ajouter | count }} nouvelle(s) tâche(s) ajoutée(s) à la liste
+          : {% for t in a_ajouter %}{{ t.summary }} ({{ t.description }}){% if not loop.last %}, {% endif
+          %}{% endfor %}. Préviens Maxime en une phrase courte et non urgente ; la liste Maintenance dans
+          Home Assistant contient le détail. N''invente rien d''autre.'
+  mode: single
