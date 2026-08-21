@@ -630,3 +630,104 @@ def test_all_twelve_pass_on_a_fully_migrated_database(db_piles, grocy_reel_db,
     assert rapport.blocking == []
     assert rapport.ok is True
     assert len(rapport.checks) == 12
+
+
+# --- archive ----------------------------------------------------------------
+
+def _archive(db, grocy_path, tmp_path):
+    chemin = check_migration(db, grocy_path, archive=True,
+                             archive_dir=str(tmp_path)).archive_path
+    return json.loads(Path(chemin).read_text("utf-8"))
+
+
+def test_the_archive_holds_all_eleven_hundred_and_twenty_three_rows(
+        db_migre, grocy_reel_db, tmp_path):
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    assert len(contenu["stock_log"]) == 1123
+
+
+def test_the_six_undone_rows_keep_their_flag(db_migre, grocy_reel_db, tmp_path):
+    """Une annulation fait partie de l'histoire."""
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    assert len([l for l in contenu["stock_log"] if l["undone"]]) == 6
+
+
+def test_each_row_carries_its_product_name(db_migre, grocy_reel_db, tmp_path):
+    """Dans dix ans, un product_id de Grocy ne voudra plus rien dire."""
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    assert all(l.get("product_name") for l in contenu["stock_log"])
+
+
+def test_the_archive_also_holds_the_notes_the_chores_and_the_past_plan(
+        db_migre, grocy_reel_db, tmp_path):
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    assert len(contenu["batch_notes"]) == 25
+    assert len(contenu["chores_log"]) == 39
+    assert len(contenu["past_meal_plan"]) == 66
+
+
+def test_the_six_chores_are_named_even_though_they_are_abandoned(
+        db_migre, grocy_reel_db, tmp_path):
+    """3,5 % de suivi sur six mois. Abandonnées — mais leurs 39 pointages sont
+    archivés, et le chemin de repli est dans docs/exploitation.md, pas dans le
+    code."""
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    noms = {l["chore_name"] for l in contenu["chores_log"]}
+    assert "Nettoyer la litière" in noms
+    assert len(noms) == 6
+
+
+def test_the_archive_is_json_not_sqlite(db_migre, grocy_reel_db, tmp_path):
+    chemin = check_migration(db_migre, grocy_reel_db, archive=True,
+                             archive_dir=str(tmp_path)).archive_path
+    assert chemin.endswith(".json")
+    assert Path(chemin).read_bytes()[:1] == b"{"
+
+
+def test_the_file_name_carries_the_date(db_migre, grocy_reel_db, tmp_path):
+    chemin = check_migration(db_migre, grocy_reel_db, archive=True,
+                             archive_dir=str(tmp_path),
+                             now="2026-09-04T21:00:00").archive_path
+    assert Path(chemin).name == "home_stock_grocy_archive_2026-09-04.json"
+
+
+def test_no_stock_log_row_ever_reaches_the_movement_table(db_migre, grocy_reel_db,
+                                                          tmp_path):
+    """LE test de la décision du §9. 353 sorties chiffrées feraient monter
+    kcal_total de 2,8 millions en un rafraîchissement, et depuis le lot 4 ces
+    compteurs sont state_class TOTAL : la marche d'escalier resterait dans
+    les statistiques long terme POUR TOUJOURS."""
+    avant = repo.totals_between(db_migre.read())
+    check_migration(db_migre, grocy_reel_db, archive=True,
+                    archive_dir=str(tmp_path))
+    assert repo.totals_between(db_migre.read()) == avant
+    assert db_migre.read().execute(
+        "SELECT COUNT(*) AS n FROM movement WHERE idempotency_key LIKE 'grocy:log:%'"
+    ).fetchone()["n"] == 0
+
+
+def test_no_archive_movement_table_was_created(db_migre):
+    """Envisagée et refusée : elle serait écrite une fois et lue jamais.
+    L'archive est un fichier."""
+    tables = {row["name"] for row in db_migre.read().execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "archive_movement" not in tables
+
+
+def test_archive_false_writes_no_file(db_migre, grocy_reel_db, tmp_path):
+    dossier = tmp_path / "archives"
+    dossier.mkdir()
+    rapport = check_migration(db_migre, grocy_reel_db, archive=False,
+                              archive_dir=str(dossier))
+    assert rapport.archive_path is None
+    assert not list(dossier.iterdir())
+
+
+def test_the_archive_is_readable_without_the_grocy_schema(db_migre, grocy_reel_db,
+                                                          tmp_path):
+    """Pas d'id nu, pas de code de statut : des noms, des dates, des
+    quantités et des unités lisibles."""
+    contenu = _archive(db_migre, grocy_reel_db, tmp_path)
+    ligne = contenu["stock_log"][0]
+    assert {"product_name", "amount", "unit", "used_date",
+            "transaction_type", "undone"} <= set(ligne)

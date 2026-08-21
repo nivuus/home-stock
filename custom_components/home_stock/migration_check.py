@@ -512,6 +512,99 @@ def _measure_config(measures: Measures, config_dir) -> None:
                 " extinction, sinon 14 tâches de pile disparaissent")
 
 
+def _write_archive(grocy, destination: str, *, on: str) -> str:
+    """Keep the history, without pouring it into the accounts.
+
+    The 1 123 rows of `stock_log` are NOT re-injected into `movement`, for
+    four reasons that each kill the opposite idea on their own:
+
+    1. **The values are wrong by a factor of thirty.** 387 undone-free
+       consumptions × catalogue calories = 2 804 847 kcal over 35 days;
+       median 867 kcal/day, mean 80 138, peak 2 556 904 on 17 August. Six days
+       out of 35 land in a plausible range. The same unit defects as § 8.4 are
+       in the journal — "1 000 Pot" of salt consumed counts a thousand pots —
+       but on 387 rows instead of 7, and on packets nobody can go and look at
+       any more because they have been eaten.
+    2. **Coverage is 20 %.** 37 days out of 187. A graph would show 150 days
+       at zero, and "zero kcal" reads as "ate nothing", not "recorded
+       nothing" — the ambiguity lot 2 spent a whole lot avoiding.
+    3. **The time is the time of entry, not of the meal.** 131 consumptions at
+       10:00. A burst of entries at ten is not a breakfast of 131 foods.
+    4. **Three counters would jump in one block.** They are `state_class:
+       TOTAL` since lot 4: Home Assistant would honestly record the step
+       FOREVER, and the journal being append-only, undoing it would take 353
+       reversing entries. The cost would not even be computable — 188 of the
+       353 consumptions carry no price at all.
+
+    Nothing is thrown away; it is simply not poured into the accounts. JSON
+    and not SQLite: this file has to be readable in ten years, on a machine
+    that will not have Grocy 4.6's schema in mind. Written into `config/`, so
+    Home Assistant's own backups carry it.
+    """
+    produits = {row["id"]: row["name"] for row in
+                grocy.execute("SELECT id, name FROM products")}
+    unites_produit = {row["id"]: row["qu_id_stock"] for row in
+                      grocy.execute("SELECT id, qu_id_stock FROM products")}
+    unites = {row["id"]: row["name"] for row in
+              grocy.execute("SELECT id, name FROM quantity_units")}
+    corvees = {row["id"]: row["name"] for row in
+               grocy.execute("SELECT id, name FROM chores")}
+
+    contenu = {
+        "written_at": on,
+        "why": "Historique conservé, jamais versé dans la comptabilité :"
+               " valeurs fausses d'un facteur trente, couverture de 20 %,"
+               " heures de saisie et non de repas. Voir § 9 de la spec du"
+               " lot 7.",
+        "stock_log": [
+            {
+                "product_name": produits.get(row["product_id"],
+                                             f"produit {row['product_id']}"),
+                "amount": row["amount"],
+                "unit": unites.get(unites_produit.get(row["product_id"]), "?"),
+                "used_date": row["used_date"],
+                "transaction_type": row["transaction_type"],
+                "price": row["price"],
+                "spoiled": bool(row["spoiled"]),
+                "undone": bool(row["undone"]),
+                "recorded_at": row["row_created_timestamp"],
+            }
+            for row in grocy.execute(
+                "SELECT * FROM stock_log ORDER BY id")
+        ],
+        "batch_notes": [
+            {"product_name": produits.get(row["product_id"], "?"),
+             "note": row["note"], "purchased_date": row["purchased_date"]}
+            for row in grocy.execute(
+                "SELECT product_id, note, purchased_date FROM stock"
+                " WHERE note IS NOT NULL AND note != '' ORDER BY id")
+        ],
+        "chores_log": [
+            {"chore_name": corvees.get(row["chore_id"],
+                                       f"corvée {row['chore_id']}"),
+             "tracked_time": row["tracked_time"],
+             "undone": bool(row["undone"]), "skipped": bool(row["skipped"])}
+            for row in grocy.execute("SELECT * FROM chores_log ORDER BY id")
+        ],
+        "past_meal_plan": [
+            {"day": row["day"], "type": row["type"], "note": row["note"],
+             "recipe_name": row["recipe_name"],
+             "servings": row["recipe_servings"]}
+            for row in grocy.execute(
+                "SELECT plan.day AS day, plan.type AS type, plan.note AS note,"
+                "       plan.recipe_servings AS recipe_servings,"
+                "       rec.name AS recipe_name"
+                " FROM meal_plan AS plan"
+                " LEFT JOIN recipes AS rec ON rec.id = plan.recipe_id"
+                " WHERE plan.day < ? ORDER BY plan.id", (on[:10],))
+        ],
+    }
+    chemin = Path(destination) / f"home_stock_grocy_archive_{on[:10]}.json"
+    chemin.write_text(json.dumps(contenu, ensure_ascii=False, indent=1),
+                      "utf-8")
+    return str(chemin)
+
+
 def _verdict(code: str, gap: int, measures: Measures,
              acknowledged: set[str], to_acknowledge: set[str]) -> str:
     if not FLOORS[code](measures):
@@ -721,4 +814,12 @@ def check_migration(db, grocy_path: str, *, acknowledged=(), archive: bool = Tru
         report.checks.append(resultat)
         if resultat.blocking:
             report.blocking.append(code)
+
+    if archive and archive_dir and measures.grocy_present:
+        grocy = _open_grocy(grocy_path)
+        try:
+            report.archive_path = _write_archive(
+                grocy, archive_dir, on=moment.isoformat(timespec="seconds"))
+        finally:
+            grocy.close()
     return report
