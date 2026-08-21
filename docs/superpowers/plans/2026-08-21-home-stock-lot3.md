@@ -1230,7 +1230,7 @@ class StockManager:
 - **La ré-écriture ne touche jamais une ligne `confirmed`**, ni une étape corrigée à la main. Même règle que `article.manual_fields` protégeant une valeur saisie d'une resynchronisation OFF.
 - Une ligne dont la mesure ne se ramène pas à l'unité de base du produit garde `amount = NULL` et son `raw_text`. Le mapping **n'écrit jamais** de `measure_id` d'une dimension incompatible : il consulte `units.convertible_amount` d'abord, puis les mesures culinaires, et renonce sinon.
 
-- [ ] **Step 1: Écrire les tests du mapping**
+- [x] **Step 1: Écrire les tests du mapping**
 
 ```python
 @pytest.mark.parametrize("text, expected", [
@@ -1256,7 +1256,7 @@ def test_the_raw_text_is_the_source_verbatim_and_nothing_computed():
     """`raw_text` a le statut d'`article.off_raw` : provenance, jamais calcul."""
 ```
 
-- [ ] **Step 2: Écrire les tests d'écriture** dans `tests/test_recipes_write.py`
+- [x] **Step 2: Écrire les tests d'écriture** dans `tests/test_recipes_write.py`
 
 ```python
 def test_a_source_recipe_lands_with_its_ingredients(manager): ...
@@ -1281,13 +1281,13 @@ def test_create_recipe_writes_nothing_when_one_ingredient_is_invalid(manager):
     """Transaction unique : jamais une demi-recette."""
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec, écrire, revérifier**
+- [x] **Step 3: Lancer, vérifier l'échec, écrire, revérifier**
 
 ```bash
 ./scripts/test.sh tests/recipes/test_mapping.py tests/test_recipes_write.py -q   # FAIL puis PASS
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 ```bash
 git add custom_components/home_stock/recipes/mapping.py custom_components/home_stock/application.py tests/recipes/test_mapping.py tests/test_recipes_write.py
 git commit -m "feat: map a TheMealDB card onto recipe rows, replayably"

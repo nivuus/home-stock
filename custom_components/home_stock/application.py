@@ -15,6 +15,8 @@ from .const import (
     MACRO_COLUMNS,
     MATCH_STATES,
     MAX_PARTS,
+    MAX_RECIPE_INGREDIENTS,
+    MAX_RECIPE_STEPS,
     NUTRITION_COLUMNS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
@@ -23,13 +25,16 @@ from .const import (
     REASON_PURCHASE,
     REASON_TRANSFER,
     REASONS,
+    RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
 from .domain.matching import Candidate, candidates, normalise, preselect
+from .domain.recipes import IngredientLine, Measure, display_amount
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
-from .domain.units import format_quantity, to_base_quantity
+from .domain.units import convertible_amount, format_quantity, to_base_quantity
+from .recipes.mapping import SourceIngredient, SourceRecipe
 from .storage import repositories as repo
 from .storage.database import Database
 
@@ -812,6 +817,135 @@ class StockManager:
                 conn, ingredient_id, product_id=product_id, state=state,
                 create_alias=create_alias, moment=moment)
 
+    def create_recipe(self, *, name: str, servings: int = 1,
+                      source: str = "manual", steps: Sequence[Mapping[str, Any]] = (),
+                      ingredients: Sequence[Mapping[str, Any]] = (),
+                      **fields: Any) -> int:
+        """Write one recipe, its pages and its lines, in ONE transaction.
+
+        Everything is validated before the transaction opens, and everything
+        is written inside it: there is never half a recipe. A recipe whose
+        eighth ingredient is refused must leave no trace at all, or the next
+        import would find a shell it cannot tell from a real one.
+        """
+        if len(steps) > MAX_RECIPE_STEPS:
+            raise ValueError(
+                f"une recette ne peut pas dépasser {MAX_RECIPE_STEPS} étapes, "
+                f"reçu {len(steps)}")
+        if len(ingredients) > MAX_RECIPE_INGREDIENTS:
+            raise ValueError(
+                f"une recette ne peut pas dépasser {MAX_RECIPE_INGREDIENTS} "
+                f"ingrédients, reçu {len(ingredients)}")
+        if source not in RECIPE_SOURCES:
+            raise ValueError(
+                f"source de recette inconnue : {source!r}. "
+                f"Attendu l'une de {', '.join(RECIPE_SOURCES)}")
+        if servings < 1:
+            raise ValueError(
+                f"une recette est pour au moins une part, reçu {servings}")
+
+        moment = _now()
+        with self.db.write() as conn:
+            recipe_id = repo.insert_recipe(
+                conn, name=name, source=source, created_at=moment,
+                servings=servings, **fields)
+            _write_steps_within(conn, recipe_id, steps)
+            for position, line in enumerate(ingredients, start=1):
+                payload = dict(line)
+                repo.insert_ingredient(
+                    conn, recipe_id=recipe_id,
+                    position=payload.pop("position", position),
+                    raw_text=payload.pop("raw_text", ""), **payload)
+            return recipe_id
+
+    def list_recipes(self, *, search: str | None = None,
+                     only_reviewable: bool = False) -> list[dict[str, Any]]:
+        return repo.list_recipes(self.db.read(), search=search,
+                                 only_reviewable=only_reviewable)
+
+    def get_recipe_view(self, recipe_id: int) -> dict[str, Any]:
+        """The recipe, its pages, its lines resolved, and the candidates.
+
+        Read-only, on a read connection: the matching screen needs the five
+        candidates for every unmatched line, and computing them here means the
+        panel never has to re-derive a score the backend already knows.
+        """
+        conn = self.db.read()
+        recipe = repo.get_recipe(conn, recipe_id)
+        if recipe is None:
+            raise ValueError(f"recette {recipe_id} inconnue")
+        products = repo.list_products(conn)
+        lines = []
+        for row in repo.list_ingredients(conn, recipe_id):
+            line = dict(row)
+            line["display_amount"] = display_amount(_ingredient_line(row))
+            if row["match_state"] == "unmatched":
+                _, _, _, found = resolve_ingredient_match(
+                    conn, raw_text=row["raw_text"], ingredient_name=None,
+                    products=products)
+                line["candidates"] = [
+                    {"product_id": c.product_id, "name": c.name, "score": c.score}
+                    for c in found
+                ]
+            else:
+                line["candidates"] = []
+            lines.append(line)
+        return {"recipe": recipe, "steps": repo.list_steps(conn, recipe_id),
+                "ingredients": lines}
+
+    def update_recipe(self, recipe_id: int, fields: Mapping[str, Any]) -> None:
+        with self.db.write() as conn:
+            if repo.get_recipe(conn, recipe_id) is None:
+                raise ValueError(f"recette {recipe_id} inconnue")
+            repo.update_recipe_fields(conn, recipe_id, fields)
+
+    def delete_recipe(self, recipe_id: int) -> None:
+        """Remove a recipe — unless a validated meal names it.
+
+        A `done` meal is history. Deleting what it names would leave the
+        journal pointing at nothing, and the journal is append-only precisely
+        so that cannot happen. Deactivating is the path instead: the recipe
+        stops being offered and the past stays readable.
+        """
+        with self.db.write() as conn:
+            if repo.get_recipe(conn, recipe_id) is None:
+                raise ValueError(f"recette {recipe_id} inconnue")
+            if repo.recipe_is_referenced_by_a_done_meal(conn, recipe_id):
+                raise ValueError(
+                    "cette recette a déjà été cuisinée : un repas validé la "
+                    "référence. Désactivez-la plutôt que de la supprimer, "
+                    "pour que le journal reste lisible")
+            repo.delete_recipe(conn, recipe_id)
+
+    def write_source_recipe(self, recipe: SourceRecipe) -> tuple[int, bool]:
+        """Write an imported card. Replayable: returns `(recipe_id, created)`.
+
+        A second import of the same `source_ref` UPDATES the first rather than
+        making a twin — that is what `idx_recipe_source` guarantees, and what
+        makes re-importing safe to do on a hunch.
+
+        A rewrite never touches a line a human confirmed, nor a step edited by
+        hand. Same rule as `article.manual_fields` protecting a typed value
+        from an OFF resync: the machine may refresh what it wrote, never what
+        someone corrected.
+        """
+        moment = _now()
+        with self.db.write() as conn:
+            existing = repo.find_recipe_by_source(conn, "themealdb", recipe.source_ref)
+            created = existing is None
+            if created:
+                recipe_id = repo.insert_recipe(
+                    conn, name=recipe.name, source="themealdb", created_at=moment,
+                    source_ref=recipe.source_ref, source_url=recipe.source_url,
+                    image_url=recipe.image_url, language="en", needs_review=1)
+            else:
+                recipe_id = existing["id"]
+                repo.update_recipe_fields(conn, recipe_id, {
+                    "name": recipe.name, "image_url": recipe.image_url,
+                    "source_url": recipe.source_url})
+            _write_source_ingredients_within(conn, recipe_id, recipe, moment)
+            return recipe_id, created
+
 
 # =============================================================================
 # Lot 3 — matching a recipe ingredient onto a catalogue product.
@@ -919,3 +1053,126 @@ def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None
                           product_id=product_id, created_at=moment)
     return dict(conn.execute(
         "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone())
+
+
+def _ingredient_line(row: Mapping[str, Any]) -> IngredientLine:
+    """One joined repository row as the pure domain wants to see it.
+
+    Built here and not in `repositories`: the storage layer hands over rows,
+    the domain owns value objects, and this is the one seam between them. One
+    definition, so no screen can read a measure differently from another.
+    """
+    measure = None
+    if row["measure_id"] is not None:
+        measure = Measure(id=row["measure_id"], name=row["measure_name"],
+                          base_unit=row["measure_base_unit"],
+                          base_quantity=row["measure_base_quantity"])
+    return IngredientLine(
+        id=row["id"], position=row["position"], product_id=row["product_id"],
+        product_base_unit=row["product_base_unit"], amount=row["amount"],
+        packaging_base_quantity=row["packaging_base_quantity"],
+        packaging_name=row["packaging_name"], measure=measure,
+        raw_text=row["raw_text"], match_state=row["match_state"],
+        optional=bool(row["optional"]),
+    )
+
+
+def _write_steps_within(conn, recipe_id: int,
+                        steps: Sequence[Mapping[str, Any]]) -> None:
+    """Write the cooking pages and their bullets, on the caller's connection."""
+    for position, step in enumerate(steps, start=1):
+        step_id = repo.insert_step(
+            conn, recipe_id=recipe_id, position=step.get("position", position),
+            title=step.get("title"), image_url=step.get("image_url"))
+        for bullet_position, bullet in enumerate(step.get("instructions", ()), start=1):
+            repo.insert_instruction(
+                conn, step_id=step_id,
+                position=bullet.get("position", bullet_position),
+                text=bullet["text"], timer_label=bullet.get("timer_label"),
+                timer_seconds=bullet.get("timer_seconds"))
+
+
+# How the source's own unit words name our seeded culinary measures. Only the
+# ones m004 actually seeds appear: a unit with no measure behind it must fall
+# through to "no usable quantity", never to an invented equivalence.
+SOURCE_UNIT_TO_MEASURE: Final = {
+    "tbsp": "cuillère à soupe", "tbs": "cuillère à soupe",
+    "tablespoon": "cuillère à soupe", "tablespoons": "cuillère à soupe",
+    "cs": "cuillère à soupe", "c.s.": "cuillère à soupe",
+    "tsp": "cuillère à café", "teaspoon": "cuillère à café",
+    "teaspoons": "cuillère à café", "cc": "cuillère à café",
+    "c.c.": "cuillère à café",
+    "cup": "verre", "cups": "verre", "glass": "verre", "verre": "verre",
+    "pinch": "pincée", "pinches": "pincée", "pincée": "pincée",
+}
+
+
+def _resolve_source_quantity(
+    ingredient: SourceIngredient, product: Mapping[str, Any] | None,
+    measures_by_name: Mapping[str, Mapping[str, Any]],
+) -> tuple[float | None, int | None]:
+    """`(amount, measure_id)` for an imported line — spec §9's table.
+
+    Three outcomes and no fourth:
+
+    - a convertible mass or volume in the product's own dimension becomes the
+      converted number with NO measure (the number is then in base units);
+    - a known culinary measure whose dimension matches keeps the number as
+      written and records the measure;
+    - anything else yields `(None, None)`: the line exists, it shows, and it
+      decrements nothing. NULL means unknown, never zero.
+
+    A culinary measure against a `piece` product is refused — a yoghurt is not
+    dosed by the spoonful — and so is a mass for a `piece` product, for the
+    reason lot 1 already refuses to invent a divisor: a guessed per-piece
+    weight writes a false number into an append-only journal.
+    """
+    if ingredient.amount is None or product is None:
+        return None, None
+    base_unit = product["base_unit"]
+
+    if ingredient.unit is None:
+        # A bare number against a product counted in pieces is "2 eggs", which
+        # is exactly what the base unit means. Against grams it would be
+        # "2 grams of flour", which the source did not say.
+        return (float(ingredient.amount), None) if base_unit == "piece" else (None, None)
+
+    unit = ingredient.unit.strip().casefold()
+    converted = convertible_amount(ingredient.amount, unit, base_unit)
+    if converted is not None:
+        return converted, None
+
+    measure_name = SOURCE_UNIT_TO_MEASURE.get(unit)
+    measure = measures_by_name.get(measure_name) if measure_name else None
+    if measure is not None and measure["base_unit"] == base_unit:
+        return float(ingredient.amount), measure["id"]
+    return None, None
+
+
+def _write_source_ingredients_within(conn, recipe_id: int, recipe: SourceRecipe,
+                                     moment: str) -> None:
+    """Rewrite the imported lines, sparing everything a human touched."""
+    products = repo.list_products(conn)
+    measures_by_name = {m["name"]: m for m in repo.list_measures(conn)}
+    protected = {
+        row["position"]: row for row in repo.list_ingredients(conn, recipe_id)
+        if row["match_state"] == "confirmed"
+    }
+    conn.execute(
+        "DELETE FROM recipe_ingredient WHERE recipe_id = ? AND match_state != ?",
+        (recipe_id, "confirmed"))
+
+    for ingredient in recipe.ingredients:
+        if ingredient.position in protected:
+            continue
+        state, product_id, score, _ = resolve_ingredient_match(
+            conn, raw_text=ingredient.raw_text, ingredient_name=ingredient.name,
+            products=products)
+        product = next((p for p in products if p["id"] == product_id), None)
+        amount, measure_id = _resolve_source_quantity(
+            ingredient, product, measures_by_name)
+        repo.insert_ingredient(
+            conn, recipe_id=recipe_id, position=ingredient.position,
+            raw_text=ingredient.raw_text, product_id=product_id,
+            amount=amount, measure_id=measure_id, match_state=state,
+            match_score=score)

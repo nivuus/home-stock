@@ -931,6 +931,13 @@ def delete_recipe(conn, recipe_id: int) -> None:
         " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
     conn.execute("DELETE FROM recipe_step WHERE recipe_id = ?", (recipe_id,))
     conn.execute("DELETE FROM recipe_ingredient WHERE recipe_id = ?", (recipe_id,))
+    # Meals that merely PLANNED this recipe go with it. They are intentions,
+    # not history: nothing was ever written to the journal for them, and a
+    # planned meal pointing at a deleted recipe would be an orphan the
+    # calendar could not render. A `done` meal is another matter entirely and
+    # is refused a layer above, before we ever get here.
+    conn.execute("DELETE FROM meal WHERE recipe_id = ? AND state != 'done'",
+                 (recipe_id,))
     conn.execute("DELETE FROM recipe WHERE id = ?", (recipe_id,))
 
 
