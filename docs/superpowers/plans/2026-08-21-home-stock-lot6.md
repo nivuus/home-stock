@@ -1331,7 +1331,7 @@ git commit -m "chore: a third viewport, 1920x1080 — 47 render runs become 70"
 
 **Le gain, chiffré** : −3,8 Mo/jour de trafic HTTP, −1 client HTTP (8,3 ko et ses deux bases d'URL selon le protocole), et **−1 chemin de panne** : « Grocy muet » et sa règle « surtout ne pas passer au repas suivant » disparaissent, remplacés par `Etat.estUtilisable`, le masquage générique déjà en place pour toute entité indisponible.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/garde-manger.test.ts` :
 
@@ -1418,28 +1418,28 @@ describe('nombreDlc', () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `tools/wallpanel-app`) : `npm test -- garde-manger`
 Expected: FAIL — `Cannot find module './garde-manger'`
 
-- [ ] **Step 3: Écrire le module**
+- [x] **Step 3: Écrire le module**
 
 Créer `src/garde-manger.ts`. **Commentaires et identifiants en français**, comme tout `src/`. En-tête : ce que ce fichier remplace (`src/grocy.ts`), pourquoi il lit des attributs, et le chiffre du trafic économisé — c'est la mémoire de la décision.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run : `npm test -- garde-manger`
 Expected: PASS
 
-- [ ] **Step 5: Les deux contrôles du dépôt**
+- [x] **Step 5: Les deux contrôles du dépôt**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: **41 fichiers de tests** verts, vérificateur vert. **Rien n'a changé à l'écran** — c'est le résultat attendu d'une tâche purement additive.
 
-- [ ] **Step 6: Commit (dans `wallpanel-app`)**
+- [x] **Step 6: Commit (dans `wallpanel-app`)**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app add src/garde-manger.ts tests/garde-manger.test.ts
@@ -1465,7 +1465,7 @@ git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app commit -m "feat: lire 
 
 **Le point d'injection du vérificateur.** `verifier-rendu.mjs` de `wallpanel-app` injecte aujourd'hui un `PlanGrocy` complet (`__injecterPlan`) pour mesurer le pire cas **sans dépendre du vrai Grocy**. Le mécanisme est **conservé et renommé** (`__injecterRepas`), et il injecte désormais un repas déjà résolu : le contrôle ne doit pas plus dépendre de l'état réel de `home_stock` qu'il ne dépendait de celui de Grocy. **Sans cela, un planning vide dans la maison ferait passer le contrôle en mesurant un écran sans bloc.**
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // defaut.test.ts
@@ -1505,26 +1505,26 @@ it('aucun repas planifié : rendreEntretien prend la place, et masquerEntretien 
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run : `npm test -- repas defaut demarrage pannes`
 Expected: FAIL
 
-- [ ] **Step 3: Basculer la source**
+- [x] **Step 3: Basculer la source**
 
 Retirer de `demarrage.ts` : `chargerPlan`, `appliquerPlan`, `lireRecetteGrocy` pour le plan, l'intervalle de 15 minutes, `ClientGrocy.chargerPlan`, `recettesInjectees` pour le plan. **`src/grocy.ts` reste sur le disque** — sa suppression est la Task 17, quand plus rien ne l'appelle.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run : `npm test -- repas defaut demarrage pannes`
 Expected: PASS
 
-- [ ] **Step 5: Le vérificateur de rendu — la seule preuve qui compte**
+- [x] **Step 5: Le vérificateur de rendu — la seule preuve qui compte**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert, **et aucune constante de mise en page n'a bougé**. jsdom ne calcule aucune mise en page : c'est le seul outil qui dit « ça tient ». En cas d'échec, **retirer quelque chose** — jamais agrandir le cadre.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/repas.ts src/rendu/defaut.ts src/demarrage.ts outils/verifier-rendu.mjs tests/
@@ -1554,7 +1554,7 @@ git -C .../wallpanel-app commit -m "feat: le bloc repas de la cuisine vient de h
 
 **Décision sur le hors-ligne : la tablette n'a pas de file.** Le panneau en a une parce qu'on scanne dans un magasin sans réseau ; une tablette murale est à **trois mètres du routeur, qui est le serveur HA**. Un geste refusé hors ligne est **refusé visiblement**, jamais mis en attente : rejouer une validation de repas une heure plus tard, sans témoin, décrémenterait un stock à l'aveugle. Les commandes portent quand même une `idempotency_key` — toutes l'acceptent — parce qu'une reconnexion websocket peut faire douter d'un envoi.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // recette.test.ts
@@ -1606,24 +1606,24 @@ it("n'appelle plus aucun service grocy", () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- recette rendu-recette demarrage`
-- [ ] **Step 3: Écrire le raccordement**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- recette rendu-recette demarrage`
+- [x] **Step 3: Écrire le raccordement**
 
 Si `recipe/get` ne rend pas les étapes sous une forme directement utilisable par `decouperPages`, **c'est la tablette qui s'adapte**. Le lot 6 n'ajoute **aucune** commande websocket dont le seul but serait de pré-mâcher un rendu.
 
 Renommer les points d'injection du vérificateur (`__injecterIngredients` → alimenté par une réponse `meal/preview` de doublure) pour que le contrôle ne touche jamais l'instance réelle sur ce chemin.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- recette rendu-recette demarrage`
-- [ ] **Step 5: Le vérificateur**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- recette rendu-recette demarrage`
+- [x] **Step 5: Le vérificateur**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert. La vue recette **perd** un bouton par ingrédient : la hauteur baisse, elle ne monte pas.
 
-- [ ] **Step 6: Vérifier que les tests ont des dents**
+- [x] **Step 6: Vérifier que les tests ont des dents**
 
 Remplacer le libellé du second appui par « Toucher pour confirmer » : le test de libellé doit tomber. Rendre `meal/preview` appelé dans un `setInterval` : `ne relit jamais périodiquement` doit tomber. Remettre le code correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/recette.ts src/rendu/recette.ts src/demarrage.ts outils/verifier-rendu.mjs tests/
@@ -1663,7 +1663,7 @@ Mais `listesTachesPiece` collecte **automatiquement** toute entité `todo.` de `
 
 **L'ordre des listes de la cuisine devient une décision.** La vue « Tâches » passe de deux listes à trois : **entretien, puis DLC, puis courses**. `listesTachesPiece` respecte l'ordre de `synthese` puis celui de `listesTachesExtra` : déclarer la ligne DLC **après** `todo.maintenance` suffit. **Une DLC passe avant une course** : l'une a une échéance, l'autre non.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // pieces.test.ts
@@ -1713,8 +1713,8 @@ it('le budget de la vue Tâches tient : 6×64 + 5×8 + 112 = 536 ≤ 585', () =>
 it('cocher demande toujours deux appuis', () => { ... });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- pieces cochage taches maison`
-- [ ] **Step 3: Écrire les remplacements**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- pieces cochage taches maison`
+- [x] **Step 3: Écrire les remplacements**
 
 `cochage.ts`, la table de libellés :
 
@@ -1729,8 +1729,8 @@ const LIBELLES_LISTE: Record<string, string> = {
 
 **On garde `todo.update_item` pour cocher** — seule exception à la règle « la tablette écrit par websocket ». Trois raisons : c'est déjà écrit, testé et **partagé avec `todo.maintenance` et `todo.travail`**, deux listes qui ne sont pas `home_stock` et ne le seront jamais ; `ShoppingTodoList.async_update_todo_item` fait exactement la bonne chose (cocher vaut « je l'ai », jamais « c'est en stock », et un `uid` périmé est un no-op explicite) ; et écrire un `home_stock/list/check` en parallèle donnerait **deux façons de cocher la même ligne** sur la même dalle, avec deux traitements d'erreur. La lecture reste `Connexion.listerTaches` (`todo/item/list`), qui marche déjà sur ces entités **sans une ligne de plus**.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- pieces cochage taches maison`
-- [ ] **Step 5: Le vérificateur — la tâche la plus à risque du lot**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- pieces cochage taches maison`
+- [x] **Step 5: Le vérificateur — la tâche la plus à risque du lot**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert. **Deux points à surveiller nommément :**
@@ -1739,11 +1739,11 @@ Expected: vert. **Deux points à surveiller nommément :**
 
 En cas d'échec : **retirer**. La première chose à retirer est la ligne DLC du salon, pas une ligne de la cuisine.
 
-- [ ] **Step 6: Vérifier que le test a des dents**
+- [x] **Step 6: Vérifier que le test a des dents**
 
 Retirer `horsTaches` de la ligne du salon : `le salon ne rend PAS la liste des DLC` doit tomber. Déclarer la ligne DLC **avant** `todo.maintenance` : le test d'ordre doit tomber. Remettre le code correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/pieces.ts src/cochage.ts src/rendu/maison.ts tests/
@@ -1780,12 +1780,12 @@ it("aucune chaîne 'grocy' ne subsiste dans src/", () => {
 
 **Ce qui reste servi, et qu'on ne touche pas** : `/local/grocy-scanner.html` et `/local/grocy-recipes.html` restent en place tant que le lot 7 n'a pas conclu. Simplement, **plus aucune tablette n'y renvoie**. Le conteneur Grocy tourne toujours ; ses **données** sont l'affaire du lot 7.
 
-- [ ] **Step 1: Écrire le test de scan**
+- [x] **Step 1: Écrire le test de scan**
 
 Dans `tests/pieces.test.ts`, en tête de fichier — il est le gardien du lot, il doit être facile à trouver.
 
-- [ ] **Step 2: Lancer, vérifier qu'il échoue** — `npm test -- pieces` → FAIL, avec la liste des fichiers fautifs. **Cette liste est la liste de travail de la tâche.**
-- [ ] **Step 3: Supprimer et nettoyer**
+- [x] **Step 2: Lancer, vérifier qu'il échoue** — `npm test -- pieces` → FAIL, avec la liste des fichiers fautifs. **Cette liste est la liste de travail de la tâche.**
+- [x] **Step 3: Supprimer et nettoyer**
 
 ```bash
 git -C .../wallpanel-app rm src/grocy.ts tests/grocy.test.ts
@@ -1793,18 +1793,18 @@ git -C .../wallpanel-app rm src/grocy.ts tests/grocy.test.ts
 
 Puis reprendre chaque fichier de la liste : les commentaires qui expliquaient une décision **restent**, réécrits pour dire ce qui est vrai maintenant (`src/garde-manger.ts` au lieu de `src/grocy.ts`, `sensor.home_stock_next_meal` au lieu de `todo.grocy_meal_plan`). **On ne supprime pas une explication : on la met à jour.** Les chiffres mesurés (3,8 Mo/jour, 87 recettes, 62 tags sur 98) restent, avec leur date — ils justifient des seuils encore en vigueur.
 
-- [ ] **Step 4: Rafraîchir le `README.md`**
+- [x] **Step 4: Rafraîchir le `README.md`**
 
 Le nombre de fichiers de tests (**33 → le compte réel**) et la disparition de Grocy de la description de l'app.
 
-- [ ] **Step 5: Lancer, vérifier que tout passe**
+- [x] **Step 5: Lancer, vérifier que tout passe**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tout vert, **`grocy.test.ts` en moins**, `garde-manger.test.ts` en plus.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git -C .../wallpanel-app add -A
@@ -1821,7 +1821,7 @@ git -C .../wallpanel-app commit -m "chore: src/ ne connaît plus Grocy — le cl
 
 **Pourquoi ce n'est pas décoratif.** Avant la coalescence des redessins, ce projet mesurait **1712 recalculs de style à chaque connexion websocket** — de quoi faire tuer Fully par Android sur une page qui *rendait juste*. Une page correcte peut être une page qui tue son navigateur : **les tests et le vérificateur de rendu ne voient pas ce défaut-là.**
 
-- [ ] **Step 1: Relever l'état d'avant, sur le bundle DÉPLOYÉ**
+- [x] **Step 1: Relever l'état d'avant, sur le bundle DÉPLOYÉ**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app
@@ -1831,14 +1831,14 @@ node outils/mesurer-rendus.mjs cuisine 300
 
 Noter les deux chiffres. **C'est la seule référence disponible** : après la Task 18, le bundle d'avant n'existe plus.
 
-- [ ] **Step 2: Mesurer `src/`, celui du lot**
+- [x] **Step 2: Mesurer `src/`, celui du lot**
 
 ```bash
 node outils/mesurer-salve.mjs cuisine --src
 node outils/mesurer-rendus.mjs cuisine 300
 ```
 
-- [ ] **Step 3: Comparer, et décider**
+- [x] **Step 3: Comparer, et décider**
 
 | Mesure | Attendu |
 |---|---|
@@ -1847,7 +1847,7 @@ node outils/mesurer-rendus.mjs cuisine 300
 
 Une **hausse** de l'une des deux est un défaut à corriger **avant** la Task 18, pas une observation à consigner. La cause la plus probable serait une lecture ajoutée dans un chemin de redessin plutôt qu'à l'ouverture d'une vue.
 
-- [ ] **Step 4: Le contrôle complet, une dernière fois avant le mur**
+- [x] **Step 4: Le contrôle complet, une dernière fois avant le mur**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
@@ -1856,7 +1856,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: **les cinq suites vertes**, 70 exécutions côté panneau. **Tout ce qui peut être vérifié avant le build l'a maintenant été.**
 
-- [ ] **Step 5: Consigner les chiffres**
+- [x] **Step 5: Consigner les chiffres**
 
 Dans le message de commit, et repris en Task 19 dans `docs/exploitation.md` — un chiffre mesuré qui n'est écrit nulle part est un chiffre à remesurer.
 
@@ -1880,34 +1880,34 @@ git -C .../wallpanel-app commit --allow-empty -m "chore: mesures salve et rendus
 
 **Files:** `config/www/wallpanel/*` (artefacts de build — **jamais édités à la main**), `src/*.html` versionnés.
 
-- [ ] **Step 1: Vérifier une dernière fois que rien n'attend**
+- [x] **Step 1: Vérifier une dernière fois que rien n'attend**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app status --porcelain
 ```
 Expected: propre. **Construire un arbre sale, c'est déployer ce qu'on n'a pas relu.**
 
-- [ ] **Step 2: Construire — une fois**
+- [x] **Step 2: Construire — une fois**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm run build
 ```
 
-- [ ] **Step 3: Vérifier ce qui a été écrit**
+- [x] **Step 3: Vérifier ce qui a été écrit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant status --porcelain config/www/wallpanel/
 ```
 Attendu : `wallpanel.js`, `wallpanel.css` et les **trois** pages `salon.html`, `bureau.html`, `cuisine.html` (leur `?v=` a changé). **Rien d'autre.**
 
-- [ ] **Step 4: Vérifier le bundle RÉELLEMENT en place**
+- [x] **Step 4: Vérifier le bundle RÉELLEMENT en place**
 
 ```bash
 node outils/verifier-rendu.mjs --deploye
 ```
 Expected: mêmes scénarios verts, cette fois sur le bundle construit et minifié. C'est le seul moment du lot où `--deploye` a un sens.
 
-- [ ] **Step 5: Faire recharger les trois tablettes**
+- [x] **Step 5: Faire recharger les trois tablettes**
 
 Le **seul** geste de contrôle autorisé sur l'instance vivante, dans cet ordre, pour chaque pièce :
 
@@ -1916,7 +1916,7 @@ Le **seul** geste de contrôle autorisé sur l'instance vivante, dans cet ordre,
 
 Aucun `docker compose`, aucun redémarrage, aucun rechargement d'intégration.
 
-- [ ] **Step 6: Contrôle visuel**
+- [x] **Step 6: Contrôle visuel**
 
 Lire `image.tablette_<piece>_capture_d_ecran` pour les trois pièces. Après un rechargement, la tablette met **plusieurs secondes** à peindre : on obtient des frames partiels. **Se fier à l'heure de l'horloge affichée, pas à `frame_timestamp`** (peu fiable).
 
@@ -1928,7 +1928,7 @@ Ce qu'on vérifie, pièce par pièce :
 | **Salon** | Rien de neuf **sauf** la ligne de synthèse DLC ; sa vue « Tâches » ne porte **que** l'entretien |
 | **Bureau** | **Strictement rien de changé** |
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app add -A
@@ -1947,7 +1947,7 @@ git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app commit -m "chore: buil
 - Modify: `docs/exploitation.md`
 - Build: `custom_components/home_stock/panel/home-stock-panel.js`
 
-- [ ] **Step 1: Écrire la section « Lot 6 — les quatre surfaces »**
+- [x] **Step 1: Écrire la section « Lot 6 — les quatre surfaces »**
 
 Dans `docs/exploitation.md`, dans le ton des sections précédentes : ce que le propriétaire doit faire, et ce qui se répare.
 
@@ -1959,7 +1959,7 @@ Dans `docs/exploitation.md`, dans le ton des sections précédentes : ce que le 
 6. **Le rappel du lot 7** : Grocy tourne toujours, `/local/grocy-scanner.html` et `/local/grocy-recipes.html` restent servis, **plus aucune tablette n'y renvoie**. Les données Grocy et les six *chores* (litière, fontaine, croquettes, poubelles) sont le lot 7.
 7. **Les chiffres de la Task 17**, avant/après.
 
-- [ ] **Step 2: Écrire les amendements aux specs précédentes**
+- [x] **Step 2: Écrire les amendements aux specs précédentes**
 
 Toujours dans `docs/exploitation.md`, sous « Amendements aux specs précédents » — **ce sont des amendements de spec, pas du code**, et les documents d'origine ne sont pas réécrits (usage des lots précédents) :
 
@@ -1973,25 +1973,25 @@ Toujours dans `docs/exploitation.md`, sous « Amendements aux specs précédents
 
 Et la répartition qui vaut à partir du lot 6 : **Lovelace** (cartes natives sur les entités, aucune carte livrée par `home_stock` — le dashboard appartient au propriétaire) · **Panneau** (les dix-sept écrans, en étroit et en large) · **Tablettes murales** (`wallpanel-app` : bloc repas, ligne DLC, vue « Tâches », vue recette) · **Voix** (sept phrases).
 
-- [ ] **Step 3: Construire le bundle du panneau — une fois**
+- [x] **Step 3: Construire le bundle du panneau — une fois**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm run build
 ```
 
-- [ ] **Step 4: Vérifier ce qui a été écrit**
+- [x] **Step 4: Vérifier ce qui a été écrit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/home_stock/panel/
 ```
 **Un seul fichier doit avoir changé.**
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: mêmes scénarios verts, cette fois sur le bundle construit.
 
-- [ ] **Step 6: Les cinq suites, une dernière fois**
+- [x] **Step 6: Les cinq suites, une dernière fois**
 
 ```bash
 ./scripts/test.sh -q
@@ -2000,7 +2000,7 @@ cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils
 ```
 Expected: tout vert. Côté panneau, **70 exécutions**.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/meal add docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js
