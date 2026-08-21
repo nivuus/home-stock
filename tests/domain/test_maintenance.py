@@ -172,3 +172,95 @@ def test_keep_has_no_duplicates():
     piles = [_pile(id=1, state="22", last_percent=22.0),
              _pile(id=2, state="23", last_percent=23.0)]
     assert battery_plan(piles, now=NOW)["keep"] == ["Pile à changer — Velux (CH)"]
+
+
+# --- tâche 3 : la fusion du plan, toujours pure -----------------------------
+
+from custom_components.home_stock.domain.maintenance import merge_plan
+
+MACRO = {
+    "items": [
+        {"summary": "Purificateur — filtre à remplacer",
+         "description": "12 %", "entity": "sensor.purificateur_filtre"},
+        {"summary": "Arroser Plante Télévision",
+         "description": "18 % d'humidité", "entity": "sensor.plante_television_humidite"},
+    ],
+    "keep": ["Purificateur — filtre à remplacer", "Arroser Plante Télévision"],
+}
+
+
+def test_called_bare_the_merge_returns_the_batteries_alone():
+    own = battery_plan([_pile()], now=NOW)
+    fusion = merge_plan(own, extra_items=None, extra_keep=None)
+    assert fusion == own
+
+
+def test_the_macro_items_come_first_and_keep_their_order():
+    own = battery_plan([_pile()], now=NOW)
+    fusion = merge_plan(own, extra_items=MACRO["items"], extra_keep=MACRO["keep"])
+    assert [i["summary"] for i in fusion["items"]] == [
+        "Purificateur — filtre à remplacer", "Arroser Plante Télévision",
+        "Pile à changer — Velux (CH)"]
+
+
+def test_an_item_it_does_not_understand_is_copied_verbatim():
+    """Le service ne doit PAS pouvoir faire disparaître la tâche du
+    purificateur parce que la forme d'un item a évolué."""
+    bizarres = [{"summary": "Vider la poubelle"},                 # pas d'entity
+                {"summary": "Truc", "description": "x", "entity": "y", "urgence": 3},
+                {"resume": "clé inconnue"},                       # pas de summary
+                "une chaîne toute nue"]
+    fusion = merge_plan(battery_plan([], now=NOW),
+                        extra_items=bizarres, extra_keep=["Vider la poubelle"])
+    assert fusion["items"] == bizarres
+
+
+def test_a_macro_item_gets_its_spare_suffix_by_entity_not_by_text():
+    fusion = merge_plan(
+        battery_plan([], now=NOW), extra_items=MACRO["items"], extra_keep=MACRO["keep"],
+        spares={"sensor.purificateur_filtre":
+                {"label": "Filtre HEPA MB4", "cell_count": 1, "in_stock": 0.0}})
+    assert fusion["items"][0]["description"] == "12 % — 1× Filtre HEPA MB4, aucun en stock"
+    # La plante n'a pas de rechange : sa description est intacte.
+    assert fusion["items"][1]["description"] == "18 % d'humidité"
+
+
+def test_an_unknown_entity_in_spares_changes_nothing():
+    fusion = merge_plan(battery_plan([], now=NOW), extra_items=MACRO["items"],
+                        extra_keep=MACRO["keep"],
+                        spares={"sensor.disparu": {"label": "X", "cell_count": 1,
+                                                   "in_stock": 0.0}})
+    assert fusion["items"] == MACRO["items"]
+
+
+def test_a_summary_present_on_both_sides_is_merged_not_duplicated():
+    own = battery_plan([_pile(label="Velux (CH)")], now=NOW)
+    doublon = [{"summary": "Pile à changer — Velux (CH)",
+                "description": "ancienne description", "entity": "sensor.velux_ch_batterie"}]
+    fusion = merge_plan(own, extra_items=doublon, extra_keep=[])
+    assert len(fusion["items"]) == 1
+    assert fusion["items"][0]["description"] == "ancienne description"
+
+
+def test_keep_is_the_union_deduplicated_and_ordered():
+    own = battery_plan([_pile(state="22", last_percent=22.0)], now=NOW)
+    fusion = merge_plan(own, extra_items=[], extra_keep=MACRO["keep"] + ["Arroser Plante Télévision"])
+    assert fusion["keep"] == ["Purificateur — filtre à remplacer",
+                              "Arroser Plante Télévision",
+                              "Pile à changer — Velux (CH)"]
+
+
+def test_the_merge_preserves_the_subset_invariant():
+    own = battery_plan([_pile()], now=NOW)
+    fusion = merge_plan(own, extra_items=MACRO["items"], extra_keep=MACRO["keep"])
+    assert {i["summary"] for i in fusion["items"] if isinstance(i, dict) and "summary" in i} \
+        <= set(fusion["keep"])
+
+
+def test_extra_keep_that_is_not_a_list_of_strings_is_tolerated():
+    """`extra_keep` arrive d'un rendu Jinja : il peut contenir n'importe quoi
+    le jour où le macro change. Rien ne doit lever — une exception ici DÉSARME
+    la fermeture (tâche 15), ce qui est correct mais coûte une synchro."""
+    fusion = merge_plan(battery_plan([], now=NOW), extra_items=[],
+                        extra_keep=["ok", None, 42, {"summary": "x"}])
+    assert "ok" in fusion["keep"]

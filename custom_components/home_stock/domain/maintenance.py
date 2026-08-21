@@ -199,3 +199,76 @@ def battery_plan(batteries: Sequence[Mapping[str, Any]], *, now: datetime,
 
     items.sort(key=lambda pair: pair[0])
     return {"items": [item for _, item in items], "keep": keep}
+
+
+def _understood(item: Any) -> bool:
+    """An item this module is allowed to touch: a mapping carrying a non-empty
+    `summary`. Everything else is copied through untouched — see `merge_plan`.
+    """
+    return (isinstance(item, Mapping)
+            and isinstance(item.get("summary"), str)
+            and bool(item["summary"]))
+
+
+def merge_plan(own: dict[str, list], *,
+               extra_items: Sequence[Any] | None,
+               extra_keep: Sequence[Any] | None,
+               spares: Mapping[str, Mapping[str, Any]] | None = None,
+               ) -> dict[str, list]:
+    """Fold the macro's own plan into this module's battery plan.
+
+    Four rules, each of them load-bearing:
+
+    1. **An item we do not understand is copied verbatim, never dropped.**
+       This service must not be able to make the air-purifier's filter task
+       disappear because the shape of an item changed. "Not understood"
+       covers an item with no `summary`, an item that is not a mapping at
+       all, and an item carrying extra keys.
+    2. **The order is stable**: the macro's items first, in their order, then
+       lot 5's. Reconciliation does not depend on order, but a stable one
+       keeps test diffs readable and Bleuenn's announcement reproducible.
+    3. **A macro item is enriched by `entity`, never by the text of its
+       summary.** That is the exact lesson of today's Grocy wiring, which
+       looks an `entity_id` up inside a free-text description; here `spares`
+       is keyed by `entity_id` and the match is a dictionary lookup. The
+       spare of a macro item is a consumable — a filter, a bag, a brush — so
+       its shortage reads `aucun en stock`, masculine, unlike a battery's.
+    4. **A summary present on both sides is merged, not duplicated**, and it
+       is the macro's that wins, description included. `home_stock` has no
+       business overwriting a vacuum cleaner's own measurement.
+
+    Nothing in here may raise on malformed input: an exception at this point
+    disarms the closing pass (task 15), which is safe but costs a whole sync.
+    """
+    items: list[Any] = []
+    summaries_seen: set[str] = set()
+    spare_by_entity = spares or {}
+
+    for raw in extra_items or ():
+        if not _understood(raw):
+            items.append(raw)
+            continue
+        item = dict(raw)
+        spare = spare_by_entity.get(item.get("entity")) if item.get("entity") else None
+        if spare is not None:
+            suffix = spare_suffix(
+                int(spare["cell_count"]), float(spare["in_stock"]), spare["label"],
+                feminine=False,
+            )
+            description = item.get("description")
+            item["description"] = f"{description} — {suffix}" if description else suffix
+        summaries_seen.add(item["summary"])
+        items.append(item)
+
+    for item in own["items"]:
+        if item["summary"] in summaries_seen:
+            continue
+        summaries_seen.add(item["summary"])
+        items.append(item)
+
+    keep: list[str] = []
+    for summary in list(extra_keep or ()) + list(own["keep"]):
+        if isinstance(summary, str) and summary and summary not in keep:
+            keep.append(summary)
+
+    return {"items": items, "keep": keep}
