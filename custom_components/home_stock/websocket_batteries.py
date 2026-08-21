@@ -258,6 +258,29 @@ async def battery_event(hass, connection, msg) -> None:
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/battery/events",
+    vol.Required("battery_id"): _id,
+})
+@websocket_api.async_response
+async def battery_events(hass, connection, msg) -> None:
+    """The history of one place, newest first.
+
+    A twelfth command where the plan counted eleven, and the plan was simply
+    short: the Piles screen shows a battery's history, and none of the other
+    eleven can answer it — `batteries/list` would have to carry every event of
+    every battery to do so, which is a page of history nobody asked for on
+    every refresh. A read, writing nothing.
+    """
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    events = await _read(hass, partial(runtime.manager.list_battery_events,
+                                       msg["battery_id"]))
+    connection.send_result(msg["id"], {"events": events})
+
+
 @websocket_api.websocket_command({vol.Required("type"): "home_stock/equipment/list"})
 @websocket_api.async_response
 async def equipment_list(hass, connection, msg) -> None:
@@ -419,7 +442,7 @@ async def consumable_unlink(hass, connection, msg) -> None:
 
 def async_register_battery_commands(hass: HomeAssistant) -> None:
     for command in (batteries_list, batteries_discover, battery_declare,
-                    battery_update, battery_event, equipment_list, equipment_get,
-                    equipment_create, equipment_update, consumable_link,
-                    consumable_unlink):
+                    battery_update, battery_event, battery_events, equipment_list,
+                    equipment_get, equipment_create, equipment_update,
+                    consumable_link, consumable_unlink):
         websocket_api.async_register_command(hass, command)

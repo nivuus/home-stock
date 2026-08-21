@@ -76,6 +76,19 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # one refused button in lot 1's round 1 (see this file's module
     # docstring) if its schema didn't accept the queue's idempotency key.
     "home_stock/stock/consume",
+    # Lot 5, tâches 16 et 17 : l'écran « Piles » déclare une pile, l'écarte
+    # avec son motif, et enregistre un remplacement ; l'écran « Équipements »
+    # délie un consommable. Ces écritures se font une pile à la main dans un
+    # couloir ou devant un placard — le Wi-Fi n'y est pas meilleur qu'en
+    # rayon, et une écriture perdue là est une pile qu'on croit changée.
+    #
+    # Ajoutés ICI, avec les écrans qui les appellent, et pas à la tâche 12 qui
+    # écrivait les commandes serveur : le test ci-dessous compare cet ensemble
+    # à ce que le scanner TROUVE dans les sources TypeScript, donc l'inscrire
+    # avant que le TypeScript n'existe rendait toute la suite rouge.
+    "home_stock/battery/declare",
+    "home_stock/battery/event",
+    "home_stock/equipment/consumable/unlink",
 }
 
 
@@ -236,6 +249,41 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
                          idempotency_key="contract-session-close")
     assert closed["success"] is True, closed.get("error")
     tested.add("home_stock/session/close")
+
+    # --- lot 5 : les trois écritures des écrans Piles et Équipements -------
+    declared = await _send(
+        client, _id(), "home_stock/battery/declare", label="Pile de contrat",
+        kind="rechargeable_cell", idempotency_key="contract-battery-declare",
+    )
+    assert declared["success"] is True, declared.get("error")
+    tested.add("home_stock/battery/declare")
+
+    recorded = await _send(
+        client, _id(), "home_stock/battery/event",
+        battery_id=declared["result"]["battery_id"], kind="charge",
+        idempotency_key="contract-battery-event",
+    )
+    assert recorded["success"] is True, recorded.get("error")
+    tested.add("home_stock/battery/event")
+
+    # Un consommable à délier : il faut d'abord un équipement et un produit.
+    equipment = await _send(client, _id(), "home_stock/equipment/create",
+                            name="Équipement de contrat",
+                            idempotency_key="contract-equipment-create")
+    assert equipment["success"] is True, equipment.get("error")
+    linked = await _send(
+        client, _id(), "home_stock/equipment/consumable/link",
+        equipment_id=equipment["result"]["equipment_id"], product_id=1, role="filter",
+        idempotency_key="contract-consumable-link",
+    )
+    assert linked["success"] is True, linked.get("error")
+    unlinked = await _send(
+        client, _id(), "home_stock/equipment/consumable/unlink",
+        consumable_id=linked["result"]["consumable_id"],
+        idempotency_key="contract-consumable-unlink",
+    )
+    assert unlinked["success"] is True, unlinked.get("error")
+    tested.add("home_stock/equipment/consumable/unlink")
 
     # Every command the front end can actually queue was exercised — not a
     # subset the test author remembered to write a case for.

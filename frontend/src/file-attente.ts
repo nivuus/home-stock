@@ -9,7 +9,19 @@ export type Envoyeur = (type: string, charge: object) => Promise<unknown>;
 /** `resoudre` n'est jamais sérialisé dans le stockage local (voir `ecrire`) :
  *  une fonction ne passe pas par `JSON.stringify`, et une action restaurée
  *  au démarrage n'a de toute façon plus d'appelant à prévenir. */
-type Action = { type: string; charge: Record<string, unknown>; resoudre?: (sort: ResultatAction) => void };
+type Action = {
+  type: string;
+  charge: Record<string, unknown>;
+  resoudre?: (sort: ResultatAction) => void;
+  /** Résout la RÉPONSE du serveur à cette action précise. Distinct de
+   *  `resoudre`, qui ne dit que le sort ('envoyee' / 'refusee' /
+   *  'en-attente') : certaines écritures répondent une donnée que l'écran
+   *  doit montrer et qu'aucune relecture ne retrouverait. Le cas concret est
+   *  `battery/event`, dont le `spare_refused` (« Stock insuffisant… ») n'est
+   *  écrit nulle part — l'événement, lui, est bien enregistré. Perdre cette
+   *  phrase laisserait croire qu'il reste une CR2032 au placard. */
+  repondre?: (reponse: unknown) => void;
+};
 
 /** Un refus tranché par le serveur (mauvaise requête, règle métier) répond
  *  toujours avec ce couple — c'est ainsi que `send_error` répond côté HA. Une
@@ -58,7 +70,13 @@ export type ResultatAction = 'envoyee' | 'refusee' | 'en-attente';
 
 /** Ce que `ajouter` rend à l'appelant : sa clé d'idempotence, et une
  *  promesse de SON sort à elle — jamais celui d'une autre action. */
-export type SuiviAction = { cle: string; sort: Promise<ResultatAction> };
+export type SuiviAction = {
+  cle: string;
+  sort: Promise<ResultatAction>;
+  /** La réponse du serveur, ou `undefined` si l'action a été refusée ou
+   *  attend encore le réseau. Additif : aucun appelant existant ne la lit. */
+  reponse: Promise<unknown>;
+};
 
 const CLE_STOCKAGE = 'home_stock.file';
 
@@ -91,9 +109,11 @@ export class FileAttente {
     }
     let resoudre!: (sort: ResultatAction) => void;
     const sort = new Promise<ResultatAction>((resolve) => { resoudre = resolve; });
-    this.actions.push({ type, charge: contenu, resoudre });
+    let repondre!: (reponse: unknown) => void;
+    const reponse = new Promise<unknown>((resolve) => { repondre = resolve; });
+    this.actions.push({ type, charge: contenu, resoudre, repondre });
     this.ecrire();
-    return { cle: contenu.idempotency_key as string, sort };
+    return { cle: contenu.idempotency_key as string, sort, reponse };
   }
 
   taille(): number {
@@ -148,13 +168,15 @@ export class FileAttente {
   private async boucle(): Promise<void> {
     while (this.actions.length) {
       const action = this.actions[0];
+      let reponse: unknown;
       try {
-        await this.envoyer(action.type, action.charge);
+        reponse = await this.envoyer(action.type, action.charge);
       } catch (erreur) {
         if (estRefusServeur(erreur)) {
           this.actions.shift();
           this.ecrire();
           action.resoudre?.('refusee');
+          action.repondre?.(undefined);
           this.surRefus?.(action, messageAffichable(erreur));
           continue;
         }
@@ -166,19 +188,22 @@ export class FileAttente {
         // en vain au prochain passage.
         for (const restante of this.actions) {
           restante.resoudre?.('en-attente');
+          restante.repondre?.(undefined);
           restante.resoudre = undefined;
+          restante.repondre = undefined;
         }
         return;
       }
       this.actions.shift();
       this.ecrire();
       action.resoudre?.('envoyee');
+      action.repondre?.(reponse);
     }
   }
 
-  /** Ne persiste que `type` et `charge` : `resoudre` est une fonction, donc
-   *  non sérialisable, et une action restaurée au démarrage n'a de toute
-   *  façon plus d'appelant à prévenir (voir le type `Action`). */
+  /** Ne persiste que `type` et `charge` : `resoudre` et `repondre` sont des
+   *  fonctions, donc non sérialisables, et une action restaurée au démarrage
+   *  n'a de toute façon plus d'appelant à prévenir (voir le type `Action`). */
   private ecrire(): void {
     this.stockage.setItem(CLE_STOCKAGE, JSON.stringify(
       this.actions.map(({ type, charge }) => ({ type, charge })),

@@ -266,6 +266,7 @@ async def test_a_manual_path_under_www_is_refused(hass, setup_entry, hass_ws_cli
     ("home_stock/battery/declare", {"label": "X", "kind": "primary"}),
     ("home_stock/battery/update", {"battery_id": 1, "fields": {"label": "X"}}),
     ("home_stock/battery/event", {"battery_id": 1, "kind": "charge"}),
+    ("home_stock/battery/events", {"battery_id": 1}),
     ("home_stock/equipment/list", {}),
     ("home_stock/equipment/get", {"equipment_id": 1}),
     ("home_stock/equipment/create", {"name": "X"}),
@@ -289,15 +290,21 @@ async def test_commands_answer_not_loaded_when_the_entry_is_gone(hass, setup_ent
     assert reponse["error"]["code"] == "not_loaded"
 
 
-async def test_the_eleven_commands_are_all_registered(hass, setup_entry, hass_ws_client):
-    """Onze, pas dix : une commande oubliée à l'enregistrement se voit
-    autrement au premier appui sur un bouton du panneau, en production."""
+async def test_every_command_is_registered(hass, setup_entry, hass_ws_client):
+    """Une commande oubliée à l'enregistrement se voit autrement au premier
+    appui sur un bouton du panneau, en production.
+
+    Douze là où le plan en comptait onze : l'écran Piles montre l'historique
+    d'une pile, et aucune des onze ne sait le rendre — `batteries/list`
+    devrait porter tous les événements de toutes les piles à chaque
+    rafraîchissement pour y arriver."""
     await setup_entry()
     client = await hass_ws_client(hass)
     for index, type_ in enumerate((
             "home_stock/batteries/list", "home_stock/batteries/discover",
             "home_stock/battery/declare", "home_stock/battery/update",
-            "home_stock/battery/event", "home_stock/equipment/list",
+            "home_stock/battery/event", "home_stock/battery/events",
+            "home_stock/equipment/list",
             "home_stock/equipment/get", "home_stock/equipment/create",
             "home_stock/equipment/update",
             "home_stock/equipment/consumable/link",
@@ -309,3 +316,18 @@ async def test_the_eleven_commands_are_all_registered(hass, setup_entry, hass_ws
         # verrait autrement au premier appui sur un bouton, en production.
         code = reponse.get("error", {}).get("code")
         assert code != "unknown_command", type_
+
+
+async def test_battery_events_reads_without_writing(hass, setup_entry, hass_ws_client):
+    integration = await setup_entry()
+    manager = integration.runtime_data.manager
+    battery_id = manager.declare_battery(label="X", kind="rechargeable_cell")
+    manager.record_battery_event(battery_id, kind="install",
+                                 occurred_at="2026-01-01T10:00:00")
+    manager.record_battery_event(battery_id, kind="charge",
+                                 occurred_at="2026-06-01T10:00:00")
+    client = await hass_ws_client(hass)
+    reponse = await _appel(client, {"type": "home_stock/battery/events",
+                                    "battery_id": battery_id})
+    assert [e["kind"] for e in reponse["result"]["events"]] == ["charge", "install"]
+    assert len(manager.list_battery_events(battery_id)) == 2

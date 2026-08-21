@@ -11,13 +11,15 @@ import './ecrans/catalogue';
 import './ecrans/reglages';
 import './ecrans/consommation';
 import './ecrans/journal';
+import './ecrans/piles';
+import './ecrans/equipements';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
-  | 'catalogue' | 'reglages' | 'consommation' | 'journal';
+  | 'catalogue' | 'reglages' | 'consommation' | 'journal' | 'piles' | 'equipements';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -335,6 +337,14 @@ export class PanneauGardeManger extends LitElement {
         ${this.ecran !== 'journal' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('journal')}>Journal</button>
         ` : nothing}
+        ${this.ecran !== 'piles' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('piles')}>Piles</button>
+        ` : nothing}
+        ${this.ecran !== 'equipements' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('equipements')}>
+            Équipements
+          </button>
+        ` : nothing}
         ${this.ecran !== 'reglages' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('reglages')}>Réglages</button>
         ` : nothing}
@@ -436,6 +446,18 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'journal') {
       return html`
         <home-stock-journal .connexion=${this.connexion}></home-stock-journal>`;
+    }
+    if (this.ecran === 'piles') {
+      return html`
+        <home-stock-piles .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-piles>`;
+    }
+    if (this.ecran === 'equipements') {
+      return html`
+        <home-stock-equipements .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-equipements>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}

@@ -93,15 +93,24 @@ async def test_a_non_numeric_state_writes_nothing(hass, setup_entry, state):
 
 
 async def test_the_reading_survives_a_reload(hass, setup_entry):
-    """LE test de l'amélioration : `last_changed` repart au démarrage de HA,
-    `last_reading_at` non — il vit en base."""
+    """LE test de l'amélioration : `last_changed` repart au démarrage de Home
+    Assistant, `last_reading_at` non — il vit en base.
+
+    Le capteur est rendu MUET avant le rechargement, exprès : sinon le
+    rafraîchissement que déclenche le rechargement réécrirait légitimement la
+    date (l'appareil vient de reparler) et le test ne prouverait plus rien
+    d'autre que l'horloge. Muet, rien ne peut la réécrire — ce qu'on relit
+    après le rechargement ne peut venir que de la base.
+    """
     integration = await setup_entry()
     entry = _register_battery_sensor(hass, entity_id="sensor.x_batterie",
                                      unique_id="u1", state="18")
     _declare(integration, label="X", kind="primary", entity_registry_id=entry.id)
     await _refresh(hass, integration)
     attendu = _batteries(integration)[0]["last_reading_at"]
+    assert attendu is not None
 
+    hass.states.async_set(entry.entity_id, "unavailable", {"device_class": "battery"})
     await hass.config_entries.async_reload(integration.entry_id)
     await hass.async_block_till_done()
 
