@@ -879,7 +879,12 @@ describe('panneau : le journal et l’écran « manger »', () => {
  *  lignes sont rangées (voir `ShoppingService.store_line`). C'est ce qu'il
  *  faut pour éprouver le PARCOURS, pas seulement un écran isolé. */
 function serveurDeCourses() {
-  const magasins = ['Leclerc', 'Lidl'];
+  // Depuis le lot 4, `home_stock/stores/list` rend des LIGNES : le panneau
+  // envoie `store_id` à la place d'une chaîne quand on touche une pastille.
+  const magasins = [
+    { id: 1, name: 'Leclerc', position: 0, active: 1, observed_sessions: 0, last_seen: null },
+    { id: 2, name: 'Lidl', position: 1, active: 1, observed_sessions: 0, last_seen: null },
+  ];
   const emplacements = [{ id: 3, name: 'Placard', kind: 'cupboard', position: 0 }];
   const lignes: any[] = [];
   let session: any = null;
@@ -914,8 +919,16 @@ function serveurDeCourses() {
         if (session && session.state === 'shopping') {
           return Promise.reject({ code: 'shopping_refused', message: 'Une session de courses est déjà ouverte.' });
         }
-        session = { id: prochainId++, state: 'shopping', store: msg.store ?? null,
-                    started_at: '2026-08-19T10:00:00', closed_at: null };
+        // Comme le service réel : `store_id` prime, et c'est le nom du
+        // magasin trouvé qui est écrit sur la session.
+        session = {
+          id: prochainId++, state: 'shopping',
+          store: msg.store_id
+            ? magasins.find((m) => m.id === msg.store_id)?.name ?? null
+            : msg.store ?? null,
+          store_id: msg.store_id ?? null,
+          started_at: '2026-08-19T10:00:00', closed_at: null,
+        };
         return session;
       case 'home_stock/session/add_line': {
         const ligne = { ...LIGNE_SESSION, id: 100 + lignes.length, session_id: session.id,
@@ -1009,7 +1022,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     dans('home-stock-session', '.ouvrir-session')!.click();
     await reglerTout();
 
-    expect(serveur.envoyes.some((m) => m.type === 'home_stock/session/start' && m.store === 'Leclerc'))
+    expect(serveur.envoyes.some((m) => m.type === 'home_stock/session/start' && m.store_id === 1))
       .toBe(true);
     // Une session ouverte n'a qu'un but : scanner. Le panneau y renvoie.
     expect(element.ecran).toBe('scanner');

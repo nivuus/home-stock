@@ -498,7 +498,8 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-session .donnees=${this.session} .connexion=${this.connexion}
           .file=${this.file} .enAttente=${this.enAttente}
           @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}
-          @ticket-ouvert=${this.surTicketOuvert}>
+          @ticket-ouvert=${this.surTicketOuvert}
+          @aller-liste=${() => this.demanderNavigation('liste')}>
         </home-stock-session>`;
     }
     if (this.ecran === 'catalogue') {
@@ -521,7 +522,9 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'journal') {
       return html`
-        <home-stock-journal .connexion=${this.connexion}></home-stock-journal>`;
+        <home-stock-journal .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-journal>`;
     }
     if (this.ecran === 'recettes') {
       return html`

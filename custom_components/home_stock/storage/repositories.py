@@ -589,7 +589,14 @@ def journal_entries(conn, start: str, end: str) -> list[dict[str, Any]]:
     """What left the stock during a food day, oldest first."""
     return _rows(conn.execute(
         "SELECT m.id, m.occurred_at, m.quantity, m.reason, m.base_unit, m.kcal,"
-        "       m.cost, m.parts_total, m.parts_mine, p.name AS product_name"
+        "       m.cost, m.parts_total, m.parts_mine, m.batch_id, m.corrects_id,"
+        "       p.name AS product_name,"
+        # La contrepassation d'une ligne, si elle existe. Le journal ne cache
+        # JAMAIS une erreur : la ligne fautive reste visible, barrée, avec son
+        # annulation juste en dessous — c'est ce qui permet de comprendre, six
+        # mois plus tard, pourquoi une journée porte une valeur négative.
+        "       (SELECT c.id FROM movement c WHERE c.corrects_id = m.id)"
+        "         AS corrected_by"
         " FROM movement m JOIN product p ON p.id = m.product_id"
         f" WHERE m.reason IN {_reasons_sql(CONSUME_REASONS)}"
         "   AND m.occurred_at >= ? AND m.occurred_at < ?"

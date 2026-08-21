@@ -197,3 +197,25 @@ def test_a_reason_added_to_the_shared_outgoing_set_reaches_every_query(journal_c
     totals = repo.totals_between(journal_conn, *DAY)
     assert totals["kcal"] == 0.0
     assert totals["waste_cost"] == pytest.approx(1.0)
+
+
+def test_a_journal_entry_says_whether_it_was_corrected(journal_conn):
+    """Le journal ne cache jamais une erreur : la ligne fautive reste
+    visible, et l'écran a besoin de savoir laquelle l'annule."""
+    conn = journal_conn
+    _movement(conn, quantity=-200.0, reason="consumption", kcal=310.0, cost=0.42)
+    rows = repo.journal_entries(conn, "2026-08-20T02:00:00", "2026-08-21T02:00:00")
+    assert rows
+    assert all(row["corrected_by"] is None for row in rows)
+    assert all(row["corrects_id"] is None for row in rows)
+
+    target = rows[0]
+    repo.insert_movement(
+        conn, occurred_at="2026-08-20T20:00:00", product_id=1, article_id=1,
+        quantity=-target["quantity"], reason=target["reason"], base_unit="g",
+        corrects_id=target["id"])
+
+    again = repo.journal_entries(conn, "2026-08-20T02:00:00", "2026-08-21T02:00:00")
+    corrigee = next(row for row in again if row["id"] == target["id"])
+    annulation = next(row for row in again if row["corrects_id"] == target["id"])
+    assert corrigee["corrected_by"] == annulation["id"]

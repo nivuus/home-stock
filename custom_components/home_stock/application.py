@@ -1899,6 +1899,12 @@ class StockManager:
             "occurred_at": movement["occurred_at"],
             "batch_id": movement["batch_id"],
             "batch_entered_at": batch["entered_at"] if batch else None,
+            # Le repas d'où vient ce mouvement, quand il en vient un : le
+            # journal propose alors « corriger le repas », qui est le SEUL
+            # geste possible sur une ligne cuisinée.
+            "meal_id": (int(movement["ref_id"])
+                        if movement["ref_type"] == "meal" and movement["ref_id"]
+                        else None),
             "correctable": True,
             "refusal": None,
         }

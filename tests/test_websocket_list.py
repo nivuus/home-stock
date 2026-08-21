@@ -411,3 +411,23 @@ async def test_every_new_write_command_accepts_an_idempotency_key(
         answer = await _send(client, number, command,
                              idempotency_key=f"clef-{number}", **payload)
         assert answer["success"] is True, command
+
+
+async def test_unpinning_an_aisle_gives_it_back_to_learning(hass: HomeAssistant,
+                                                            setup_entry, hass_ws_client):
+    """Une commande à part, et pas un réordonnancement sans elle : réépingler
+    tous les autres ne dés-épingle pas celle-ci."""
+    entry = await setup_entry(with_article=True)
+    ids = await _seed(hass, entry)
+    client = await hass_ws_client(hass)
+    saved = await _send(client, 1, "home_stock/store/save", name="Leclerc")
+    store_id = saved["result"]["stores"][0]["id"]
+    await _send(client, 2, "home_stock/store/reorder_aisles", store_id=store_id,
+                aisle_ids=[ids["aisles"]["Épicerie salée"], ids["aisles"]["Crémerie"]])
+
+    answer = await _send(client, 3, "home_stock/store/unpin_aisle", store_id=store_id,
+                         aisle_id=ids["aisles"]["Crémerie"], idempotency_key="k")
+
+    sources = {row["aisle_name"]: row["source"] for row in answer["result"]["aisles"]}
+    assert sources["Crémerie"] == "learned"
+    assert sources["Épicerie salée"] == "manual"

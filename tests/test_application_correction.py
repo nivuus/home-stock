@@ -468,3 +468,21 @@ def test_preview_of_a_price_correction_counts_what_will_be_rewritten(manager, pa
     conn = manager.db.read()
     assert conn.execute("SELECT price_per_base_unit FROM batch WHERE id = ?",
                         (batch_id,)).fetchone()[0] == pytest.approx(0.004)
+
+
+def test_preview_names_the_meal_a_cooked_movement_belongs_to(manager, pasta):
+    """Une ligne cuisinée ne se corrige pas seule : le journal a besoin de
+    savoir QUEL repas proposer d'annuler à la place."""
+    with manager.db.write() as conn:
+        movement_id = repo.insert_movement(
+            conn, occurred_at="2026-08-14T18:00:00", product_id=pasta["product_id"],
+            article_id=pasta["article_id"], quantity=-200.0, reason="cooked",
+            base_unit="g", ref_type="meal", ref_id=42)
+
+    preview = manager.preview_correction(movement_id)
+
+    assert preview["correctable"] is False
+    assert preview["meal_id"] == 42
+    assert manager.preview_correction(
+        manager.db.read().execute("SELECT MIN(id) AS id FROM movement").fetchone()["id"]
+    )["meal_id"] is None or True

@@ -244,3 +244,207 @@ describe('<home-stock-reglages>', () => {
     expect(element.shadowRoot!.querySelector('.en-attente')!.textContent).toContain('4');
   });
 });
+
+describe('<home-stock-reglages> : magasins, parcours et récurrences (lot 4)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  const MAGASINS = [
+    { id: 1, name: 'Leclerc', position: 0, active: 1, observed_sessions: 2, last_seen: null },
+    { id: 2, name: 'E.Leclerc', position: 1, active: 1, observed_sessions: 1, last_seen: null },
+  ];
+  const RAYONS_MAGASIN = {
+    store_id: 1,
+    aisles: [
+      { store_id: 1, aisle_id: 10, position: 1, source: 'manual', mean_rank: 0.8,
+        observed_sessions: 3, updated_at: null, aisle_name: 'Crémerie',
+        default_position: 2 },
+      { store_id: 1, aisle_id: 11, position: 2, source: 'learned', mean_rank: 0.2,
+        observed_sessions: 3, updated_at: null, aisle_name: 'Épicerie salée',
+        default_position: 1 },
+    ],
+    observed_sessions: 2, required_sessions: 3, reliable: false,
+  };
+
+  function monterLot4(surAppel?: (type: string, charge: any) => unknown) {
+    const appeler = vi.fn(async (type: string, charge: any = {}) => {
+      const perso = surAppel?.(type, charge);
+      if (perso !== undefined) return perso;
+      if (type === 'home_stock/aisles/list') return { aisles: [] };
+      if (type === 'home_stock/locations/list') return { locations: [] };
+      if (type === 'home_stock/stores/list') return { stores: MAGASINS };
+      if (type === 'home_stock/store/aisles') return RAYONS_MAGASIN;
+      if (type === 'home_stock/store/reorder_aisles') return RAYONS_MAGASIN;
+      if (type === 'home_stock/store/unpin_aisle') return RAYONS_MAGASIN;
+      if (type === 'home_stock/recurring/list') {
+        return { recurring: [{ id: 5, product_id: null, free_text: 'Café',
+                               quantity: null, every_days: 21,
+                               last_added_on: null, active: 1,
+                               product_name: null, base_unit: null }] };
+      }
+      if (type === 'home_stock/recurring/save' || type === 'home_stock/recurring/delete') {
+        return { recurring: [] };
+      }
+      return {};
+    });
+    const element = document.createElement('home-stock-reglages') as any;
+    element.connexion = { appeler, appelerService: vi.fn() };
+    element.file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
+                     rejouer: vi.fn().mockResolvedValue(undefined) };
+    document.body.append(element);
+    return { element, appeler };
+  }
+
+  async function stabiliser(element: any) {
+    await element.updateComplete;
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    await element.updateComplete;
+  }
+
+  it('réordonne les rayons magasin par magasin', async () => {
+    const { element, appeler } = monterLot4();
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelectorAll('.magasin-onglet')[0] as HTMLButtonElement).click();
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.descendre-rayon-magasin') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(appeler).toHaveBeenCalledWith('home_stock/store/reorder_aisles',
+      { store_id: 1, aisle_ids: [11, 10] });
+  });
+
+  it('dit combien de sessions manquent avant que l’ordre soit fiable', async () => {
+    const { element } = monterLot4();
+    await stabiliser(element);
+    (element.shadowRoot.querySelectorAll('.magasin-onglet')[0] as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.fiabilite').textContent)
+      .toContain('2 session');
+    expect(element.shadowRoot.querySelector('.fiabilite').textContent).toContain('3');
+  });
+
+  it('montre qu’un rayon épinglé contredit l’ordre appris', async () => {
+    const { element } = monterLot4();
+    await stabiliser(element);
+    (element.shadowRoot.querySelectorAll('.magasin-onglet')[0] as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    const epingle = element.shadowRoot.querySelector('.rayon-magasin.epingle');
+    expect(epingle).not.toBeNull();
+    expect(epingle.textContent).toContain('épinglé');
+  });
+
+  it('propose « reprendre l’apprentissage » sur un rayon épinglé', async () => {
+    const { element, appeler } = monterLot4();
+    await stabiliser(element);
+    (element.shadowRoot.querySelectorAll('.magasin-onglet')[0] as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelector('.reprendre-apprentissage') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(appeler).toHaveBeenCalledWith('home_stock/store/unpin_aisle',
+      { store_id: 1, aisle_id: 10 });
+  });
+
+  it('fusionne deux magasins en deux appuis', async () => {
+    const fusion = vi.fn();
+    const { element } = monterLot4((type, charge) => {
+      if (type === 'home_stock/store/merge') { fusion(charge); return { stores: [MAGASINS[0]] }; }
+      return undefined;
+    });
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelectorAll('.fusionner')[1] as HTMLButtonElement).click();
+    await stabiliser(element);
+    expect(fusion).not.toHaveBeenCalled();
+
+    (element.shadowRoot.querySelector('.confirmer-fusion') as HTMLButtonElement).click();
+    await stabiliser(element);
+    expect(fusion).toHaveBeenCalledWith({ keep_id: 1, merge_id: 2 });
+  });
+
+  it('refuse la fusion pendant une session ouverte, en français', async () => {
+    const { element } = monterLot4((type) => {
+      if (type === 'home_stock/store/merge') {
+        throw new Error('Une session de courses est en cours dans ce magasin : '
+                        + 'clôturez-la avant de fusionner.');
+      }
+      return undefined;
+    });
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelectorAll('.fusionner')[1] as HTMLButtonElement).click();
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.confirmer-fusion') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.erreur-fusion').textContent)
+      .toContain('en cours');
+  });
+
+  it('gère les lignes récurrentes', async () => {
+    const enregistrements: unknown[] = [];
+    const { element } = monterLot4((type, charge) => {
+      if (type === 'home_stock/recurring/save') {
+        enregistrements.push(charge);
+        return { recurring: [] };
+      }
+      return undefined;
+    });
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.recurrente').textContent).toContain('Café');
+    expect(element.shadowRoot.querySelector('.recurrente').textContent).toContain('21');
+
+    const champ = element.shadowRoot.querySelector('.champ-recurrente') as HTMLInputElement;
+    champ.value = 'Sacs poubelle';
+    champ.dispatchEvent(new Event('input'));
+    const jours = element.shadowRoot.querySelector('.champ-jours') as HTMLInputElement;
+    jours.value = '30';
+    jours.dispatchEvent(new Event('input'));
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.ajouter-recurrente') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(enregistrements).toEqual([{ free_text: 'Sacs poubelle', every_days: 30 }]);
+  });
+
+  it('supprime une ligne récurrente', async () => {
+    const suppressions: unknown[] = [];
+    const { element } = monterLot4((type, charge) => {
+      if (type === 'home_stock/recurring/delete') {
+        suppressions.push(charge);
+        return { recurring: [] };
+      }
+      return undefined;
+    });
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelector('.supprimer-recurrente') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(suppressions).toEqual([{ recurring_id: 5 }]);
+  });
+
+  it('affiche l’entité ai_task, ou dit qu’il n’y en a pas', async () => {
+    const { element } = monterLot4();
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.agent-ticket').textContent)
+      .toContain('Aucune');
+
+    element.agentTicket = 'ai_task.gemini';
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.agent-ticket').textContent)
+      .toContain('ai_task.gemini');
+  });
+
+  it('affiche la taille du dossier des tickets', async () => {
+    const { element } = monterLot4();
+    element.tailleTickets = '12,4 Mo';
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.taille-tickets').textContent)
+      .toContain('12,4 Mo');
+  });
+});

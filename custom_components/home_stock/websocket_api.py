@@ -1261,6 +1261,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
                     list_items, list_add, list_check, list_uncheck, list_remove,
                     list_refresh, recurring_list, recurring_save, recurring_delete,
                     store_save, store_merge, store_aisles, store_reorder_aisles,
+                    store_unpin_aisle,
                     movement_correct, movement_correction_preview, meal_correct):
         websocket_api.async_register_command(hass, command)
     # Lot 3's fourteen commands live in their own module — a file-layout
@@ -1625,6 +1626,29 @@ async def store_reorder_aisles(hass, connection, msg) -> None:
     except sqlite3.IntegrityError as err:
         _send_integrity_error(connection, msg["id"], err)
         return
+    await _answer_aisles(hass, connection, msg, msg["store_id"])
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/store/unpin_aisle",
+    vol.Required("store_id"): _bounded_int,
+    vol.Required("aisle_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def store_unpin_aisle(hass, connection, msg) -> None:
+    """« Reprendre l'apprentissage » : la ligne redevient automatique.
+
+    Une commande à part, et pas un `reorder_aisles` sans elle : réépingler
+    tous les AUTRES ne dés-épingle pas celle-ci, ça ne fait que réécrire ce
+    qui l'était déjà. Dire ce qu'on veut vaut mieux que le déduire.
+    """
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    await hass.async_add_executor_job(partial(
+        runtime.manager.unpin_store_aisle, msg["store_id"], msg["aisle_id"]))
     await _answer_aisles(hass, connection, msg, msg["store_id"])
 
 
