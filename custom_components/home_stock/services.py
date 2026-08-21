@@ -27,14 +27,18 @@ from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
 from .import_grocy_equipment import import_grocy_equipment
+from .import_grocy_recipes import import_recipes
+from .import_grocy_stock import import_stock
+from .migration_check import check_migration
 from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
 from .storage import repositories as repo
 from .validators import (
-    bounded_int, bounded_text, every_days, finite_float, iso_date, list_quantity,
-    non_negative_float, parts_count, preview, price_source, store_name,
+    acknowledgement_list, bounded_int, bounded_text, every_days, finite_float,
+    grocy_database_path, iso_date, list_quantity, non_negative_float,
+    parts_count, picture_dir, preview, price_source, store_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +51,47 @@ _LOGGER = logging.getLogger(__name__)
 # commands' ids. `_id` keeps cv.positive_int's own range (>= 0) but swaps
 # its coercion leg for `bounded_int`, which refuses all three instead.
 _id: Final = vol.All(bounded_int, vol.Range(min=0))
+
+# --- lot 7 : la bascule ------------------------------------------------------
+# Les trois schémas lisent les validateurs de validators.py, jamais cv.string
+# nu sur un chemin. La commande websocket home_stock/migration/check lit
+# EXACTEMENT MIGRATION_CHECK_SCHEMA : aucune des deux surfaces n'a le droit
+# d'être la plus faible, et une divergence s'ouvre toujours du côté qu'on n'a
+# pas testé.
+MIGRATION_IMPORT_SCHEMA: Final = vol.Schema({
+    vol.Optional("database_path", default="grocy_import.db"): grocy_database_path,
+    vol.Optional("apply", default=False): cv.boolean,
+})
+MIGRATION_RECIPES_SCHEMA: Final = vol.Schema({
+    vol.Optional("database_path", default="grocy_import.db"): grocy_database_path,
+    vol.Optional("picture_dir", default="media/home_stock"): picture_dir,
+    vol.Optional("apply", default=False): cv.boolean,
+})
+MIGRATION_CHECK_SCHEMA: Final = vol.Schema({
+    vol.Optional("database_path", default="grocy_import.db"): grocy_database_path,
+    vol.Optional("archive", default=True): cv.boolean,
+    vol.Optional("acknowledged", default=list): acknowledgement_list,
+})
+
+
+def _check_migration_for(hass: HomeAssistant, data: dict[str, Any]):
+    """Run the checks from wherever they are called — service or websocket.
+
+    Both surfaces call THIS function, so the answer cannot diverge. The paths
+    are resolved with `hass.config.path()`: the component never reads outside
+    `config/`, which is exactly why copying grocy.db in there is a gesture of
+    the procedure.
+    """
+    entry = _entry(hass)
+    return check_migration(
+        entry.runtime_data.manager.db,
+        hass.config.path(data["database_path"]),
+        acknowledged=data["acknowledged"],
+        archive=data["archive"],
+        picture_dir=hass.config.path("media/home_stock"),
+        config_dir=hass.config.path(""),
+        archive_dir=hass.config.path(""),
+    )
 
 
 def _iso_datetime(value: Any) -> str:
@@ -501,6 +546,41 @@ def async_register_services(hass: HomeAssistant) -> None:
             await entry.runtime_data.coordinator.async_request_refresh()
         return report.as_dict()
 
+    # --- lot 7 : la bascule ------------------------------------------------
+    # Même forme que import_grocy_catalog, et même asymétrie assumée : les
+    # deux IMPORTS n'ont pas de jumeau websocket. Un import de masse se lance
+    # depuis Outils de développement, UNE fois, en lisant son rapport en
+    # entier. Le CONTRÔLE, lui, se relance vingt fois pendant la bascule, une
+    # main dans le placard et l'autre sur le téléphone : il lui faut le
+    # panneau, et il a donc sa commande websocket.
+
+    async def import_grocy_stock_service(call: ServiceCall) -> ServiceResponse:
+        entry = _entry(hass)
+        path = hass.config.path(call.data["database_path"])
+        apply = call.data["apply"]
+        report = await _run(hass, partial(
+            import_stock, entry.runtime_data.manager.db, path, apply=apply))
+        if apply:
+            await entry.runtime_data.coordinator.async_request_refresh()
+        return report.as_dict()
+
+    async def import_grocy_recipes_service(call: ServiceCall) -> ServiceResponse:
+        entry = _entry(hass)
+        path = hass.config.path(call.data["database_path"])
+        dossier = hass.config.path(call.data["picture_dir"])
+        apply = call.data["apply"]
+        report = await _run(hass, partial(
+            import_recipes, entry.runtime_data.manager.db, path,
+            picture_dir=dossier, apply=apply))
+        if apply:
+            await entry.runtime_data.coordinator.async_request_refresh()
+        return report.as_dict()
+
+    async def check_grocy_migration_service(call: ServiceCall) -> ServiceResponse:
+        report = await _run(hass, partial(
+            _check_migration_for, hass, call.data))
+        return report.as_dict()
+
     async def resync_off(call: ServiceCall) -> None:
         """Refresh articles from OFF, one every BULK_INTERVAL seconds.
 
@@ -654,6 +734,22 @@ def async_register_services(hass: HomeAssistant) -> None:
         }),
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN, "import_grocy_stock", import_grocy_stock_service,
+        schema=MIGRATION_IMPORT_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, "import_grocy_recipes", import_grocy_recipes_service,
+        schema=MIGRATION_RECIPES_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, "check_grocy_migration", check_grocy_migration_service,
+        schema=MIGRATION_CHECK_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     # --- lot 3 -------------------------------------------------------------
 
     async def plan_meal(call: ServiceCall) -> None:

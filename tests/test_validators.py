@@ -1,6 +1,7 @@
 import pytest
 import voluptuous as vol
 
+from custom_components.home_stock import validators
 from custom_components.home_stock.const import GOAL_NUTRIENTS, MACRO_COLUMNS, MAX_GOAL
 from custom_components.home_stock.validators import (
     check_manual_portion,
@@ -260,3 +261,37 @@ def test_the_nine_goal_nutrients_are_the_nine_journal_columns():
     jamais être comparé à quoi que ce soit."""
     assert GOAL_NUTRIENTS == ("kcal", *MACRO_COLUMNS)
     assert len(GOAL_NUTRIENTS) == 9
+
+
+# --- lot 7 : la bascule -----------------------------------------------------
+
+def test_grocy_database_path_refuses_what_climbs():
+    for mauvais in ("../x.db", "a/../../x.db", "/x.db", "", "   "):
+        with pytest.raises(vol.Invalid):
+            validators.grocy_database_path(mauvais)
+    assert validators.grocy_database_path("grocy_import.db") == "grocy_import.db"
+
+
+def test_picture_dir_must_live_under_media():
+    assert validators.picture_dir("media/home_stock") == "media/home_stock"
+    for mauvais in ("www/x", "media/../www", "/media/x", "config/x", ""):
+        with pytest.raises(vol.Invalid):
+            validators.picture_dir(mauvais)
+
+
+def test_acknowledgement_list_refuses_a_blanket():
+    """« Un bouton "tout va bien" finit toujours par être pressé sans
+    regarder. » L'acquittement est NOMINATIF, et ces valeurs-là sont des
+    tentatives de contournement, pas des identifiants."""
+    for mauvais in (["all"], ["*"], "all", [""], [" " * 5], ["ALL"], ["tout"]):
+        with pytest.raises(vol.Invalid):
+            validators.acknowledgement_list(mauvais)
+    assert validators.acknowledgement_list(["grocy:stock:419"]) == ["grocy:stock:419"]
+    assert validators.acknowledgement_list([]) == []
+
+
+def test_acknowledgement_list_refuses_a_bare_string():
+    """Une chaîne est itérable : sans ce refus, « grocy:stock:419 » deviendrait
+    dix-sept acquittements d'un caractère."""
+    with pytest.raises(vol.Invalid):
+        validators.acknowledgement_list("grocy:stock:419")

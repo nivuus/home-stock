@@ -51,8 +51,13 @@ def _today() -> str:
     return datetime.now(UTC).date().isoformat()
 
 
-class StockImportError(Exception):
+class StockImportError(ValueError):
     """A batch whose Grocy product is not in the catalogue. The only hard stop.
+
+    A `ValueError` on purpose: `services._run` translates that family into a
+    French refusal, and `websocket_api` does the same. A bare Exception would
+    reach the log as a raw Python traceback on one surface and as nothing at
+    all on the other — the weaker-surface asymmetry this lot forbids.
 
     After the catalogue replay this cannot happen. If it does, someone wrote
     into Grocy during the switchover — and then nothing that follows is worth

@@ -54,8 +54,12 @@ RECIPE_PICTURE_DIR = "recipes"
 RECIPE_MEDIA_DIR = "home_stock/recipes"
 
 
-class RecipeImportError(Exception):
-    """Something the import refuses to guess about."""
+class RecipeImportError(ValueError):
+    """Something the import refuses to guess about.
+
+    A `ValueError` for the same reason as `StockImportError`: both surfaces
+    must answer a French refusal, not a raw traceback.
+    """
 
 
 @dataclass
