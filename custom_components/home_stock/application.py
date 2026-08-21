@@ -8,12 +8,17 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 from typing import Any, Final
+
+import voluptuous as vol
 from zoneinfo import ZoneInfo
 
 from .const import (
     MACRO_COLUMNS,
     MATCH_STATES,
+    MEAL_HORIZON_DAYS,
+    MEAL_SLOT_KEYS,
     MAX_PARTS,
     MAX_RECIPE_INGREDIENTS,
     MAX_RECIPE_STEPS,
@@ -38,6 +43,7 @@ from .recipes.adapt import AdaptedRecipe
 from .recipes.mapping import SourceIngredient, SourceRecipe
 from .storage import repositories as repo
 from .storage.database import Database
+from .validators import finite_float, iso_date
 
 
 # The keys a bucket and a day both carry. One definition, so a series and a
@@ -806,12 +812,12 @@ class StockManager:
         """
         if state not in MATCH_STATES:
             raise ValueError(
-                f"état d'appariement inconnu : {state!r}. "
-                f"Attendu l'un de {', '.join(MATCH_STATES)}")
+                f"unknown match state {state!r}; "
+                f"expected one of {', '.join(MATCH_STATES)}")
         if state in ("auto", "confirmed") and product_id is None:
             raise ValueError(
-                f"un appariement « {state} » suppose un produit : "
-                "seuls « unmatched » et « ignored » peuvent rester sans produit")
+                f"a {state!r} match needs a product; "
+                "only 'unmatched' and 'ignored' may have none")
         moment = _now()
         with self.db.write() as conn:
             return _match_ingredient_within(
@@ -831,19 +837,19 @@ class StockManager:
         """
         if len(steps) > MAX_RECIPE_STEPS:
             raise ValueError(
-                f"une recette ne peut pas dépasser {MAX_RECIPE_STEPS} étapes, "
-                f"reçu {len(steps)}")
+                f"a recipe cannot have more than {MAX_RECIPE_STEPS} steps, "
+                f"got {len(steps)}")
         if len(ingredients) > MAX_RECIPE_INGREDIENTS:
             raise ValueError(
-                f"une recette ne peut pas dépasser {MAX_RECIPE_INGREDIENTS} "
-                f"ingrédients, reçu {len(ingredients)}")
+                f"a recipe cannot have more than {MAX_RECIPE_INGREDIENTS} "
+                f"ingredients, got {len(ingredients)}")
         if source not in RECIPE_SOURCES:
             raise ValueError(
-                f"source de recette inconnue : {source!r}. "
-                f"Attendu l'une de {', '.join(RECIPE_SOURCES)}")
+                f"unknown recipe source {source!r}; "
+                f"expected one of {', '.join(RECIPE_SOURCES)}")
         if servings < 1:
             raise ValueError(
-                f"une recette est pour au moins une part, reçu {servings}")
+                f"a recipe serves at least one, got {servings}")
 
         moment = _now()
         with self.db.write() as conn:
@@ -874,7 +880,7 @@ class StockManager:
         conn = self.db.read()
         recipe = repo.get_recipe(conn, recipe_id)
         if recipe is None:
-            raise ValueError(f"recette {recipe_id} inconnue")
+            raise ValueError(f"unknown recipe {recipe_id}")
         products = repo.list_products(conn)
         lines = []
         for row in repo.list_ingredients(conn, recipe_id):
@@ -897,7 +903,7 @@ class StockManager:
     def update_recipe(self, recipe_id: int, fields: Mapping[str, Any]) -> None:
         with self.db.write() as conn:
             if repo.get_recipe(conn, recipe_id) is None:
-                raise ValueError(f"recette {recipe_id} inconnue")
+                raise ValueError(f"unknown recipe {recipe_id}")
             repo.update_recipe_fields(conn, recipe_id, fields)
 
     def delete_recipe(self, recipe_id: int) -> None:
@@ -910,12 +916,10 @@ class StockManager:
         """
         with self.db.write() as conn:
             if repo.get_recipe(conn, recipe_id) is None:
-                raise ValueError(f"recette {recipe_id} inconnue")
+                raise ValueError(f"unknown recipe {recipe_id}")
             if repo.recipe_is_referenced_by_a_done_meal(conn, recipe_id):
                 raise ValueError(
-                    "cette recette a déjà été cuisinée : un repas validé la "
-                    "référence. Désactivez-la plutôt que de la supprimer, "
-                    "pour que le journal reste lisible")
+                    f"recipe {recipe_id} has already been cooked")
             repo.delete_recipe(conn, recipe_id)
 
     def write_source_recipe(self, recipe: SourceRecipe, *,
@@ -974,6 +978,112 @@ class StockManager:
             _write_source_ingredients_within(conn, recipe_id, recipe, moment,
                                              adapted=adapted)
             return recipe_id, created
+
+    # --- meals -------------------------------------------------------------
+
+    def plan_meal(self, *, day: str, slot_key: str, recipe_id: int | None = None,
+                  product_id: int | None = None, amount: float | None = None,
+                  packaging_id: int | None = None, note: str | None = None,
+                  servings: float = 1.0, position: int | None = None,
+                  uid: str | None = None,
+                  created_at: str | None = None) -> dict[str, Any]:
+        """Put one meal on one food day. Returns `{"meal_id", "uid"}`.
+
+        `day` is a FOOD day in extended `YYYY-MM-DD` form and nothing else —
+        a date the caller has already decided, not an instant to convert.
+        The compact and week forms `date.fromisoformat` has accepted since
+        Python 3.11 make SQLite's `julianday()` return NULL, which would drop
+        the meal out of the planning without a word.
+        """
+        _checked_day(day)
+        _checked_slot(slot_key)
+        natures = sum(value is not None for value in (recipe_id, product_id, note))
+        if natures != 1:
+            raise ValueError(
+                "a meal is exactly one of a recipe, a product or a note, "
+                f"got {natures}")
+        servings = _checked_servings(servings)
+
+        moment = created_at or _now()
+        meal_uid = uid or f"home-stock-meal-{uuid4()}"
+        with self.db.write() as conn:
+            if recipe_id is not None and repo.get_recipe(conn, recipe_id) is None:
+                raise ValueError(f"unknown recipe {recipe_id}")
+            meal_id = repo.insert_meal(
+                conn, uid=meal_uid, day=day, slot_key=slot_key, created_at=moment,
+                recipe_id=recipe_id, product_id=product_id, amount=amount,
+                packaging_id=packaging_id, note=note, servings=servings,
+                position=(repo.next_meal_position(conn, day, slot_key)
+                          if position is None else position))
+            return {"meal_id": meal_id, "uid": meal_uid}
+
+    def move_meal(self, meal_id: int, *, day: str, slot_key: str,
+                  position: int | None = None) -> None:
+        """Move a planned meal to another day or slot.
+
+        A `done` meal never moves. Its movements carry a date nothing can
+        change any more, and moving the row would silently decouple the two:
+        the journal would say Tuesday, the planning Thursday, and neither
+        would be wrong on its own terms.
+        """
+        _checked_day(day)
+        _checked_slot(slot_key)
+        with self.db.write() as conn:
+            meal = repo.get_meal(conn, meal_id)
+            if meal is None:
+                raise ValueError(f"unknown meal {meal_id}")
+            if meal["state"] == "done":
+                raise ValueError(f"meal {meal_id} is already done")
+            repo.update_meal_fields(conn, meal_id, {
+                "day": day, "slot_key": slot_key,
+                "position": (repo.next_meal_position(conn, day, slot_key)
+                             if position is None else position)})
+
+    def cancel_meal(self, meal_id: int) -> str:
+        """Drop a planned meal, or mark a validated one skipped.
+
+        Returns `"deleted"` or `"skipped"`. Deleting a `done` meal would
+        destroy the `movement.ref_type = 'meal'` reference the journal already
+        carries — and the journal is append-only precisely so that cannot
+        happen. Skipping says the same thing without erasing anything.
+        """
+        with self.db.write() as conn:
+            meal = repo.get_meal(conn, meal_id)
+            if meal is None:
+                raise ValueError(f"unknown meal {meal_id}")
+            if meal["state"] == "done":
+                repo.update_meal_fields(conn, meal_id, {"state": "skipped"})
+                return "skipped"
+            repo.delete_meal(conn, meal_id)
+            return "deleted"
+
+    def list_meals(self, start: str, end: str) -> list[dict[str, Any]]:
+        _checked_day(start)
+        _checked_day(end)
+        return repo.list_meals(self.db.read(), start, end)
+
+    def meal_summary(self, *, tz: ZoneInfo, now: datetime | None = None,
+                     horizon_days: int = MEAL_HORIZON_DAYS) -> dict[str, Any]:
+        """What the coordinator publishes: the next meal, the recipes, the gaps.
+
+        Anchored on the FOOD day, not the calendar day: at one in the morning
+        you are still finishing yesterday evening, and yesterday's dinner is
+        still "next" rather than already missed.
+        """
+        today = food_day_of(now or datetime.now(UTC), tz)
+        conn = self.db.read()
+        recipes = repo.list_recipes(conn)
+        return {
+            "next": repo.next_meal(conn, today.isoformat()),
+            "recipes": {
+                "total": len(recipes),
+                "to_review": sum(1 for r in recipes if r["needs_review"]),
+                "unmatched": sum(r["unmatched_count"] for r in recipes),
+            },
+            "missing": repo.missing_products_between(
+                conn, today.isoformat(),
+                (today + timedelta(days=horizon_days)).isoformat()),
+        }
 
 
 # =============================================================================
@@ -1070,7 +1180,7 @@ def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None
     line = conn.execute(
         "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone()
     if line is None:
-        raise ValueError(f"ligne d'ingrédient {ingredient_id} inconnue")
+        raise ValueError(f"unknown ingredient line {ingredient_id}")
 
     repo.update_ingredient_match(conn, ingredient_id, product_id=product_id,
                                  state=state, score=1.0 if product_id else None)
@@ -1212,3 +1322,39 @@ def _write_source_ingredients_within(conn, recipe_id: int, recipe: SourceRecipe,
             raw_text=ingredient.raw_text, product_id=product_id,
             amount=amount, measure_id=measure_id, match_state=state,
             match_score=score)
+
+
+def _checked_day(day: Any) -> str:
+    """A food day in extended `YYYY-MM-DD` form, or a refusal.
+
+    Shares `iso_date` with both surfaces so the websocket and the service
+    cannot disagree about what a date is — neither is allowed to be the
+    weaker one. The `vol.Invalid` it raises is re-raised as `ValueError`:
+    the application layer speaks one exception type, which is what lets
+    `messages.py` translate every refusal at a single seam.
+    """
+    try:
+        checked = iso_date(day)
+    except vol.Invalid as err:
+        raise ValueError(f"invalid day {day!r}; expected YYYY-MM-DD") from err
+    if checked is None:
+        raise ValueError(f"invalid day {day!r}; expected YYYY-MM-DD")
+    return checked
+
+
+def _checked_servings(servings: Any) -> float:
+    """A real, finite, strictly positive serving count."""
+    try:
+        value = finite_float(servings)
+    except vol.Invalid as err:
+        raise ValueError(f"servings must be a real number, got {servings!r}") from err
+    if value <= 0:
+        raise ValueError(f"servings must be positive, got {value}")
+    return value
+
+
+def _checked_slot(slot_key: Any) -> str:
+    if slot_key not in MEAL_SLOT_KEYS:
+        raise ValueError(
+            f"unknown slot {slot_key!r}; expected one of {', '.join(MEAL_SLOT_KEYS)}")
+    return slot_key

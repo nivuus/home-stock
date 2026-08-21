@@ -172,14 +172,14 @@ def test_marking_a_line_auto_without_a_product_is_refused(manager):
     d'écriture juste pour abandonner dedans."""
     with manager.db.write() as conn:
         ingredient_id = _recipe_line(conn, "sel")
-    with pytest.raises(ValueError, match="suppose un produit"):
+    with pytest.raises(ValueError, match="needs a product"):
         manager.match_ingredient(ingredient_id, product_id=None, state="auto")
 
 
 def test_an_unknown_match_state_is_refused_by_name(manager):
     with manager.db.write() as conn:
         ingredient_id = _recipe_line(conn, "sel")
-    with pytest.raises(ValueError, match="peut-être"):
+    with pytest.raises(ValueError, match="unknown match state"):
         manager.match_ingredient(ingredient_id, product_id=None, state="peut-être")
 
 

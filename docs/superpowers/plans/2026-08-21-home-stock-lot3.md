@@ -1444,7 +1444,7 @@ class StockManager:
 - **Un repas dont l'heure est passée reste `planned`.** Le composant ne décide pas tout seul qu'un repas n'a pas eu lieu.
 - `meal_summary` rend `{"next": {...} | None, "recipes": {...}, "missing": [...]}` : c'est ce que le coordinateur publiera (tâche 15).
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_recipe_meal_lands_with_a_uid(manager): ...
@@ -1472,15 +1472,15 @@ def test_meal_summary_counts_the_missing_products_over_seven_days(manager): ...
 def test_meal_summary_is_empty_without_any_meal_and_never_raises(manager): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meals_plan.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meals_plan.py -q`
 
-- [ ] **Step 3: Écrire les méthodes**
+- [x] **Step 3: Écrire les méthodes**
 
 Une transaction par méthode. Les messages français passent par les motifs de `messages.py` que la tâche 17 ajoutera : ici, lever `ValueError` avec un texte **anglais stable** (`unknown slot 'brunch'`, `meal 3 is already done`) et laisser la traduction à `messages.py`, exactement comme le lot 0 l'a fait pour `unknown article 7`.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_meals_plan.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_meals_plan.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meals_plan.py
 git commit -m "feat: plan, move and cancel a meal — a done meal never moves"

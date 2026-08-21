@@ -247,7 +247,7 @@ def test_create_recipe_writes_nothing_when_one_ingredient_is_invalid(manager):
 
 
 def test_create_recipe_refuses_an_unknown_source(manager):
-    with pytest.raises(ValueError, match="source de recette inconnue"):
+    with pytest.raises(ValueError, match="unknown recipe source"):
         manager.create_recipe(name="R", source="marmiton")
 
 
@@ -286,7 +286,7 @@ def test_deleting_a_recipe_referenced_by_a_done_meal_is_refused(manager):
         repo.insert_meal(conn, uid="u1", day="2026-08-20", slot_key="dinner",
                          created_at="2026-08-20T18:00:00", recipe_id=recipe_id,
                          state="done")
-    with pytest.raises(ValueError, match="déjà été cuisinée"):
+    with pytest.raises(ValueError, match="already been cooked"):
         manager.delete_recipe(recipe_id)
     assert repo.get_recipe(manager.db.read(), recipe_id) is not None
 

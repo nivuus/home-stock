@@ -72,10 +72,10 @@ def scale_factor(meal_servings: float, recipe_servings: int) -> float:
     """
     if meal_servings <= 0:
         raise ValueError(
-            f"le nombre de parts doit être positif, reçu {meal_servings}")
+            f"servings must be positive, got {meal_servings}")
     if recipe_servings <= 0:
         raise ValueError(
-            f"la recette doit être pour au moins une part, reçu {recipe_servings}")
+            f"a recipe serves at least one, got {recipe_servings}")
     return float(meal_servings) / float(recipe_servings)
 
 
@@ -233,7 +233,7 @@ def per_part_values(frozen: Sequence[Mapping[str, float | None]],
     sum of its portions.
     """
     if parts <= 0:
-        raise ValueError(f"le nombre de parts doit être positif, reçu {parts}")
+        raise ValueError(f"parts must be positive, got {parts}")
     result: dict[str, float | None] = {}
     for key in PER_PART_KEYS:
         values = [row.get(key) for row in frozen]
