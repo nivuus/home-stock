@@ -440,12 +440,35 @@ export class EcranJournal extends LitElement {
     `;
   }
 
+  /** Ce que le seau sélectionné donne à lire : la journée entière en vue
+   *  « jour », les totaux du seau sinon. Nom distinct de `rendreDetail`, qui
+   *  est le détail d'UNE LIGNE du journal — les confondre a produit une
+   *  récursion infinie le temps d'une écriture. */
+  private rendrePeriode() {
+    return this.granularite === 'day' ? this.rendreJour() : this.rendreSeauTotaux();
+  }
+
   render() {
+    // Au-delà de 1000 px, les douze barres et le détail cessent d'être
+    // empilés : ils se regardent. C'est ce qui permet de COMPARER — cliquer
+    // une barre, lire le jour, cliquer la suivante — au lieu de défiler entre
+    // les deux à chaque fois. Sous 1000 px la disposition ne change pas d'un
+    // pixel : c'est la même série et le même détail, dans le même ordre.
+    if (this.large) {
+      return html`
+        <h1 class="titre">Journal</h1>
+        ${this.rendreGranularites()}
+        <div class="deux-colonnes">
+          <div class="colonne-serie">${this.rendreBarres()}</div>
+          <div class="colonne-detail">${this.rendrePeriode()}</div>
+        </div>
+      `;
+    }
     return html`
       <h1 class="titre">Journal</h1>
       ${this.rendreGranularites()}
       ${this.rendreBarres()}
-      ${this.granularite === 'day' ? this.rendreJour() : this.rendreSeauTotaux()}
+      ${this.rendrePeriode()}
     `;
   }
 
@@ -527,5 +550,19 @@ export class EcranJournal extends LitElement {
     .total-kcal { margin: 4px 0 0; font-size: 1.1rem; font-weight: 600; }
     .total-cout { margin: 2px 0; color: var(--secondary-text-color); }
     .non-chiffre { color: var(--error-color, #b3261e); font-size: 0.85rem; }
+
+    /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
+       Deux tiers pour la série, un tiers pour le détail — et ce n'est pas un
+       goût : quatorze barres à 48 px de cible tactile réclament 700 px, ce
+       qu'une demi-largeur de 1280 ne donne pas. Le vérificateur de rendu l'a
+       signalé avant qu'on s'en aperçoive. Largeur minimale nulle sur les deux
+       colonnes, sans quoi une entrée longue pousserait la grille hors cadre. */
+    .deux-colonnes {
+      display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+      gap: 16px; align-items: start;
+    }
+    .colonne-serie, .colonne-detail { min-width: 0; }
+    .deux-colonnes .barres { margin-top: 0; }
+    .deux-colonnes .jour { margin-top: 0; }
   `;
 }

@@ -372,3 +372,133 @@ describe('<home-stock-journal> — les objectifs', () => {
     expect(ligne.textContent).not.toContain('1.2');
   });
 });
+
+// --- lot 6 : les barres et le jour, côte à côte ------------------------------
+//
+// Le brief annonçait qu'en étroit « une seule des deux vues » est visible.
+// C'est faux au contact du code : `render()` empile déjà la série ET le détail
+// du jour, depuis le lot 2. Ce que la largeur apporte n'est donc pas de MONTRER
+// le détail, c'est de ne plus obliger à défiler entre les deux — d'où un
+// contrôle sur la DISPOSITION, la seule chose qui change vraiment.
+
+const DOUZE_MOIS = { granularity: 'day', buckets: Array.from({ length: 12 }, (_, i) => ({
+  label: `2026-0${i < 9 ? i + 1 : 1}-0${(i % 9) + 1}`.slice(0, 10),
+  kcal: 1500 + i * 50, cost: 8 + i, waste_cost: i % 3,
+})) };
+
+function monterJournal(options: { large: boolean; file?: unknown }) {
+  const element = document.createElement('home-stock-journal') as any;
+  const appeler = vi.fn(async (type: string, charge?: any) => {
+    if (type === 'home_stock/journal/day') {
+      return { ...JOUR, food_day: charge?.date ?? JOUR.food_day };
+    }
+    return DOUZE_MOIS;
+  });
+  element.connexion = { appeler };
+  if (options.file) element.file = options.file;
+  element.large = options.large;
+  document.body.append(element);
+  return { element, appeler };
+}
+
+async function stabiliserJournal(element: any) {
+  await element.updateComplete;
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
+  await element.updateComplete;
+}
+
+const barres = (e: any) => e.shadowRoot.querySelectorAll('.barre');
+const detailDuJour = (e: any) => e.shadowRoot.querySelector('.jour');
+const jourAffiche = (e: any) => e.shadowRoot.querySelector('.titre-jour')?.textContent?.trim();
+
+describe('<home-stock-journal> : la vue dense (lot 6)', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('affiche la série et le détail côte à côte au-delà de 1000 px', async () => {
+    const { element } = monterJournal({ large: true });
+    await stabiliserJournal(element);
+    expect(barres(element).length).toBe(12);
+    expect(detailDuJour(element)).not.toBeNull();
+    expect(element.shadowRoot.querySelector('.deux-colonnes')).not.toBeNull();
+  });
+
+  it('en étroit, les deux vues restent empilées, jamais côte à côte', async () => {
+    const { element } = monterJournal({ large: false });
+    await stabiliserJournal(element);
+    expect(detailDuJour(element)).not.toBeNull();
+    expect(element.shadowRoot.querySelector('.deux-colonnes')).toBeNull();
+  });
+
+  it('cliquer une barre en large change le détail sans faire disparaître la série', async () => {
+    // Le vrai gain : comparer. Si le clic remplace la série, on a juste
+    // déplacé la navigation, on ne l'a pas supprimée.
+    const { element } = monterJournal({ large: true });
+    await stabiliserJournal(element);
+
+    (barres(element)[3] as HTMLButtonElement).click();
+    await stabiliserJournal(element);
+
+    expect(barres(element).length).toBe(12);
+    expect(jourAffiche(element)).toBe(DOUZE_MOIS.buckets[3].label);
+  });
+
+  it('ne demande jamais plus de seaux que le serveur n’en borne, large ou non', async () => {
+    // `MAX_SERIES_COUNT` vaut 60 côté serveur. Une vue large ne se donne pas
+    // le droit d'en demander plus : le seuil est côté composant, et il gagne.
+    for (const large of [false, true]) {
+      document.body.innerHTML = '';
+      const { element, appeler } = monterJournal({ large });
+      await stabiliserJournal(element);
+      for (const granularite of ['day', 'week', 'month'] as const) {
+        await element.choisirGranularite(granularite);
+      }
+      const comptes = appeler.mock.calls
+        .filter(([type]: any[]) => type === 'home_stock/journal/series')
+        .map(([, charge]: any[]) => charge.count);
+      expect(comptes.length).toBeGreaterThan(0);
+      for (const compte of comptes) {
+        expect(compte).toBeGreaterThan(0);
+        expect(compte).toBeLessThanOrEqual(60);
+      }
+    }
+  });
+
+  it('corrige un mouvement en large, par la file, avec confirmation', async () => {
+    // Chercher une ligne, lire sa contrepartie, confirmer : personne ne fait
+    // ça debout. Une correction est une CONTREPASSATION, pas une annulation —
+    // le journal garde les deux, et l'écran le dit dans les deux mises en page.
+    const file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
+                   rejouer: vi.fn().mockResolvedValue(undefined) };
+    const element = document.createElement('home-stock-journal') as any;
+    element.connexion = { appeler: vi.fn(async (type: string) => {
+      if (type === 'home_stock/journal/day') {
+        return { ...JOUR, entries: [{ id: 1, occurred_at: '2026-08-14T18:00:00',
+          product_name: 'Pâtes', quantity: -200, base_unit: 'g', reason: 'consumption',
+          kcal: 310, parts_total: null, parts_mine: null, batch_id: 5,
+          corrects_id: null, corrected_by: null }] };
+      }
+      if (type === 'home_stock/movement/correction_preview') {
+        return { movement_id: 1, product_name: 'Pâtes', base_unit: 'g', quantity: 200,
+                 kcal: 310, cost: 0.42, reason: 'consumption',
+                 occurred_at: '2026-08-14T18:00:00', batch_id: 5,
+                 batch_entered_at: '2026-08-14T10:00:00', correctable: true, refusal: null };
+      }
+      return DOUZE_MOIS;
+    }) };
+    element.file = file;
+    element.large = true;
+    document.body.append(element);
+    await stabiliserJournal(element);
+
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliserJournal(element);
+    (element.shadowRoot.querySelector('.corriger') as HTMLButtonElement).click();
+    await stabiliserJournal(element);
+    expect(file.ajouter).not.toHaveBeenCalled();      // un seul appui n'écrit rien
+
+    (element.shadowRoot.querySelector('.confirmer-correction') as HTMLButtonElement).click();
+    expect(file.ajouter).toHaveBeenCalledWith('home_stock/movement/correct',
+      { movement_id: 1 });
+    expect(barres(element).length).toBe(12);          // la série n'a pas bougé
+  });
+});
