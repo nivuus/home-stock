@@ -420,6 +420,75 @@ class WarrantyNextSensor(HomeStockEntity, SensorEntity):
             for row in self.coordinator.data["warranties"]]}
 
 
+class ShoppingListSensor(HomeStockEntity, SensorEntity):
+    """Le nombre de lignes ouvertes, et d'où elles viennent."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "shopping_list", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data["shopping_list"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self.coordinator.data["shopping_list"]
+        by_origin: dict[str, int] = {}
+        by_aisle: dict[str, int] = {}
+        for row in rows:
+            for claim in row.get("claims") or ():
+                by_origin[claim["origin"]] = by_origin.get(claim["origin"], 0) + 1
+            aisle = row.get("aisle_name") or "Sans rayon"
+            by_aisle[aisle] = by_aisle.get(aisle, 0) + 1
+        return {
+            "by_origin": by_origin,
+            "by_aisle": by_aisle,
+            # Le libellé, la quantité et l'état de chaque ligne : de quoi
+            # écrire une automation ou une annonce vocale sans repasser par
+            # le websocket.
+            "items": [
+                {"id": row["id"],
+                 "name": row["product_name"] or row["free_text"],
+                 "quantity": row["quantity"],
+                 "base_unit": row["base_unit"],
+                 "aisle": row.get("aisle_name"),
+                 "checked": row["checked_at"] is not None}
+                for row in rows
+            ],
+        }
+
+
+class ListEstimateSensor(HomeStockEntity, SensorEntity):
+    """« Ça va faire combien ? », et rien d'autre.
+
+    MEASUREMENT et jamais un TOTAL : ce n'est pas de l'argent dépensé, c'est
+    une prévision. Elle n'entre dans aucune comptabilité, et `confidence` dit
+    quelle proportion de la liste a réellement pu être chiffrée — en clair,
+    plutôt que noyée dans le total.
+    """
+
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "list_estimate", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.data["list_estimate"]["amount"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        estimate = self.coordinator.data["list_estimate"]
+        return {
+            "confidence": estimate["confidence"],
+            "priced": estimate["priced"],
+            "total": estimate["total"],
+        }
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -440,4 +509,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
         BatteriesLowSensor(coordinator),
         BatteriesUndeclaredSensor(coordinator),
         WarrantyNextSensor(coordinator),
+        ShoppingListSensor(coordinator),
+        ListEstimateSensor(coordinator),
     ])

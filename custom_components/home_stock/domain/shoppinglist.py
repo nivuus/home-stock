@@ -158,10 +158,19 @@ def reconcile(*, wanted: Sequence[WantedItem], existing: Sequence[Mapping[str, A
                 blocked.add(key)
             continue
         if row.get("checked_at") is not None:
-            if session_open:
-                untouched.add(key)              # règle 3
-            else:
+            # `purgeable`, quand l'appelant le fournit, est la réponse
+            # PAR LIGNE à « une session a-t-elle été close depuis qu'on a
+            # coché ? ». Sans lui, on retombe sur la réponse globale. Cocher
+            # depuis une carte, hors de tout voyage, ne doit pas faire
+            # disparaître la ligne au tic suivant pour la recréer aussitôt :
+            # ça se lit comme un bug, pas comme une règle.
+            purgeable = row.get("purgeable")
+            if purgeable is None:
+                purgeable = not session_open
+            if purgeable:
                 to_remove.append(int(row["id"]))  # règle 4 : purge, recréable
+            else:
+                untouched.add(key)              # règle 3
             continue
         open_rows[key] = row
 

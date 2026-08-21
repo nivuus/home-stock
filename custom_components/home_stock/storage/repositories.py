@@ -689,6 +689,16 @@ def open_session(conn, *, started_at: str, store: str | None,
                     "store_id": store_id})
 
 
+def last_closed_session_at(conn) -> str | None:
+    """L'instant où le dernier voyage a été clos, ou `None` s'il n'y en a
+    jamais eu. C'est ce qui rend la règle 4 de la réconciliation décidable
+    ligne par ligne plutôt que globalement."""
+    row = conn.execute(
+        "SELECT MAX(COALESCE(closed_at, started_at)) AS at FROM shopping_session"
+        " WHERE state = 'done'").fetchone()
+    return row["at"] if row else None
+
+
 def current_session(conn) -> dict[str, Any] | None:
     """The session the panel should show: the open one, else the oldest one
     still waiting to be put away.

@@ -2090,6 +2090,15 @@ class StockManager:
         existing = repo.list_items(conn, include_removed=True)
         session = repo.current_session(conn)
         session_open = session is not None and session["state"] != "done"
+        # « Une session a-t-elle été close DEPUIS que cette ligne a été
+        # cochée ? » — la question de la règle 4, posée ligne par ligne.
+        # Sans elle, cocher depuis une carte hors de tout voyage ferait
+        # disparaître la ligne au tic suivant pour la recréer aussitôt.
+        last_closed = repo.last_closed_session_at(conn)
+        for row in existing:
+            row["purgeable"] = bool(
+                not session_open and row["checked_at"] and last_closed
+                and row["checked_at"] <= last_closed)
         wanted = self._wanted_items(conn, today=today, horizon_days=horizon_days,
                                     existing=existing)
         plan = reconcile(wanted=wanted, existing=existing,

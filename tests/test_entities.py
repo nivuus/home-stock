@@ -466,3 +466,44 @@ async def test_the_eleven_daily_sensors_do_not_move(hass, loaded):
     étaient déjà TOTAL et le restent."""
     state = hass.states.get("sensor.home_stock_kcal_today")
     assert state.attributes["state_class"] == "total"
+
+
+async def test_the_two_new_sensors_publish_their_attributes(hass, loaded):
+    """`shopping_list` compte les lignes ouvertes et dit d'où elles viennent ;
+    `list_estimate` répond à « ça va faire combien ? » et à rien d'autre."""
+    manager = loaded.runtime_data.manager
+
+    def _seed() -> None:
+        with manager.db.write() as conn:
+            aisles = {row["name"]: row["id"] for row in repo.list_aisles(conn)}
+            product_id = repo.insert_product(conn, name="Lait", base_unit="ml",
+                                             min_quantity=2000,
+                                             aisle_id=aisles["Crémerie"])
+            article_id = repo.insert_article(conn, product_id=product_id,
+                                             is_generic=1)
+            repo.insert_price(conn, article_id=article_id, observed_on="2026-08-10",
+                              price_per_base_unit=0.001, source="manual", store=None)
+            item_id = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00",
+                                            product_id=product_id, quantity=2000.0)
+            repo.set_claim(conn, item_id=item_id, origin="shortage", quantity=2000.0,
+                           detail="sous le seuil", claimed_at="2026-08-21T09:00:00")
+            piles = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00",
+                                          free_text="Piles")
+            repo.set_claim(conn, item_id=piles, origin="manual", quantity=None,
+                           detail="ajouté à la main",
+                           claimed_at="2026-08-21T09:00:00")
+
+    await hass.async_add_executor_job(_seed)
+    await loaded.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    listing = hass.states.get("sensor.home_stock_shopping_list")
+    assert listing.state == "2"
+    assert listing.attributes["by_origin"]["shortage"] == 1
+    assert listing.attributes["by_aisle"]["Crémerie"] == 1
+    assert len(listing.attributes["items"]) == 2
+
+    estimate = hass.states.get("sensor.home_stock_list_estimate")
+    assert float(estimate.state) == pytest.approx(2.0)
+    assert estimate.attributes["confidence"] == pytest.approx(0.5)
+    assert estimate.attributes["unit_of_measurement"] == "EUR"
