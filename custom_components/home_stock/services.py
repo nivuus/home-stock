@@ -16,7 +16,9 @@ from homeassistant.util import dt as dt_util
 from .application import PartsError
 from .const import (
     BATTERY_EVENT_KINDS,
+    CONF_SHOPPING_LIST_HORIZON_DAYS,
     CONSUME_REASONS,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     DOMAIN,
     MEAL_SLOT_KEYS,
     REASON_CONSUMPTION,
@@ -29,9 +31,10 @@ from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
+from .storage import repositories as repo
 from .validators import (
-    bounded_int, bounded_text, finite_float, iso_date, non_negative_float,
-    parts_count, preview,
+    bounded_int, bounded_text, every_days, finite_float, iso_date, list_quantity,
+    non_negative_float, parts_count, preview, price_source, store_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -222,6 +225,38 @@ MAINTENANCE_PLAN_SCHEMA = vol.Schema({
 IMPORT_EQUIPMENT_SCHEMA = vol.Schema({
     vol.Required("database_path"): cv.string,
     vol.Optional("apply", default=False): cv.boolean,
+})
+
+# --- lot 4 : liste de courses, ticket, correction ---------------------------
+#
+# Les bornes vivent dans `validators.py`, une seule fois, et le websocket lit
+# les mêmes : aucune des deux surfaces n'a le droit d'être la plus faible.
+
+ADD_TO_LIST_SCHEMA = vol.Schema({
+    vol.Optional("product_id"): _id,
+    vol.Optional("free_text"): bounded_text,
+    vol.Optional("quantity"): list_quantity,
+    vol.Optional("note"): bounded_text,
+})
+
+REFRESH_LIST_SCHEMA = vol.Schema({
+    vol.Optional("horizon_days"): vol.All(bounded_int, vol.Range(min=1, max=60)),
+})
+
+QUERY_LIST_SCHEMA = vol.Schema({
+    vol.Optional("store_id"): _id,
+})
+
+READ_RECEIPT_SCHEMA = vol.Schema({
+    vol.Optional("receipt_id"): _id,
+})
+
+CORRECT_MOVEMENT_SCHEMA = vol.Schema({
+    vol.Required("movement_id"): _id,
+})
+
+CORRECT_MEAL_SCHEMA = vol.Schema({
+    vol.Required("meal_id"): _id,
 })
 
 BATTERY_EVENT_SCHEMA = vol.Schema({
@@ -721,3 +756,118 @@ def async_register_services(hass: HomeAssistant) -> None:
                                  import_grocy_equipment_service,
                                  schema=IMPORT_EQUIPMENT_SCHEMA,
                                  supports_response=SupportsResponse.ONLY)
+
+    # --- lot 4 -------------------------------------------------------------
+    # Enregistrés EN FIN, comme les entrées de `services.yaml` : ce fichier
+    # est allongé par un autre lot en parallèle.
+
+    async def add_to_shopping_list(call: ServiceCall) -> ServiceResponse:
+        """La porte du vocal : « Bleuenn, ajoute du beurre à la liste ».
+
+        Une charge minimale — juste un texte — doit passer. Exiger un
+        `product_id` ici reviendrait à demander à quelqu'un qui parle de
+        connaître l'identifiant d'une ligne de catalogue.
+        """
+        runtime = _entry(hass).runtime_data
+        if call.data.get("product_id") is None and not call.data.get("free_text"):
+            raise HomeAssistantError(french_message(
+                ValueError("a shopping list line needs a product or a text")))
+        result = await _run(hass, partial(
+            runtime.manager.add_to_shopping_list,
+            product_id=call.data.get("product_id"),
+            free_text=call.data.get("free_text"),
+            quantity=call.data.get("quantity"),
+            note=call.data.get("note")))
+        await runtime.coordinator.async_request_refresh()
+        return result
+
+    async def refresh_shopping_list(call: ServiceCall) -> None:
+        runtime = _entry(hass).runtime_data
+        horizon = call.data.get(
+            "horizon_days",
+            _entry(hass).options.get(CONF_SHOPPING_LIST_HORIZON_DAYS,
+                                     DEFAULT_SHOPPING_LIST_HORIZON_DAYS))
+        await _run(hass, partial(runtime.manager.reconcile_shopping_list,
+                                 today=dt_util.now().date(), horizon_days=horizon))
+        await runtime.coordinator.async_request_refresh()
+
+    async def query_shopping_list(call: ServiceCall) -> ServiceResponse:
+        """« Qu'est-ce qu'il faut acheter ? », sans créer d'entité.
+
+        `SupportsResponse.ONLY`, comme `query_stock` : une entité par ligne de
+        liste serait une entité par produit sous son seuil, qui va et vient.
+        """
+        runtime = _entry(hass).runtime_data
+        rows = await _run(hass, partial(runtime.manager.shopping_list,
+                                        store_id=call.data.get("store_id"),
+                                        include_checked=False))
+        by_aisle: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            aisle = row.get("aisle_name") or "Sans rayon"
+            by_aisle.setdefault(aisle, []).append({
+                "id": row["id"],
+                "name": row["product_name"] or row["free_text"],
+                "quantity": row["quantity"],
+                "base_unit": row["base_unit"],
+                "reasons": [claim["detail"] for claim in row.get("claims") or ()
+                            if claim.get("detail")],
+            })
+        estimate = await _run(hass, runtime.manager.list_estimate)
+        return {"items": by_aisle, "count": len(rows), "estimate": estimate}
+
+    async def read_receipt(call: ServiceCall) -> ServiceResponse:
+        """Relance la lecture d'un ticket — celui qu'on nomme, ou le dernier
+        en échec. Sans argument, c'est le geste qu'on fait le lendemain matin
+        quand le réseau du parking était mauvais."""
+        runtime = _entry(hass).runtime_data
+        receipt_id = call.data.get("receipt_id")
+        if receipt_id is None:
+            pending = await _run(hass, partial(
+                repo.pending_receipts, runtime.manager.db.read()))
+            if not pending:
+                raise HomeAssistantError("Aucun ticket en attente de lecture.")
+            receipt_id = int(pending[0]["id"])
+        row = await _run(hass, partial(repo.get_receipt,
+                                       runtime.manager.db.read(), receipt_id))
+        if row is None:
+            raise HomeAssistantError(
+                french_message(LookupError(f"unknown receipt {receipt_id}")))
+        from .websocket_receipts import _perform_read
+        await _perform_read(hass, runtime, receipt_id)
+        await runtime.coordinator.async_request_refresh()
+        after = await _run(hass, partial(repo.get_receipt,
+                                         runtime.manager.db.read(), receipt_id))
+        return {"receipt_id": receipt_id, "state": after["state"],
+                "error": after["error"], "lines": len(after["lines"])}
+
+    async def correct_movement(call: ServiceCall) -> ServiceResponse:
+        runtime = _entry(hass).runtime_data
+        result = await _run(hass, partial(runtime.manager.correct_movement,
+                                          call.data["movement_id"]))
+        await runtime.coordinator.async_request_refresh()
+        return result
+
+    async def correct_meal(call: ServiceCall) -> ServiceResponse:
+        runtime = _entry(hass).runtime_data
+        result = await _run(hass, partial(runtime.manager.correct_meal,
+                                          call.data["meal_id"]))
+        await runtime.coordinator.async_request_refresh()
+        return result
+
+    hass.services.async_register(DOMAIN, "add_to_shopping_list",
+                                 add_to_shopping_list, schema=ADD_TO_LIST_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(DOMAIN, "refresh_shopping_list",
+                                 refresh_shopping_list, schema=REFRESH_LIST_SCHEMA)
+    hass.services.async_register(DOMAIN, "query_shopping_list",
+                                 query_shopping_list, schema=QUERY_LIST_SCHEMA,
+                                 supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(DOMAIN, "read_receipt", read_receipt,
+                                 schema=READ_RECEIPT_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(DOMAIN, "correct_movement", correct_movement,
+                                 schema=CORRECT_MOVEMENT_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
+    hass.services.async_register(DOMAIN, "correct_meal", correct_meal,
+                                 schema=CORRECT_MEAL_SCHEMA,
+                                 supports_response=SupportsResponse.OPTIONAL)
