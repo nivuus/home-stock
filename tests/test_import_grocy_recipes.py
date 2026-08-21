@@ -244,3 +244,172 @@ def test_the_import_runs_in_one_transaction(db_catalogue, grocy_reel_db,
                                             tmp_media):
     """Database._lock n'est pas réentrant. Ce test rend la main ou il gèle."""
     import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+
+
+# --- ingrédients ------------------------------------------------------------
+
+def test_five_hundred_and_ten_ingredient_rows(db_catalogue, grocy_reel_db,
+                                              tmp_media):
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True)
+    assert rapport.ingredients == 510
+
+
+def test_the_two_hundred_orphan_rows_are_left_out(db_catalogue, grocy_reel_db,
+                                                  tmp_media):
+    """710 lignes dans recipes_pos, 200 orphelines : leur recipe_id ne
+    correspond à aucune ligne de recipes. Un LEFT JOIN les ramènerait ; le
+    JOIN du filtre les écarte."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient").fetchone()["n"] == 510
+
+
+def test_four_hundred_and_eighty_five_are_confirmed(db_catalogue, grocy_reel_db,
+                                                    tmp_media):
+    """« confirmed », pas « auto » : le lot 3 réserve auto à un appariement
+    deviné et scoré. Ici le produit vient d'un identifiant."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    compte = {row["match_state"]: row["n"] for row in db_catalogue.read().execute(
+        "SELECT match_state, COUNT(*) AS n FROM recipe_ingredient"
+        " GROUP BY match_state")}
+    assert compte == {"confirmed": 485, "unmatched": 25}
+
+
+def test_match_score_is_never_written(db_catalogue, grocy_reel_db, tmp_media):
+    """Écrire 1.0 laisserait croire qu'un algorithme a été très sûr de lui."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient WHERE match_score IS NOT NULL"
+    ).fetchone()["n"] == 0
+
+
+def test_the_twenty_three_diverging_units_lose_their_quantity(db_catalogue,
+                                                              grocy_reel_db,
+                                                              tmp_media):
+    """Onze disent « 1 Bouteille » d'huile d'olive quand variable_amount dit
+    « 1 cs ». Importées telles quelles, elles retireraient 750 ml d'huile pour
+    une cuillère à soupe, À CHAQUE REPAS VALIDÉ."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    lignes = db_catalogue.read().execute(
+        "SELECT amount, product_id FROM recipe_ingredient"
+        " WHERE match_state = 'unmatched' AND product_id IS NOT NULL").fetchall()
+    assert len(lignes) == 23
+    assert all(l["amount"] is None for l in lignes)
+    assert all(l["product_id"] is not None for l in lignes)   # le produit est certain
+
+
+def test_the_two_inactive_product_rows_have_no_product(db_catalogue,
+                                                       grocy_reel_db, tmp_media):
+    """« Riz basmati (doublon) » est désactivé chez Grocy, donc jamais importé
+    au lot 0. Le rapport le nomme : c'est un appariement que seul un humain
+    peut signer."""
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True)
+    lignes = db_catalogue.read().execute(
+        "SELECT amount FROM recipe_ingredient"
+        " WHERE match_state = 'unmatched' AND product_id IS NULL").fetchall()
+    assert len(lignes) == 2
+    assert any("Riz basmati" in a for a in rapport.anomalies)
+
+
+def test_every_diverging_line_is_named_in_the_report(db_catalogue, grocy_reel_db,
+                                                     tmp_media):
+    """Avec sa recette, son produit, la quantité Grocy, LES DEUX unités et le
+    variable_amount. Sans ça, « 25 lignes à arbitrer » n'est pas actionnable.
+
+    Onze lignes d'huile d'olive, pas treize : la spec en annonçait treize, la
+    base en porte onze. Amendement A7 du § 22.
+    """
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True)
+    citees = [a for a in rapport.anomalies if "unité" in a]
+    assert len(citees) == 23
+    huile = [a for a in citees if "Huile d" in a]
+    assert len(huile) == 11
+    assert all("Bouteille" in a and "cs" in a for a in huile)
+
+
+def test_variable_amount_is_never_parsed_into_a_quantity(db_catalogue,
+                                                         grocy_reel_db,
+                                                         tmp_media):
+    """Règle du lot 3 §18. Le grief n° 2 du lot 0 ne revient pas par la porte
+    de derrière : aucune ligne unmatched ne repart avec une quantité."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient"
+        " WHERE match_state = 'unmatched' AND amount IS NOT NULL"
+    ).fetchone()["n"] == 0
+    import inspect
+
+    from custom_components.home_stock import import_grocy_recipes
+    assert "culinary_measure" not in inspect.getsource(import_grocy_recipes)
+
+
+def test_variable_amount_travels_as_provenance(db_catalogue, grocy_reel_db,
+                                               tmp_media):
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    row = db_catalogue.read().execute(
+        "SELECT raw_text FROM recipe_ingredient"
+        " WHERE match_state = 'unmatched' AND raw_text LIKE '%cs%' LIMIT 1"
+    ).fetchone()
+    assert row is not None
+
+
+def test_the_fifty_six_rows_without_variable_amount_get_a_composed_raw_text(
+        db_catalogue, grocy_reel_db, tmp_media):
+    """raw_text est NOT NULL et 56 lignes n'ont pas de variable_amount. Il est
+    composé mécaniquement — « 500 g », « 2 Pièce » : le même nombre dans la
+    même unité, ce que la source disait. Rien d'inventé."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient"
+        " WHERE raw_text IS NULL OR raw_text = ''").fetchone()["n"] == 0
+
+
+def test_group_name_stays_null(db_catalogue, grocy_reel_db, tmp_media):
+    """ingredient_group est VIDE sur les 510 lignes : la ligne du lot 3 §18
+    (« → group_name, direct ») est sans objet."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient WHERE group_name IS NOT NULL"
+    ).fetchone()["n"] == 0
+
+
+def test_packaging_and_measure_stay_null_on_the_confirmed_lines(
+        db_catalogue, grocy_reel_db, tmp_media):
+    """0 ligne dont qu_id diffère du qu_id_stock, sur les 414 normal : il n'y
+    a rien à exprimer dans une autre mesure."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient"
+        " WHERE match_state = 'confirmed'"
+        "   AND (packaging_id IS NOT NULL OR measure_id IS NOT NULL)"
+    ).fetchone()["n"] == 0
+
+
+def test_not_check_stock_fulfillment_is_reported_not_stored(db_catalogue,
+                                                            grocy_reel_db,
+                                                            tmp_media):
+    """39 lignes, pas 4 — amendement A8 du § 22. Aucune colonne équivalente,
+    sans effet sur la validation d'un repas qui vérifie le stock de toute
+    façon. Mentionné au rapport, une seule fois, avec son compte."""
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True)
+    citees = [a for a in rapport.anomalies if "hors stock" in a]
+    assert len(citees) == 1
+    assert "39" in citees[0]
+
+
+def test_a_confirmed_quantity_is_converted_into_the_base_unit(db_catalogue,
+                                                              grocy_reel_db,
+                                                              tmp_media):
+    """Une ligne « 1 kg » sur un produit stocké en grammes vaut 1 000, pas 1.
+    C'est la même table de correspondance que partout, jamais une seconde."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    row = db_catalogue.read().execute(
+        "SELECT ri.amount FROM recipe_ingredient AS ri"
+        " JOIN product AS prod ON prod.id = ri.product_id"
+        " WHERE ri.match_state = 'confirmed' AND prod.base_unit = 'g'"
+        "   AND ri.amount > 0 LIMIT 1").fetchone()
+    assert row is not None and row["amount"] > 0

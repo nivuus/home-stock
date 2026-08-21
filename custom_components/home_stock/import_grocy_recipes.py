@@ -37,6 +37,7 @@ from typing import Any, Mapping
 from .const import GROCY_RECIPE_REF_PREFIX
 from .grocy import html as gh
 from .grocy import pictures as gp
+from .grocy.units import base_unit
 from .storage import repositories as repo
 
 # Le filtre. `IN ('normal', '1')`, jamais `= 'normal'`.
@@ -141,10 +142,13 @@ def _import_recipe_within(conn, ligne: Mapping[str, Any], picture_dir: Path,
                           report: RecipeReport, *, apply: bool) -> int | None:
     """One recipe, its pages and its bullets. Returns the home_stock id."""
     source_ref = str(ligne["id"])
-    existante = repo.find_recipe_by_source(conn, "grocy", source_ref)
-    if existante is not None:
+    if repo.find_recipe_by_source(conn, "grocy", source_ref) is not None:
+        # Rien n'est réécrit, et surtout pas ses ingrédients : une ligne
+        # arbitrée à la main sur l'écran d'appariement ne se fait pas effacer
+        # par un second passage. Le rejeu importe ce qui manque, pas ce qui
+        # est déjà là.
         report.skipped += 1
-        return existante["id"]
+        return None
 
     description = ligne["description"] or ""
     mapping = _write_pictures(ligne["id"], description, picture_dir, report,
@@ -192,6 +196,137 @@ def _import_recipe_within(conn, ligne: Mapping[str, Any], picture_dir: Path,
     return recipe_id
 
 
+def _import_ingredients_within(conn, grocy, recipe_ids: Mapping[int, int],
+                               report: RecipeReport, *, apply: bool) -> None:
+    """The 510 ingredient rows, 25 of which are left for a human to sign.
+
+    The product is resolved by `product.external_ref`, NEVER by name. On the
+    414 rows of the 87 `normal` recipes: 0 row without a product, 0 row
+    pointing at an inactive product, 0 row whose `qu_id` differs from its
+    product's `qu_id_stock`. On the 96 rows of the 15 type-`1` recipes it is
+    another story: 23 rows carry a diverging unit and 2 point at an inactive
+    product.
+
+    The 23 are the defect grocy-off's README describes — "42 rows carried the
+    packaging unit (`1.5 Bouteille` of olive oil) while the number was already
+    in cl" — never fixed on these fifteen, because `recettes_ingredients.py`
+    filters on `type = 'normal'`. **Eleven say "1 Bouteille" of olive oil when
+    `variable_amount` says "1 cs"**: imported as they are, they would take 750
+    ml of oil for a tablespoon, AT EVERY VALIDATED MEAL.
+
+    Such a row comes in with `amount = NULL`, its product resolved,
+    `match_state = 'unmatched'`, `raw_text = variable_amount`, and is named in
+    the report.
+
+    **`variable_amount` is never parsed back into a quantity.** "1 cs" would
+    resolve against the culinary measures seeded by m004. Refused: lot 3 § 18,
+    `variable_amount` is provenance, "it does not come back through the back
+    door". Twenty-five rows are fixed by hand in ten minutes on lot 3's
+    matching screen; a parser would be fixed for years.
+
+    The other 485 are `confirmed`, not `auto`: lot 3 reserves `auto` for a
+    GUESSED, scored match. Here nothing is guessed — the product comes from an
+    id. `match_score` stays NULL: writing 1.0 would suggest an algorithm was
+    very sure of itself.
+    """
+    unites = {row["id"]: row["name"] for row in
+              grocy.execute("SELECT id, name FROM quantity_units")}
+    produits = {}
+    for row in conn.execute(
+        "SELECT prod.id AS id, prod.external_ref AS ref, prod.name AS name,"
+        "       prod.base_unit AS base_unit"
+        " FROM product AS prod WHERE prod.external_ref IS NOT NULL"
+    ):
+        produits[int(row["ref"])] = row
+
+    stock_units = {row["id"]: row["qu_id_stock"] for row in
+                   grocy.execute("SELECT id, qu_id_stock FROM products")}
+    hors_stock = 0
+    positions: dict[int, int] = {}
+    for ligne in grocy.execute(
+        "SELECT pos.id AS id, pos.recipe_id AS recipe_id,"
+        "       pos.product_id AS product_id, pos.amount AS amount,"
+        "       pos.qu_id AS qu_id, pos.variable_amount AS variable_amount,"
+        "       pos.ingredient_group AS ingredient_group,"
+        "       pos.not_check_stock_fulfillment AS not_check_stock_fulfillment,"
+        "       rec.name AS recipe_name, prod.name AS grocy_product_name"
+        " FROM recipes_pos AS pos"
+        " JOIN recipes AS rec ON rec.id = pos.recipe_id"
+        " LEFT JOIN products AS prod ON prod.id = pos.product_id"
+        " ORDER BY pos.id"
+    ):
+        recipe_id = recipe_ids.get(ligne["recipe_id"])
+        if recipe_id is None:
+            continue                   # les 200 orphelines, et les fantômes
+        if ligne["not_check_stock_fulfillment"]:
+            hors_stock += 1
+
+        produit = produits.get(ligne["product_id"])
+        unite = unites.get(ligne["qu_id"])
+        mappee = base_unit(unite) if unite else None
+        # La comparaison porte sur le qu_id, PAS sur l'unité de base résolue :
+        # « 1 Pièce » de roquette stockée en « Sachet » donne piece des deux
+        # côtés, et la source dit « 1 poignée ». Deux unités de conditionnement
+        # différentes ne disent pas la même chose parce qu'elles se résolvent
+        # au même mot.
+        meme_unite = (produit is not None
+                      and ligne["qu_id"] == stock_units.get(ligne["product_id"]))
+        raw_text = ligne["variable_amount"] or (
+            f"{_nombre(ligne['amount'])} {unite}" if unite
+            else _nombre(ligne["amount"]))
+
+        if produit is None:
+            nom_grocy = (ligne["grocy_product_name"]
+                         or f"produit Grocy {ligne['product_id']}")
+            report.unmatched += 1
+            report.anomalies.append(
+                f"{ligne['recipe_name']} / {nom_grocy}"
+                " : absent du catalogue de home_stock (désactivé chez Grocy),"
+                f" quantité laissée vide — la source dit « {raw_text} ». Le"
+                " produit actif équivalent ne peut être signé que par un"
+                " humain, sur l'écran d'appariement du lot 3")
+            etat, amount, product_id = "unmatched", None, None
+        elif mappee is None or not meme_unite or mappee[0] != produit["base_unit"]:
+            report.unmatched += 1
+            report.anomalies.append(
+                f"{ligne['recipe_name']} / {produit['name']} : unité"
+                f" « {unite} » alors que le produit est stocké en"
+                f" « {produit['base_unit']} » — {_nombre(ligne['amount'])}"
+                f" {unite}, la source dit « {raw_text} ». Quantité laissée"
+                " vide, à trancher à la main")
+            etat, amount, product_id = "unmatched", None, produit["id"]
+        else:
+            etat = "confirmed"
+            amount = (ligne["amount"] or 0) * mappee[1]
+            product_id = produit["id"]
+
+        report.ingredients += 1
+        if not apply:
+            continue
+        positions[recipe_id] = positions.get(recipe_id, 0) + 1
+        repo.insert_ingredient(
+            conn, recipe_id=recipe_id, position=positions[recipe_id],
+            raw_text=raw_text, product_id=product_id, amount=amount,
+            group_name=ligne["ingredient_group"] or None,
+            match_state=etat, external_ref=str(ligne["id"]))
+
+    if hors_stock:
+        # Aucune colonne équivalente, et sans effet : valider un repas vérifie
+        # le stock de toute façon. Mentionné une fois, avec son compte.
+        report.anomalies.append(
+            f"{hors_stock} lignes d'ingrédient marquées « hors stock » chez"
+            " Grocy : l'indication n'est pas reprise, la validation d'un repas"
+            " vérifie le stock de toute façon")
+
+
+def _nombre(valeur) -> str:
+    """« 500 » et non « 500.0 » : raw_text est ce que la source disait."""
+    if valeur is None:
+        return ""
+    entier = int(valeur)
+    return str(entier) if valeur == entier else str(valeur)
+
+
 def import_recipes(db, grocy_path: str, *, picture_dir, apply: bool = False,
                    today: str | None = None) -> RecipeReport:
     """Bring recipes, pictures and the meal plan over. Dry run by default."""
@@ -202,8 +337,14 @@ def import_recipes(db, grocy_path: str, *, picture_dir, apply: bool = False,
     grocy = _open_grocy(grocy_path)
     try:
         with db.write() as conn:            # UNE transaction, et une seule
+            recipe_ids: dict[int, int] = {}
             for ligne in _grocy_recipes(grocy):
-                _import_recipe_within(conn, ligne, dossier, report, apply=apply)
+                interne = _import_recipe_within(conn, ligne, dossier, report,
+                                                apply=apply)
+                if interne is not None:
+                    recipe_ids[ligne["id"]] = interne
+            _import_ingredients_within(conn, grocy, recipe_ids, report,
+                                       apply=apply)
             if not apply:
                 conn.rollback()
     finally:
