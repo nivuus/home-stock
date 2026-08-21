@@ -114,7 +114,8 @@ def test_session_totals_on_an_empty_session(conn):
 
     totals = repo.session_totals(conn, session_id)
 
-    assert totals == {"lines": 0, "pending": 0, "total": 0.0}
+    assert {key: totals[key] for key in ("lines", "pending", "total")} == {
+        "lines": 0, "pending": 0, "total": 0.0}
     assert totals["pending"] is not None
 
 
@@ -167,7 +168,8 @@ def test_the_total_ignores_a_line_with_no_price(conn):
 
     totals = repo.session_totals(conn, session_id)
 
-    assert totals == {"lines": 2, "pending": 2, "total": pytest.approx(1.0)}
+    assert {key: totals[key] for key in ("lines", "pending", "total")} == {
+        "lines": 2, "pending": 2, "total": pytest.approx(1.0)}
 
 
 def test_a_stored_line_leaves_the_pending_list(conn):
@@ -374,3 +376,98 @@ def test_find_store_by_name_is_an_exact_match(conn):
     assert repo.find_store_by_name(conn, "leclerc") is None
     assert repo.find_store_by_name(conn, "Lecler") is None
     assert repo.get_store(conn, store_id)["name"] == "Leclerc"
+
+
+# --- § 9 : le coût du panier — estimé, constaté, hors liste -----------------
+
+def _cart(conn, *, lines):
+    session_id = repo.open_session(conn, started_at="2026-08-21T09:00:00",
+                                   store="Leclerc")
+    for article_id, quantity, price, source in lines:
+        repo.add_line(conn, session_id=session_id, article_id=article_id,
+                      quantity=quantity, unit_price=price,
+                      scanned_at="2026-08-21T10:00:00", idempotency_key=None,
+                      price_source=source)
+    return session_id
+
+
+def test_the_total_splits_into_observed_and_estimated(conn):
+    """Somme inchangée, répartie. `observed + estimated == total`, exactement."""
+    session_id = _cart(conn, lines=[
+        (1, 500, 0.004, "manual"),          # 2,00 € constatés
+        (1, 500, 0.006, "receipt"),         # 3,00 € constatés
+        (2, 4, 0.5, "open_prices"),         # 2,00 € estimés
+    ])
+    totals = repo.session_totals(conn, session_id)
+
+    assert totals["total"] == pytest.approx(7.0)
+    assert totals["observed"] == pytest.approx(5.0)
+    assert totals["estimated"] == pytest.approx(2.0)
+    assert totals["observed"] + totals["estimated"] == pytest.approx(totals["total"])
+
+
+def test_a_line_without_a_price_counts_zero_and_is_counted(conn):
+    """`COALESCE` la comptait déjà zéro en silence ; désormais elle est DITE."""
+    session_id = _cart(conn, lines=[
+        (1, 500, 0.004, "manual"),
+        (2, 4, None, None),
+    ])
+    totals = repo.session_totals(conn, session_id)
+
+    assert totals["total"] == pytest.approx(2.0)
+    assert totals["unpriced_lines"] == 1
+
+
+@pytest.mark.parametrize("source", ["open_prices", "last_known", "store"])
+def test_a_store_sourced_price_counts_as_estimated(conn, source):
+    """`store` = le dernier prix relevé dans ce magasin, proposé et accepté
+    sans y toucher : c'est une suggestion, pas l'étiquette d'aujourd'hui."""
+    session_id = _cart(conn, lines=[(1, 500, 0.004, source)])
+    totals = repo.session_totals(conn, session_id)
+    assert totals["estimated"] == pytest.approx(2.0)
+    assert totals["observed"] == pytest.approx(0.0)
+
+
+def test_the_off_list_counter_counts_lines_not_units(conn):
+    """« n hors liste » sert à UNE chose : savoir, à la caisse, combien
+    d'articles se sont invités."""
+    item_id = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00",
+                                    product_id=1)
+    session_id = _cart(conn, lines=[
+        (1, 500, 0.004, "manual"),
+        (1, 500, 0.004, "manual"),
+        (2, 4, 0.5, "manual"),
+    ])
+    line_id = conn.execute("SELECT MIN(id) AS id FROM shopping_line").fetchone()["id"]
+    repo.check_list_item(conn, item_id, at="2026-08-21T10:00:00",
+                         session_id=session_id, line_id=line_id)
+
+    totals = repo.session_totals(conn, session_id)
+
+    # Trois lignes, une seule a coché la liste : deux se sont invitées.
+    assert totals["off_list_lines"] == 2
+
+
+def test_the_progress_counts_checked_over_open(conn):
+    """« 12 / 17 de la liste »."""
+    first = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00", product_id=1)
+    repo.insert_list_item(conn, added_at="2026-08-21T09:00:00", product_id=2)
+    repo.insert_list_item(conn, added_at="2026-08-21T09:00:00", free_text="Piles")
+    session_id = _cart(conn, lines=[(1, 500, 0.004, "manual")])
+    line_id = conn.execute("SELECT MIN(id) AS id FROM shopping_line").fetchone()["id"]
+    repo.check_list_item(conn, first, at="2026-08-21T10:00:00",
+                         session_id=session_id, line_id=line_id)
+
+    totals = repo.session_totals(conn, session_id)
+
+    assert totals["checked_items"] == 1
+    assert totals["list_items"] == 3
+
+
+def test_a_session_with_no_line_publishes_zeroes_not_nulls(conn):
+    """Un capteur `unknown` en plein magasin est un capteur inutile."""
+    session_id = repo.open_session(conn, started_at="2026-08-21T09:00:00", store=None)
+    totals = repo.session_totals(conn, session_id)
+    assert totals == {"lines": 0, "pending": 0, "total": 0.0, "observed": 0.0,
+                      "estimated": 0.0, "unpriced_lines": 0, "off_list_lines": 0,
+                      "checked_items": 0, "list_items": 0}

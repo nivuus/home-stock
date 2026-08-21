@@ -107,10 +107,20 @@ class CartTotalSensor(HomeStockEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data
         return {
-            "store": self.coordinator.data["cart_store"],
-            "lines": self.coordinator.data["cart_lines"],
-            "pending": self.coordinator.data["cart_pending"],
+            "store": data["cart_store"],
+            "lines": data["cart_lines"],
+            "pending": data["cart_pending"],
+            # « 47,20 € — dont 12,30 € estimés, 2 lignes sans prix ». Une
+            # ligne, trois faits : c'est le chiffre qu'on compare mentalement
+            # au ticket, et un écart inexpliqué détruit la confiance dans
+            # tout le reste.
+            "estimated": data["cart_estimated"],
+            "observed": data["cart_observed"],
+            "unpriced_lines": data["cart_unpriced_lines"],
+            "off_list_lines": data["cart_off_list_lines"],
+            "list_progress": data["cart_list_progress"],
         }
 
 

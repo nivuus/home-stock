@@ -845,6 +845,17 @@ class StockManager:
             "cart_pending": cart_totals["pending"] if cart_totals else 0,
             "cart_store": session["store"] if session else None,
             "cart_to_store": awaiting_storage,
+            # Lot 4, § 9 : la même somme, dite en trois faits. Aucun capteur
+            # de plus — une synthèse s'enrichit d'attributs plutôt que de se
+            # dupliquer (lot 0).
+            "cart_estimated": round(cart_totals["estimated"], 2) if cart_totals else 0.0,
+            "cart_observed": round(cart_totals["observed"], 2) if cart_totals else 0.0,
+            "cart_unpriced_lines": cart_totals["unpriced_lines"] if cart_totals else 0,
+            "cart_off_list_lines": cart_totals["off_list_lines"] if cart_totals else 0,
+            "cart_list_progress": {
+                "checked": cart_totals["checked_items"] if cart_totals else 0,
+                "total": cart_totals["list_items"] if cart_totals else 0,
+            },
         }
 
     def claim_expiry_announcements(

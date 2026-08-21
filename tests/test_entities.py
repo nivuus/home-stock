@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 
 import pytest
 from homeassistant.components.todo import DATA_COMPONENT, TodoItem, TodoItemStatus
@@ -507,3 +508,56 @@ async def test_the_two_new_sensors_publish_their_attributes(hass, loaded):
     assert float(estimate.state) == pytest.approx(2.0)
     assert estimate.attributes["confidence"] == pytest.approx(0.5)
     assert estimate.attributes["unit_of_measurement"] == "EUR"
+
+
+async def test_cart_total_publishes_the_five_attributes(hass, loaded):
+    """« 47,20 € — dont 12,30 € estimés, 2 lignes sans prix ». Une ligne,
+    trois faits. C'est le chiffre qu'on compare mentalement au ticket."""
+    manager = loaded.runtime_data.manager
+    service = loaded.runtime_data.shopping
+
+    def _seed() -> None:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Lait", base_unit="ml")
+            repo.insert_article(conn, product_id=product_id, is_generic=1)
+            item_id = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00",
+                                            product_id=product_id, quantity=1000.0)
+            repo.set_claim(conn, item_id=item_id, origin="manual", quantity=1000.0,
+                           detail="ajouté à la main",
+                           claimed_at="2026-08-21T09:00:00")
+
+    await hass.async_add_executor_job(_seed)
+    await hass.async_add_executor_job(partial(service.start, store="Leclerc"))
+    await hass.async_add_executor_job(partial(
+        service.add_line, article_id=1, quantity=1000, unit_price=0.002,
+        price_source="manual", idempotency_key=None))
+    await hass.async_add_executor_job(partial(
+        service.add_line, article_id=1, quantity=500, unit_price=0.004,
+        price_source="open_prices", idempotency_key=None))
+    await hass.async_add_executor_job(partial(
+        service.add_line, article_id=1, quantity=500, unit_price=None,
+        idempotency_key=None))
+    await loaded.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    cart = hass.states.get("sensor.home_stock_cart_total")
+    assert float(cart.state) == pytest.approx(4.0)
+    assert cart.attributes["observed"] == pytest.approx(2.0)
+    assert cart.attributes["estimated"] == pytest.approx(2.0)
+    assert cart.attributes["unpriced_lines"] == 1
+    # Le premier scan a coché la ligne « Lait » : les deux suivants se sont
+    # invités, et c'est ce que le compteur dit.
+    assert cart.attributes["off_list_lines"] == 2
+    assert cart.attributes["store"] == "Leclerc"
+    assert cart.attributes["list_progress"] == {"checked": 1, "total": 1}
+
+
+async def test_no_new_sensor_was_created_for_the_cart(hass, loaded):
+    """Garde-fou : une synthèse s'enrichit d'attributs plutôt que de se
+    dupliquer (lot 0). Le panier n'a gagné aucune entité."""
+    entity_ids = {state.entity_id for state in hass.states.async_all("sensor")
+                  if state.entity_id.startswith("sensor.home_stock_")}
+    assert "sensor.home_stock_cart_estimated" not in entity_ids
+    assert "sensor.home_stock_cart_observed" not in entity_ids
+    assert {"sensor.home_stock_shopping_list",
+            "sensor.home_stock_list_estimate"} <= entity_ids

@@ -846,17 +846,51 @@ def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> No
 
 
 def session_totals(conn, session_id: int) -> dict[str, Any]:
+    """Ce que le chariot vaut, et quelle part de ce chiffre est une supposition.
+
+    Trois catégories, jamais une moyenne (§ 9) : CONSTATÉ (un humain a tapé
+    ou corrigé le prix devant l'étiquette, ou le ticket l'a dit), ESTIMÉ (une
+    suggestion acceptée sans y toucher) et INCONNU (aucun prix — compté zéro
+    dans le total, et SIGNALÉ). `COALESCE` comptait déjà l'inconnu à zéro en
+    silence ; l'écart inexpliqué avec le ticket détruit la confiance dans
+    tout le reste.
+    """
+    observed = _reasons_sql(OBSERVED_PRICE_SOURCES)
     row = conn.execute(
-        """
+        f"""
         SELECT COUNT(*) AS lines,
                SUM(CASE WHEN stored_at IS NULL THEN 1 ELSE 0 END) AS pending,
-               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total
-        FROM shopping_line WHERE session_id = ?
+               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total,
+               COALESCE(SUM(CASE WHEN unit_price IS NOT NULL
+                                  AND price_source IN {observed}
+                            THEN quantity * unit_price END), 0) AS observed,
+               COALESCE(SUM(CASE WHEN unit_price IS NOT NULL
+                                  AND (price_source IS NULL
+                                       OR price_source NOT IN {observed})
+                            THEN quantity * unit_price END), 0) AS estimated,
+               COALESCE(SUM(CASE WHEN unit_price IS NULL THEN 1 END), 0)
+                 AS unpriced_lines,
+               COALESCE(SUM(CASE WHEN NOT EXISTS (
+                   SELECT 1 FROM shopping_list_item sl WHERE sl.line_id = l.id
+               ) THEN 1 END), 0) AS off_list_lines
+        FROM shopping_line l WHERE l.session_id = ?
         """,
         (session_id,),
     ).fetchone()
+    progress = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        "       COALESCE(SUM(CASE WHEN sl.checked_at IS NOT NULL THEN 1 END), 0)"
+        "         AS checked"
+        " FROM shopping_list_item sl WHERE sl.removed_at IS NULL"
+    ).fetchone()
     return {"lines": row["lines"], "pending": row["pending"] or 0,
-            "total": round(row["total"], 4)}
+            "total": round(row["total"], 4),
+            "observed": round(row["observed"], 4),
+            "estimated": round(row["estimated"], 4),
+            "unpriced_lines": int(row["unpriced_lines"]),
+            "off_list_lines": int(row["off_list_lines"]),
+            "checked_items": int(progress["checked"]),
+            "list_items": int(progress["total"])}
 
 
 def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
