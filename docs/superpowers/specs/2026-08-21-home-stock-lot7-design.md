@@ -1527,3 +1527,35 @@ Ce sont des **amendements** : les documents d'origine ne sont pas réécrits.
 | Lot 5, § 18 | « Les 6 *chores* : à trancher au lot 7 » | **Tranché : abandonnées** (§ 14.2), 3,5 % de suivi mesuré sur six mois |
 
 *Conception du 2026-08-21.*
+
+
+---
+
+## § 22 — Amendements, mesurés à l'implémentation du lot 7
+
+Douze chiffres ou affirmations de cette spec se sont révélés faux au contact
+de la donnée. Ils sont corrigés **ici**, pas dans le corps du document : un
+amendement se lit, une réécriture se perd.
+
+| # | Ce que la spec disait | Ce que la base dit | Où c'est épinglé |
+|---|---|---|---|
+| **A1** | « la recette **41** garde ses data-URI » | La 41 n'en porte **aucun** (elle pointe une image hébergée). La première qui en porte est la **69**, et elle en porte deux. Le stub fait 160 octets, pas 64 : un JPEG valide ne tient pas en 64 | `tests/grocy/test_fixtures.py` |
+| **A2** | 10 sentinelles parmi les lots repris | 10 parmi les **108 lignes**, 9 parmi les 107 qui se résolvent avant le rejeu. Sans objet une fois A4 tranché : 108 lots, 10 sentinelles | `tests/test_import_grocy_stock.py` |
+| **A3** | « 7 lots sur **64** portent 8 089 EUR ; les **57** autres pèsent 51 EUR » | **23** lots portent un prix strictement positif ; 41 portent `0.0` et 44 `NULL`, et chez Grocy les deux veulent dire « pas de prix ». Donc **16** valorisés et 7 écartés. La valeur de **51 EUR est juste** ; c'est le dénombrement qui ne l'était pas. C4 attend **92** lots sans prix, pas 50 | `tests/test_import_grocy_stock.py`, `tests/test_migration_check.py` |
+| **A4** | « **107 lots sur 108** se résolvent » **et** « un lot non résolu ARRÊTE l'import » | Les deux ensemble sont impossibles : si le 108ᵉ arrête tout, l'import ne rend pas 107 lots, il ne rend rien. Ce sont deux **moments**. Contrat retenu, celui de C1 (108 = 108) : l'import tourne **après** le rejeu du catalogue, et les 108 se résolvent. Le « 107 sur 108 » est une mesure de l'état d'avant le rejeu, épinglée par son propre test | `tests/test_import_grocy_stock.py` |
+| **A5** | « les **trois** notes » de la liste de courses | **Quatre** : trois prescriptions médicamenteuses et « bouteille ~1L » sur le savon noir. La spec a compté les prescriptions, pas les notes | `tests/test_import_grocy_stock.py` |
+| **A6** | `recipe_step` = **338** (« 323 moins 87, plus 15, plus les couvertures ») | Cette arithmétique compte les 87 couvertures **deux fois** : elles sont déjà dans les 323. Le compte juste est 323 − 87 + 15 = **251**, et c'est ce que le découpeur trouve. Les deux autres chiffres de C8 tiennent : **561** instructions et **116** minuteurs | `tests/test_import_grocy_recipes.py` |
+| **A7** | « **treize** disent 1 Bouteille d'huile d'olive » | **Onze**. Le total de 23 lignes à unité divergente, lui, est juste | `tests/test_import_grocy_recipes.py` |
+| **A8** | « **4** lignes `not_check_stock_fulfillment` » | **39**. Toujours sans effet, toujours mentionnées au rapport — une fois, avec leur compte | `tests/test_import_grocy_recipes.py` |
+| **A9** | horizon au 1ᵉʳ mars : **108** repas | **78**. La spec comptait des lignes de `meal_plan`, pas des repas que `meal` accepte : 30 entrées portent la section `-1`, que `m004` n'a pas semée. Et c'est la preuve que cette section n'existe QUE dans le passé | `tests/test_import_grocy_recipes.py` |
+| **A10** | « **62** images en ligne » et « **117** fichiers attendus » à C9 | 62 **balises `<img>`** pour **27** images réelles : une recette réutilise la même sur sa couverture et ses étapes. Sans dédoublonnage, 62 fichiers étaient écrits dont **35 orphelins**. C9 attend **82** fichiers (27 + 55 hébergés) | `tests/test_import_grocy_recipes.py`, `tests/test_migration_check.py` |
+| **A11** | C7 attend **26 piles chez Grocy = 26 chez nous** | Les piles ne se comptent pas ligne à ligne : l'import du lot 5 part du **registre d'entités** et se sert des 26 lignes Grocy pour renseigner ce qu'il y trouve. C'est l'**équipement** qui est une recopie — **34 contre 34**. Et un repas pointant une recette absente ne peut pas être écrit : la clé étrangère l'interdit avant que C10 ait à le voir | `tests/test_migration_check.py` |
+| **A12** | « 70 exécutions de rendu deviennent **72** » | **73**. Le vérificateur joue trois formats depuis le lot 6, pas deux | `frontend/outils/verifier-rendu.mjs` |
+
+Deux points de la spec ont été **confirmés** au chiffre près et méritent de
+l'être : les **102 recettes** (dont les 15 de type `1`, que le lot 3 § 18
+prenait pour des fantômes), les **510 lignes d'ingrédients** dont **25** à
+arbitrer, les **116 minuteurs** dont **8** puces qui se dédoublent, les **42
+repas** à venir sur trois créneaux, les **14 conditionnements**, les **9**
+lignes de courses ouvertes, les **1 123** lignes d'historique et la valeur de
+**51 EUR** de stock retenue contre 8 140 EUR mesurés.
