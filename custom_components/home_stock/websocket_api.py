@@ -16,12 +16,21 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .application import PartsError, as_batch_view
-from .const import BASE_UNITS, CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
+from .const import (
+    BASE_UNITS,
+    CONF_SHOPPING_LIST_HORIZON_DAYS,
+    CONSUME_REASONS,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
+    DOMAIN,
+    REASON_CONSUMPTION,
+    ROUTE_MIN_SESSIONS,
+)
 from .coordinator import async_resolve_time_zone
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.foodday import GRANULARITIES
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
+from .domain.route import is_reliable
 from .domain.stock import InsufficientStock, sort_batches
 from .domain.units import UnitError
 from .messages import french_error
@@ -31,8 +40,9 @@ from .off.open_prices import latest_price
 from .shopping import ShoppingError
 from .storage import repositories as repo
 from .validators import (
-    MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date,
-    non_negative_float, parts_count, preview, price_source,
+    MAX_TEXT_LENGTH, bounded_int, bounded_text, every_days, finite_float,
+    iso_date, list_quantity, non_negative_float, parts_count, preview,
+    price_source, store_name,
 )
 
 # Same wording as services._entry()'s HomeAssistantError, for the same condition.
@@ -955,6 +965,10 @@ def _shopping_error(connection: websocket_api.ActiveConnection, msg: dict[str, A
     # block both is ShoppingService.start, which refuses any session that
     # is not `done`; see its docstring.
     vol.Optional("idempotency_key"): _bounded_text,
+    # Depuis le lot 4 le magasin est une LIGNE (amendement A4) : le panneau
+    # envoie une pastille, pas une chaîne. Le nom reste accepté — il crée le
+    # magasin s'il n'existe pas, par égalité exacte.
+    vol.Optional("store_id"): _bounded_int,
 })
 @websocket_api.async_response
 async def session_start(hass, connection, msg) -> None:
@@ -964,7 +978,8 @@ async def session_start(hass, connection, msg) -> None:
         return
     try:
         session = await hass.async_add_executor_job(partial(
-            runtime.shopping.start, store=msg.get("store")))
+            runtime.shopping.start, store=msg.get("store"),
+            store_id=msg.get("store_id")))
     except ShoppingError as err:
         _shopping_error(connection, msg, err)
         return
@@ -1241,7 +1256,12 @@ def async_register_websocket(hass: HomeAssistant) -> None:
                     journal_series, aisles_reorder,
                     session_start, session_current, session_add_line,
                     session_update_line, session_remove_line, session_checkout,
-                    session_store_line, session_close):
+                    session_store_line, session_close,
+                    # Lot 4 : ajoutées EN FIN, jamais au milieu.
+                    list_items, list_add, list_check, list_uncheck, list_remove,
+                    list_refresh, recurring_list, recurring_save, recurring_delete,
+                    store_save, store_merge, store_aisles, store_reorder_aisles,
+                    movement_correct, movement_correction_preview, meal_correct):
         websocket_api.async_register_command(hass, command)
     # Lot 3's fourteen commands live in their own module — a file-layout
     # decision, not a contract one (see websocket_recipes' docstring).
@@ -1257,3 +1277,420 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     # Idem pour le lot 4 : deux lignes ici, tout le reste dans son module.
     from .websocket_receipts import async_register_receipt_commands
     async_register_receipt_commands(hass)
+
+
+# =============================================================================
+# Lot 4 — la liste, le magasin et la correction.
+#
+# Ajoutées EN FIN de fichier, et leurs noms en fin du tuple ci-dessus : ce
+# fichier est modifié en parallèle par un autre lot, et une insertion au
+# milieu est un conflit de fusion sur chaque bloc.
+# =============================================================================
+
+_LIST_QUANTITY: Final = list_quantity
+_EVERY_DAYS: Final = every_days
+_STORE_NAME: Final = store_name
+
+
+async def _list_view(hass, runtime, store_id: int | None) -> dict[str, Any]:
+    """La liste, triée pour le magasin où l'on est.
+
+    Trois niveaux, dans cet ordre : le magasin demandé, celui de la session
+    ouverte, le dernier utilisé. Puis l'ordre par défaut — un ordre appris
+    d'un autre magasin serait pire que pas d'ordre du tout.
+    """
+    def _read_all() -> dict[str, Any]:
+        conn = runtime.manager.db.read()
+        chosen = store_id
+        if chosen is None:
+            session = repo.current_session(conn)
+            chosen = session["store_id"] if session else None
+        if chosen is None:
+            row = conn.execute(
+                "SELECT store_id FROM shopping_session"
+                " WHERE store_id IS NOT NULL"
+                " ORDER BY COALESCE(closed_at, started_at) DESC, id DESC LIMIT 1"
+            ).fetchone()
+            chosen = row["store_id"] if row else None
+        store = repo.get_store(conn, chosen) if chosen else None
+        return {
+            "items": repo.list_items(conn, store_id=chosen),
+            "store_id": chosen,
+            "store_name": store["name"] if store else None,
+            "estimate": runtime.manager.list_estimate(),
+        }
+
+    return await _read(hass, _read_all)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/list/items",
+    vol.Optional("store_id"): _bounded_int,
+})
+@websocket_api.async_response
+async def list_items(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    connection.send_result(
+        msg["id"], await _list_view(hass, runtime, msg.get("store_id")))
+
+
+async def _answer_list(hass, connection, msg, **extra) -> None:
+    runtime = _runtime(hass)
+    view = await _list_view(hass, runtime, msg.get("store_id"))
+    connection.send_result(msg["id"], {**view, **extra})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/list/add",
+    vol.Optional("product_id"): _bounded_int,
+    vol.Optional("free_text"): _bounded_text,
+    vol.Optional("quantity"): _LIST_QUANTITY,
+    vol.Optional("note"): _bounded_text,
+    vol.Optional("store_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def list_add(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        await hass.async_add_executor_job(partial(
+            runtime.manager.add_to_shopping_list,
+            product_id=msg.get("product_id"), free_text=msg.get("free_text"),
+            quantity=msg.get("quantity"), note=msg.get("note"),
+            idempotency_key=msg.get("idempotency_key")))
+    except (LookupError, ValueError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    except sqlite3.IntegrityError as err:
+        _send_integrity_error(connection, msg["id"], err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    await _answer_list(hass, connection, msg)
+
+
+def _list_action(name: str, method: str):
+    """Cocher, décocher, retirer : trois commandes, une seule forme.
+
+    Écrites une fois plutôt que trois : trois copies d'un même corps sont
+    trois occasions de diverger sur la traduction d'une erreur.
+    """
+    @websocket_api.websocket_command({
+        vol.Required("type"): f"home_stock/list/{name}",
+        vol.Required("item_id"): _bounded_int,
+        vol.Optional("store_id"): _bounded_int,
+        vol.Optional("idempotency_key"): _bounded_text,
+    })
+    @websocket_api.async_response
+    async def _handler(hass, connection, msg) -> None:
+        runtime = _runtime(hass)
+        if runtime is None:
+            _send_not_loaded(connection, msg)
+            return
+        try:
+            await hass.async_add_executor_job(
+                partial(getattr(runtime.manager, method), msg["item_id"]))
+        except (LookupError, ValueError) as err:
+            _send_domain_error(connection, msg["id"], err)
+            return
+        await runtime.coordinator.async_request_refresh()
+        await _answer_list(hass, connection, msg)
+
+    _handler.__name__ = f"list_{name}"
+    return _handler
+
+
+list_check = _list_action("check", "check_list_item")
+list_uncheck = _list_action("uncheck", "uncheck_list_item")
+list_remove = _list_action("remove", "remove_list_item")
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/list/refresh",
+    vol.Optional("store_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def list_refresh(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    horizon = runtime_horizon(hass)
+    result = await hass.async_add_executor_job(partial(
+        runtime.manager.reconcile_shopping_list,
+        today=dt_util.now().date(), horizon_days=horizon))
+    await runtime.coordinator.async_request_refresh()
+    await _answer_list(hass, connection, msg, **result)
+
+
+def runtime_horizon(hass: HomeAssistant) -> int:
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    if not entries:
+        return DEFAULT_SHOPPING_LIST_HORIZON_DAYS
+    return entries[0].options.get(CONF_SHOPPING_LIST_HORIZON_DAYS,
+                                  DEFAULT_SHOPPING_LIST_HORIZON_DAYS)
+
+
+# --- les récurrences --------------------------------------------------------
+
+async def _answer_recurring(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    rows = await _read(hass, partial(repo.list_recurring,
+                                     runtime.manager.db.read(), active_only=False))
+    connection.send_result(msg["id"], {"recurring": rows})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "home_stock/recurring/list"})
+@websocket_api.async_response
+async def recurring_list(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    await _answer_recurring(hass, connection, msg)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/recurring/save",
+    vol.Required("every_days"): _EVERY_DAYS,
+    vol.Optional("recurring_id"): _bounded_int,
+    vol.Optional("product_id"): _bounded_int,
+    vol.Optional("free_text"): _bounded_text,
+    vol.Optional("quantity"): _LIST_QUANTITY,
+    vol.Optional("active"): vol.In((0, 1)),
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def recurring_save(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    if msg.get("product_id") is None and not msg.get("free_text"):
+        _send_domain_error(connection, msg["id"],
+                           ValueError("a shopping list line needs a product or a text"))
+        return
+
+    def _save() -> None:
+        with runtime.manager.db.write() as conn:
+            repo.upsert_recurring(
+                conn, recurring_id=msg.get("recurring_id"),
+                product_id=msg.get("product_id"), free_text=msg.get("free_text"),
+                quantity=msg.get("quantity"), every_days=msg["every_days"],
+                active=msg.get("active", 1))
+
+    try:
+        await hass.async_add_executor_job(_save)
+    except sqlite3.IntegrityError as err:
+        _send_integrity_error(connection, msg["id"], err)
+        return
+    await _answer_recurring(hass, connection, msg)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/recurring/delete",
+    vol.Required("recurring_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def recurring_delete(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+
+    def _delete() -> None:
+        with runtime.manager.db.write() as conn:
+            repo.delete_recurring(conn, msg["recurring_id"])
+
+    await hass.async_add_executor_job(_delete)
+    await _answer_recurring(hass, connection, msg)
+
+
+# --- les magasins -----------------------------------------------------------
+
+async def _answer_stores(hass, connection, msg, **extra) -> None:
+    runtime = _runtime(hass)
+    stores = await _read(hass, partial(repo.list_stores, runtime.manager.db.read()))
+    connection.send_result(msg["id"], {"stores": stores, **extra})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/store/save",
+    vol.Required("name"): _STORE_NAME,
+    vol.Optional("store_id"): _bounded_int,
+    vol.Optional("position"): _bounded_int,
+    vol.Optional("active"): vol.In((0, 1)),
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def store_save(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        await hass.async_add_executor_job(partial(
+            runtime.shopping.upsert_store, name=msg["name"],
+            store_id=msg.get("store_id"), position=msg.get("position"),
+            active=msg.get("active")))
+    except sqlite3.IntegrityError as err:
+        _send_integrity_error(connection, msg["id"], err)
+        return
+    await _answer_stores(hass, connection, msg)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/store/merge",
+    vol.Required("keep_id"): _bounded_int,
+    vol.Required("merge_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def store_merge(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        await hass.async_add_executor_job(partial(
+            runtime.shopping.merge_stores, keep_id=msg["keep_id"],
+            merge_id=msg["merge_id"]))
+    except ShoppingError as err:
+        _shopping_error(connection, msg, err)
+        return
+    await _answer_stores(hass, connection, msg)
+
+
+async def _answer_aisles(hass, connection, msg, store_id: int) -> None:
+    """L'ordre d'un magasin, et JUSQU'OÙ l'apprentissage est allé.
+
+    « 2 sessions sur 3 » : les réglages le disent, plutôt que d'afficher un
+    ordre par défaut sans expliquer pourquoi il ne bouge pas.
+    """
+    runtime = _runtime(hass)
+
+    def _read_route() -> dict[str, Any]:
+        conn = runtime.manager.db.read()
+        observed = conn.execute(
+            "SELECT COUNT(*) AS n FROM shopping_session"
+            " WHERE store_id = ? AND state = 'done'", (store_id,)).fetchone()["n"]
+        return {
+            "store_id": store_id,
+            "aisles": repo.store_route(conn, store_id),
+            "observed_sessions": int(observed),
+            "required_sessions": ROUTE_MIN_SESSIONS,
+            "reliable": is_reliable(int(observed)),
+        }
+
+    connection.send_result(msg["id"], await _read(hass, _read_route))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/store/aisles",
+    vol.Required("store_id"): _bounded_int,
+})
+@websocket_api.async_response
+async def store_aisles(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    await _answer_aisles(hass, connection, msg, msg["store_id"])
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/store/reorder_aisles",
+    vol.Required("store_id"): _bounded_int,
+    vol.Required("aisle_ids"): [_bounded_int],
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def store_reorder_aisles(hass, connection, msg) -> None:
+    """Déplacer un rayon à la main l'ÉPINGLE : l'apprentissage ne le
+    déplacera plus (règle `article.manual_fields` du lot 0, transposée)."""
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        await hass.async_add_executor_job(partial(
+            runtime.manager.pin_store_aisles, msg["store_id"], msg["aisle_ids"]))
+    except sqlite3.IntegrityError as err:
+        _send_integrity_error(connection, msg["id"], err)
+        return
+    await _answer_aisles(hass, connection, msg, msg["store_id"])
+
+
+# --- la correction ----------------------------------------------------------
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/movement/correct",
+    vol.Required("movement_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def movement_correct(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        result = await hass.async_add_executor_job(partial(
+            runtime.manager.correct_movement, msg["movement_id"]))
+    except (LookupError, ValueError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    except sqlite3.IntegrityError as err:
+        # L'index UNIQUE partiel, qui tient la course entre deux corrections
+        # concurrentes de la même ligne.
+        _send_integrity_error(connection, msg["id"], err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/movement/correction_preview",
+    vol.Required("movement_id"): _bounded_int,
+})
+@websocket_api.async_response
+async def movement_correction_preview(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        preview = await _read(hass, partial(
+            runtime.manager.preview_correction, msg["movement_id"]))
+    except (LookupError, ValueError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    connection.send_result(msg["id"], preview)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/meal/correct",
+    vol.Required("meal_id"): _bounded_int,
+    vol.Optional("idempotency_key"): _bounded_text,
+})
+@websocket_api.async_response
+async def meal_correct(hass, connection, msg) -> None:
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    try:
+        result = await hass.async_add_executor_job(partial(
+            runtime.manager.correct_meal, msg["meal_id"]))
+    except (LookupError, ValueError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    await runtime.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], result)

@@ -681,11 +681,17 @@ def test_learning_runs_inside_the_close_transaction(service):
     assert service.current() is None
 
 
-def test_the_put_away_screen_is_not_sorted_by_aisle(service):
+def test_the_put_away_screen_is_not_sorted_by_aisle():
     """Garde-fou explicite : le rangement groupe par emplacement dans la
-    MAISON. Un test l'épingle pour que personne ne « corrige » ça."""
-    import inspect
+    MAISON, pas par rayon de magasin. C'est le genre de cohérence qu'on
+    applique par réflexe là où elle n'a pas de sens, et le test l'épingle là
+    où la décision vit vraiment — dans l'écran, pas dans le dépôt.
+    """
+    from pathlib import Path
 
-    from custom_components.home_stock import websocket_api
-    source = inspect.getsource(websocket_api)
-    assert "store_aisle" not in source
+    screen = (Path(__file__).resolve().parent.parent
+              / "frontend" / "src" / "ecrans" / "rangement.ts")
+    source = screen.read_text(encoding="utf-8")
+    assert "grouperParEmplacement" in source
+    for forbidden in ("aisle_position", "store_aisle", "trierParRayon"):
+        assert forbidden not in source

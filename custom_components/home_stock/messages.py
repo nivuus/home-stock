@@ -160,6 +160,8 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
                "Le stock a déjà été repris ailleurs."),
     (re.compile(r"^meal (\d+) was never validated$"), "invalid_value",
      lambda m: "Ce repas n'a pas été validé : il n'y a rien à annuler."),
+    (re.compile(r"^a shopping list line needs a product or a text$"), "invalid_field",
+     lambda m: "Une ligne de liste a besoin d'un produit ou d'un libellé."),
     (re.compile(r"^unknown receipt (\d+)$"), "not_found",
      lambda m: f"Ticket {m.group(1)} inconnu."),
     (re.compile(r"^receipt (\d+) was never read$"), "invalid_value",
