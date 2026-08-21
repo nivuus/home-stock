@@ -45,6 +45,13 @@ from .const import (
     RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.correction import (
+    CorrectionError,
+    check_correctable,
+    correction_key,
+    reprice,
+    reversal,
+)
 from .domain.matching import Candidate, candidates, normalise, preselect
 from .domain.recipes import (
     IngredientLine,
@@ -1837,6 +1844,125 @@ class StockManager:
         with self.db.write() as conn:
             repo.set_battery_readings(conn, rows)
 
+    # --- lot 4 : corriger une ligne déjà écrite ---------------------------
+
+    def preview_correction(self, movement_id: int) -> dict[str, Any]:
+        """Ce que la correction fera, AVANT de la faire.
+
+        Une opération irréversible qui ne s'annonce pas est une opération
+        qu'on déclenche par erreur (§ 12.6).
+        """
+        conn = self.db.read()
+        movement = repo.get_movement(conn, movement_id)
+        if movement is None:
+            raise LookupError(f"unknown movement {movement_id}")
+        row = conn.execute(
+            "SELECT p.name AS product_name, p.base_unit FROM product p WHERE p.id = ?",
+            (movement["product_id"],),
+        ).fetchone()
+        batch = None
+        if movement["batch_id"] is not None:
+            batch = conn.execute(
+                "SELECT entered_at FROM batch WHERE id = ?", (movement["batch_id"],)
+            ).fetchone()
+        preview: dict[str, Any] = {
+            "movement_id": movement_id,
+            "product_name": row["product_name"] if row else None,
+            "base_unit": movement["base_unit"] or (row["base_unit"] if row else None),
+            # Ce que la correction ANNULE, dit positivement : « annule 200 g
+            # de Pâtes — 700 kcal, 0,80 € ». Le signe vit dans l'écriture,
+            # pas dans la phrase qu'on lit avant d'appuyer.
+            "quantity": abs(movement["quantity"]),
+            "kcal": movement["kcal"],
+            "cost": movement["cost"],
+            "reason": movement["reason"],
+            "occurred_at": movement["occurred_at"],
+            "batch_id": movement["batch_id"],
+            "batch_entered_at": batch["entered_at"] if batch else None,
+            "correctable": True,
+            "refusal": None,
+        }
+        existing = repo.correction_of(conn, movement_id)
+        if existing is not None:
+            return {**preview, "correctable": False,
+                    "refusal": french_message(
+                        CorrectionError(f"movement {movement_id} has already been corrected"))}
+        try:
+            check_correctable(movement)
+        except CorrectionError as err:
+            return {**preview, "correctable": False, "refusal": french_message(err)}
+        return preview
+
+    def correct_movement(self, movement_id: int, *,
+                         occurred_at: str | None = None) -> dict[str, Any]:
+        """Contrepasser une ligne du journal : une écriture DE PLUS.
+
+        `movement` est en ajout seul depuis le lot 0 ; la correction n'est
+        donc jamais un `UPDATE`. Elle porte le motif de la ligne qu'elle
+        annule — `reason` est le compte comptable — et le lien vit dans
+        `movement.corrects_id` (amendement A1).
+        """
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            movement = repo.get_movement(conn, movement_id)
+            if movement is None:
+                raise LookupError(f"unknown movement {movement_id}")
+            batch_id = movement["batch_id"]
+            restored = batch_id is not None and conn.execute(
+                "SELECT 1 FROM batch WHERE id = ?", (batch_id,)).fetchone() is not None
+            existing = repo.correction_of(conn, movement_id)
+            if existing is not None:
+                # Rejeu de la file hors ligne : la même clé, le même résultat,
+                # et surtout AUCUNE seconde remise en stock. La garantie
+                # « une seule annulation » est tenue par l'index UNIQUE,
+                # cette lecture ne fait qu'éviter de la faire lever.
+                return {
+                    "movement_id": movement_id,
+                    "correction_id": int(existing["id"]),
+                    "batch_id": batch_id,
+                    "restored": restored,
+                }
+            correction_id = self._correct_movement_within(
+                conn, movement, moment=moment)
+            return {
+                "movement_id": movement_id,
+                "correction_id": correction_id,
+                "batch_id": batch_id,
+                "restored": restored,
+            }
+
+    def _correct_movement_within(self, conn, movement: Mapping[str, Any], *,
+                                 moment: str,
+                                 allow_cooked: bool = False) -> int:
+        """Le corps d'une contrepassation, sur une connexion déjà tenue.
+
+        Extrait pour `correct_price` et `correct_meal`, qui en écrivent
+        plusieurs dans UNE transaction. `Database._lock` n'est pas réentrant :
+        appeler `correct_movement` depuis l'intérieur d'un `db.write()` fige le
+        processus, sans exception et sans trace.
+        """
+        check_correctable(movement, allow_cooked=allow_cooked)
+        line = reversal(movement, moment=moment)
+        batch_id = line.pop("batch_id")
+        if batch_id is not None:
+            batch = conn.execute(
+                "SELECT remaining FROM batch WHERE id = ?", (batch_id,)
+            ).fetchone()
+            if batch is not None:
+                after = batch["remaining"] + line["quantity"]
+                if after < -QUANTITY_EPSILON:
+                    # Le stock a déjà été repris ailleurs : un lot à quantité
+                    # négative serait pire que le refus.
+                    raise ValueError(
+                        f"reversing movement {movement['id']} would leave batch"
+                        f" {batch_id} negative; only {batch['remaining']} left")
+                # Un lot PEUT dépasser sa quantité initiale : c'est le seul
+                # cas où la correction est vraiment utile (§ 12.2).
+                closes = is_empty(after)
+                repo.set_batch_remaining(
+                    conn, batch_id, 0.0 if closes else after,
+                    closed_at=moment if closes else None)
+        return repo.insert_movement(conn, batch_id=batch_id, **line)
 
 
 # =============================================================================

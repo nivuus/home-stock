@@ -406,6 +406,7 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
                     macros: Mapping[str, float | None] | None = None,
                     parts_total: int | None = None, parts_mine: int | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
+                    corrects_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
     values: dict[str, Any] = {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
@@ -413,6 +414,7 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
         "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
         "parts_total": parts_total, "parts_mine": parts_mine,
+        "corrects_id": corrects_id,
         "idempotency_key": idempotency_key,
     }
     # Always all eight columns, so an absent rate lands as an explicit NULL
@@ -437,6 +439,37 @@ def movement_exists(conn, idempotency_key: str) -> bool:
         "SELECT 1 FROM movement WHERE idempotency_key = ? LIMIT 1", (idempotency_key,)
     ).fetchone()
     return row is not None
+
+
+def get_movement(conn, movement_id: int) -> dict[str, Any] | None:
+    """One journal row, whole.
+
+    `m` as the alias, never `b`: the test that forbids selecting a whole
+    batch row scans this package literally, and does not look at which
+    table is behind the alias.
+    """
+    return _row(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.id = ?", (movement_id,)
+    ).fetchone())
+
+
+def movements_of_batch(conn, batch_id: int) -> list[dict[str, Any]]:
+    """Every row written against one batch, in writing order.
+
+    Ordered by `id` and not by `occurred_at`: a correction is booked on the
+    day it is made, so it sorts BEFORE its target on the date but after it
+    in the story.
+    """
+    return _rows(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.batch_id = ? ORDER BY m.id", (batch_id,)
+    ))
+
+
+def correction_of(conn, movement_id: int) -> dict[str, Any] | None:
+    """The reversal that cancels this row, if one was written."""
+    return _row(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.corrects_id = ?", (movement_id,)
+    ).fetchone())
 
 
 def list_movements(conn, since: str | None = None) -> list[dict[str, Any]]:

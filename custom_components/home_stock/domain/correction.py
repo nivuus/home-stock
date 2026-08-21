@@ -31,9 +31,16 @@ class CorrectionError(ValueError):
 # `transfer` : quantité nulle de part et d'autre, rien à compenser.
 # `conversion` et `cooked` : des PAIRES transactionnelles — les compenser
 # une ligne à la fois laisserait le stock incohérent entre les deux.
-_UNCORRECTABLE = (REASON_TRANSFER, REASON_CONVERSION, REASON_COOKED)
+# The English left-hand side of each refusal: `messages.py` turns it into the
+# French sentence a person reads. Three reasons, three distinct sentences —
+# they are refused for three different reasons.
+REFUSALS: dict[str, str] = {
+    REASON_TRANSFER: "a transfer movement cannot be corrected",
+    REASON_CONVERSION: "a conversion movement cannot be corrected",
+    REASON_COOKED: "a cooked movement cannot be corrected",
+}
 CORRECTABLE_REASONS: tuple[str, ...] = tuple(
-    reason for reason in REASONS if reason not in _UNCORRECTABLE
+    reason for reason in REASONS if reason not in REFUSALS
 )
 
 
@@ -56,12 +63,14 @@ def check_correctable(movement: Mapping[str, Any], *, allow_cooked: bool = False
     en une transaction.
     """
     if movement.get("corrects_id") is not None:
-        raise CorrectionError("ce mouvement est déjà une correction")
+        raise CorrectionError(
+            f"movement {movement.get('id')} is already a correction")
     reason = movement.get("reason")
     if reason == REASON_COOKED and allow_cooked:
         return
     if reason not in CORRECTABLE_REASONS:
-        raise CorrectionError(f"un mouvement « {reason} » ne se corrige pas ligne à ligne")
+        raise CorrectionError(
+            REFUSALS.get(reason, f"a {reason} movement cannot be corrected"))
 
 
 def _macros(movement: Mapping[str, Any], *, flip: bool) -> dict[str, float | None]:

@@ -61,6 +61,47 @@ LOT3 = [
     ("no location to put the dish in", "invalid_value"),
 ]
 
+# --- lot 4 -----------------------------------------------------------------
+LOT4 = [
+    ("unknown movement 42", "not_found"),
+    ("movement 42 is already a correction", "invalid_value"),
+    ("movement 42 has already been corrected", "invalid_value"),
+    ("a transfer movement cannot be corrected", "invalid_value"),
+    ("a conversion movement cannot be corrected", "invalid_value"),
+    ("a cooked movement cannot be corrected", "invalid_value"),
+    ("reversing movement 42 would leave batch 7 negative; only 100.0 left",
+     "insufficient_stock"),
+]
+
+
+@pytest.mark.parametrize("text, code", LOT4)
+def test_the_lot4_domain_errors_become_french(text, code):
+    got_code, sentence = french_error(ValueError(text))
+    assert got_code == code
+    assert sentence != GENERIC_MESSAGE, f"{text!r} retombe sur la phrase générique"
+    assert sentence[0].isupper() and sentence.rstrip().endswith((".", "!"))
+    assert "ValueError" not in sentence and "{" not in sentence
+
+
+@pytest.mark.parametrize("text, code", LOT3)
+def test_no_lot4_pattern_shadows_a_lot3_one(text, code):
+    """Les motifs du lot 4 s'ajoutent EN FIN de tuple. Le premier motif qui
+    correspond gagne : ce test rend la règle exécutoire plutôt que relue."""
+    got_code, sentence = french_error(ValueError(text))
+    assert got_code == code
+    assert sentence != GENERIC_MESSAGE, f"{text!r} n'est plus reconnu"
+
+
+def test_the_three_refusals_of_a_correction_say_three_different_things():
+    """Un transfert, une conversion et un mouvement de cuisine sont refusés
+    pour trois raisons différentes : une phrase unique laisserait le
+    propriétaire sans la moindre idée de quoi faire."""
+    phrases = {
+        french_error(ValueError(f"a {reason} movement cannot be corrected"))[1]
+        for reason in ("transfer", "conversion", "cooked")
+    }
+    assert len(phrases) == 3
+
 
 @pytest.mark.parametrize("text, code", LOT3)
 def test_the_new_domain_errors_become_french(text, code):
