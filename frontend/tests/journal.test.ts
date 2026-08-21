@@ -168,3 +168,61 @@ describe('<home-stock-journal>', () => {
     expect(element.shadowRoot.textContent).toContain('Rien de déclaré');
   });
 });
+
+describe('<home-stock-journal> — les objectifs', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  const SEMAINE = { kcal: 2100, cost: 9, waste_cost: 0, unvalued: 0, proteins: 60, salt: 7.2 };
+
+  async function monterAvec(goals: Record<string, number>, week_mean = SEMAINE) {
+    const element = monter();
+    await element.updateComplete;
+    element.jour = { ...JOUR, goals, week_mean };
+    await element.updateComplete;
+    return element;
+  }
+
+  it('rend une ligne par objectif réglé', async () => {
+    const element = await monterAvec({ kcal: 2000, salt: 6, proteins: 100 });
+    expect(element.shadowRoot.querySelectorAll('.objectif').length).toBe(3);
+    expect(element.shadowRoot.textContent).toContain('Sel');
+  });
+
+  it('n’affiche aucune ligne sans objectif, et laisse l’écran du lot 2 intact', async () => {
+    const sans = await monterAvec({});
+    const rendu = sans.shadowRoot.innerHTML;
+    expect(sans.shadowRoot.querySelectorAll('.objectif').length).toBe(0);
+
+    document.body.innerHTML = '';
+    const element = monter();
+    await element.updateComplete;
+    element.jour = JOUR;                       // exactement la charge du lot 2
+    await element.updateComplete;
+    expect(element.shadowRoot.innerHTML).toBe(rendu);
+  });
+
+  it('marque la ligne dépassée du jour, et pas les autres', async () => {
+    // 348 kcal contre 2000 : tenu. 1,2 g de sel contre 1 : dépassé.
+    const element = await monterAvec({ kcal: 2000, salt: 1 });
+    const depassees = [...element.shadowRoot.querySelectorAll('.objectif-depasse')]
+      .map((l: Element) => l.textContent?.trim());
+    expect(depassees.length).toBe(1);
+    expect(depassees[0]).toContain('Sel');
+  });
+
+  it('ajoute une ligne grise quand seule la moyenne des sept journées dépasse', async () => {
+    // Le jour tient (1,2 g), la moyenne hebdomadaire non (7,2 g contre 6).
+    const element = await monterAvec({ salt: 6 });
+    expect(element.shadowRoot.querySelectorAll('.objectif-depasse').length).toBe(0);
+    const semaine = element.shadowRoot.querySelector('.objectif-semaine');
+    expect(semaine).not.toBeNull();
+    expect(semaine.textContent).toContain('7,2');
+  });
+
+  it('utilise la virgule décimale, comme tout le panneau', async () => {
+    const element = await monterAvec({ salt: 6 });
+    const ligne = element.shadowRoot.querySelector('.objectif');
+    expect(ligne.textContent).toContain('1,2');
+    expect(ligne.textContent).not.toContain('1.2');
+  });
+});

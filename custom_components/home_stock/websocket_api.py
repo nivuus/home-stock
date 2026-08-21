@@ -921,6 +921,10 @@ async def journal_day(hass, connection, msg) -> None:
     # Les plafonds vivent dans les options de l'entrée : le gestionnaire ne
     # connaît pas l'entrée de configuration, et n'a pas à la connaître.
     result["goals"] = _options(hass).get(CONF_GOALS, {}) or {}
+    # La moyenne des sept journées closes, telle que le coordinateur l'a
+    # déjà calculée : aucune requête de plus, et surtout pas une seconde
+    # définition de la fenêtre longue écrite ici.
+    result["week_mean"] = (runtime.coordinator.data or {}).get("week_mean", {})
     connection.send_result(msg["id"], result)
 
 

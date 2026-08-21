@@ -10,7 +10,8 @@ function produit(partiel: Partial<Produit> & { id: number }): Produit {
   return {
     name: `Produit ${partiel.id}`, base_unit: 'g', category_id: null, aisle_id: null,
     edible: 1, default_location_id: null, min_quantity: null, days_after_opening: null,
-    default_shelf_life_days: null, reference_kcal: null, active: 1, external_ref: null,
+    default_shelf_life_days: null, reference_kcal: null, manual_portion: null,
+    active: 1, external_ref: null,
     ...partiel,
   };
 }
@@ -28,7 +29,7 @@ describe('brouillonDepuis', () => {
     const b = brouillonDepuis(produit({ id: 1 }));
     expect(b).toEqual({
       name: 'Produit 1', aisle_id: '', default_location_id: '',
-      min_quantity: '', default_shelf_life_days: '',
+      min_quantity: '', default_shelf_life_days: '', manual_portion: '',
     });
   });
 
@@ -39,7 +40,7 @@ describe('brouillonDepuis', () => {
     }));
     expect(b).toEqual({
       name: 'Produit 1', aisle_id: '2', default_location_id: '1',
-      min_quantity: '200', default_shelf_life_days: '7',
+      min_quantity: '200', default_shelf_life_days: '7', manual_portion: '',
     });
   });
 
@@ -96,7 +97,7 @@ describe('champsModifies', () => {
     // Brouillon où chaque champ modifiable a changé : le pire cas pour une fuite de clé imprévue.
     const brouillon: Brouillon = {
       name: 'Nouveau nom', aisle_id: '1', default_location_id: '',
-      min_quantity: '150', default_shelf_life_days: '10',
+      min_quantity: '150', default_shelf_life_days: '10', manual_portion: '45',
     };
     const resultat = champsModifies(brouillon, p);
     expect(resultat.ok).toBe(true);
@@ -434,5 +435,72 @@ describe('<home-stock-catalogue>', () => {
 
     expect(vus.length).toBe(1);
     expect(vus).toEqual([1]);
+  });
+});
+
+describe('« Ma portion » au catalogue', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('figure dans la liste blanche des champs modifiables', () => {
+    // Filet statique : le serveur refuse toute colonne hors PRODUCT_EDITABLE,
+    // et cet écran ne doit pas pouvoir en tenter une autre.
+    expect(CHAMPS_CATALOGUE_MODIFIABLES).toContain('manual_portion');
+  });
+
+  it('rend une chaîne vide quand aucune portion n’a été fixée', () => {
+    expect(brouillonDepuis(produit({ id: 1 })).manual_portion).toBe('');
+    expect(brouillonDepuis(produit({ id: 1, manual_portion: 45 })).manual_portion).toBe('45');
+  });
+
+  it('une saisie vide efface la portion (null), et rend la main à la médiane apprise', () => {
+    const p = produit({ id: 1, manual_portion: 45 });
+    const brouillon: Brouillon = { ...brouillonDepuis(p), manual_portion: '' };
+    expect(champsModifies(brouillon, p)).toEqual({ ok: true, champs: { manual_portion: null } });
+  });
+
+  it('accepte la virgule décimale, comme partout ailleurs', () => {
+    const p = produit({ id: 1 });
+    const brouillon: Brouillon = { ...brouillonDepuis(p), manual_portion: '45,5' };
+    expect(champsModifies(brouillon, p)).toEqual({ ok: true, champs: { manual_portion: 45.5 } });
+  });
+
+  it('une saisie illisible refuse l’édition ENTIÈRE, sans envoyer les autres champs', () => {
+    const p = produit({ id: 1 });
+    const brouillon: Brouillon = {
+      ...brouillonDepuis(p), name: 'Riz complet', manual_portion: 'une louche' };
+    const resultat = champsModifies(brouillon, p);
+    expect(resultat.ok).toBe(false);
+    expect((resultat as { erreur: string }).erreur).toContain('Ma portion');
+  });
+
+  it('ne renvoie pas une valeur inchangée', () => {
+    const p = produit({ id: 1, manual_portion: 45 });
+    expect(champsModifies(brouillonDepuis(p), p)).toEqual({ ok: true, champs: {} });
+  });
+
+  it('masque le champ pour un produit suivi à la pièce', async () => {
+    const piece = produit({ id: 1, name: 'Yaourt', base_unit: 'piece', aisle_id: 1 });
+    const connexion = connexionFactice((type: string, charge?: any) => {
+      if (type === 'home_stock/products/list') return Promise.resolve({ products: [piece] });
+      if (type === 'home_stock/product/get') return Promise.resolve({ product: piece });
+      return reponsesParDefaut(type, charge);
+    });
+    const element = monter({ connexion });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    await ouvrirEditionDuPremierProduit(element);
+
+    expect(element.shadowRoot!.querySelector('.champ-portion')).toBeNull();
+  });
+
+  it('affiche le champ et sa mention pour un produit au gramme', async () => {
+    const connexion = connexionFactice(reponsesParDefaut);
+    const element = monter({ connexion });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    await ouvrirEditionDuPremierProduit(element);
+
+    expect(element.shadowRoot!.querySelector('.champ-portion')).not.toBeNull();
+    expect(element.shadowRoot!.textContent).toContain('vide = déduite automatiquement');
   });
 });

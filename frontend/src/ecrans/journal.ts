@@ -51,6 +51,26 @@ export type JourJournal = {
   end: string;
   entries: EntreeJournal[];
   totals: TotauxJournal;
+  /** Les plafonds réglés dans les options de l'entrée. Absents tant que
+   *  personne n'en a posé : l'écran est alors celui du lot 2, à l'identique. */
+  goals?: Record<string, number>;
+  /** La moyenne des sept journées CLOSES, telle que le résumé la publie. */
+  week_mean?: Partial<TotauxJournal>;
+};
+
+/** Les neuf nutriments qu'un objectif peut viser, en français et avec leur
+ *  unité. Le serveur rend les clés, le panneau les phrases — même partage
+ *  que `tri.ts` pour les bacs. */
+const LIBELLE_NUTRIMENT: Record<string, { nom: string; unite: string }> = {
+  kcal: { nom: 'Énergie', unite: 'kcal' },
+  proteins: { nom: 'Protéines', unite: 'g' },
+  carbohydrates: { nom: 'Glucides', unite: 'g' },
+  sugars: { nom: 'Sucres', unite: 'g' },
+  added_sugars: { nom: 'Sucres ajoutés', unite: 'g' },
+  fat: { nom: 'Matières grasses', unite: 'g' },
+  saturated_fat: { nom: 'Graisses saturées', unite: 'g' },
+  fiber: { nom: 'Fibres', unite: 'g' },
+  salt: { nom: 'Sel', unite: 'g' },
 };
 
 export type SeauJournal = { label: string; kcal: number; cost: number; waste_cost: number };
@@ -214,7 +234,43 @@ export class EcranJournal extends LitElement {
         ${jour.totals.unvalued > 0 ? html`
           <p class="non-chiffre">${jour.totals.unvalued} sortie(s) sans calories connues.</p>
         ` : nothing}
+        ${this.rendreObjectifs(jour)}
       </section>
+    `;
+  }
+
+  /** Une ligne par objectif réglé — « Sel 1,2 / 6 g » — et, quand la moyenne
+   *  des sept journées closes dépasse elle aussi, une seconde ligne grise.
+   *  Aucun objectif réglé : aucune ligne, et l'écran reste celui du lot 2.
+   *
+   *  Ce sont des PLAFONDS : une journée vide ne dépasse rien, donc rien ne
+   *  s'y marque — il n'y a aucune garde « la journée est vide » à écrire. */
+  private rendreObjectifs(jour: JourJournal) {
+    const objectifs = jour.goals ?? {};
+    const semaine = jour.week_mean ?? {};
+    const lignes = Object.keys(LIBELLE_NUTRIMENT)
+      .filter((nutriment) => typeof objectifs[nutriment] === 'number');
+    if (lignes.length === 0) return nothing;
+    return html`
+      <ul class="objectifs">
+        ${lignes.map((nutriment) => {
+          const { nom, unite } = LIBELLE_NUTRIMENT[nutriment];
+          const plafond = objectifs[nutriment];
+          const valeurJour = (jour.totals as Record<string, number | undefined>)[nutriment] ?? 0;
+          const valeurSemaine = (semaine as Record<string, number | undefined>)[nutriment];
+          return html`
+            <li class="objectif ${valeurJour > plafond ? 'objectif-depasse' : ''}">
+              ${nom} ${formaterNombre(valeurJour)} / ${formaterNombre(plafond)} ${unite}
+            </li>
+            ${typeof valeurSemaine === 'number' && valeurSemaine > plafond ? html`
+              <li class="objectif-semaine">
+                ${nom}, moyenne sur 7 jours ${formaterNombre(valeurSemaine)} /
+                ${formaterNombre(plafond)} ${unite}
+              </li>
+            ` : nothing}
+          `;
+        })}
+      </ul>
     `;
   }
 
@@ -255,6 +311,10 @@ export class EcranJournal extends LitElement {
       background: var(--secondary-background-color); color: var(--primary-text-color);
     }
     .granularite-active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .objectifs { list-style: none; margin: 4px 0 0; padding: 0; }
+    .objectif { font-size: 0.95rem; }
+    .objectif-depasse { color: var(--error-color, #b3261e); }
+    .objectif-semaine { font-size: 0.9rem; color: var(--secondary-text-color); }
     /* La cible tactile de .barre est fixe (colonne pleine hauteur ici,
        ligne pleine largeur sous 700 px) — jamais la grandeur du seau, qui ne
        viendrait qu'agrandir les gros jours et rétrécir les petits sous les

@@ -172,3 +172,18 @@ async def test_journal_day_carries_the_goals_from_the_entry_options(
         lambda: seeded.runtime_data.manager.journal_day(
             None, tz=__import__("zoneinfo").ZoneInfo("UTC")))
     assert "goals" not in day
+
+
+async def test_journal_day_carries_the_week_mean_the_goal_lines_need(
+        hass, seeded, hass_ws_client):
+    """La ligne grise du journal compare la MOYENNE des sept journées closes
+    au même plafond. Elle vient du résumé que le coordinateur tient déjà à
+    jour : aucune requête de plus, et surtout pas une seconde définition de
+    la fenêtre longue au bord websocket."""
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "home_stock/journal/day"})
+    result = (await client.receive_json())["result"]
+
+    assert result["week_mean"] == seeded.runtime_data.coordinator.data["week_mean"]
+    assert set(result["week_mean"]) == set(result["totals"]) - {"kcal_rate"} | {
+        "cost", "waste_cost", "unvalued"}
