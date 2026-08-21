@@ -99,6 +99,11 @@ function rechangeLisible(pile: Pile): string | null {
 @customElement('home-stock-piles')
 export class EcranPiles extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   @property({ attribute: false }) file?: FileAttente;
 
   @state() private piles: Pile[] = [];
@@ -235,6 +240,29 @@ export class EcranPiles extends LitElement {
     .motif { width: 100%; min-height: 62px; font-size: 1rem; box-sizing: border-box; }
     .refus, .erreur { margin: 8px 0; font-size: 0.9rem; }
     .evenement-passe { display: block; font-size: 0.85rem; margin-bottom: 4px; }
+
+    /* --- la vue dense (lot 6), au-delà de 1000 px -------------------------
+       Les classes de libellé, de détail et de verbe sont des blocs en étroit ;
+       dans une cellule de tableau elles redeviennent du contenu de cellule,
+       sans quoi chaque colonne se casse en hauteur. Pas de backtick dans ce
+       commentaire : il est DANS un littéral de gabarit. */
+    .tableau { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .tableau th, .tableau td {
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--divider-color, #ddd);
+      overflow-wrap: anywhere; font-size: 0.9rem;
+    }
+    .tableau th { font-size: 0.85rem; color: var(--secondary-text-color); font-weight: 600; }
+    .tableau .ligne { height: 62px; }
+    /* Le bouton d'ouverture garde la classe de la carte étroite : c'est le
+       MÊME geste, et un seul sélecteur le désigne dans les deux mises en page
+       — y compris pour le vérificateur de rendu, qui n'a pas à connaître deux
+       noms pour une seule action. */
+    .tableau .ouvrir {
+      display: block; width: 100%; min-height: 48px; text-align: left; border: none;
+      border-radius: 8px; padding: 8px; margin-bottom: 0; font-size: 0.95rem;
+      font-weight: 600;
+      background: var(--secondary-background-color); color: var(--primary-text-color);
+    }
   `;
 
   private rendreADeclarer() {
@@ -296,9 +324,40 @@ export class EcranPiles extends LitElement {
     `;
   }
 
+  /** Le tableau de la vue dense. Quatorze piles empilées en cartes tiennent
+   *  sur deux écrans ; en lignes, elles se comparent d'un coup d'œil — et
+   *  c'est justement ce qu'on veut d'un inventaire de piles. Les mêmes
+   *  phrases qu'en étroit : une pile muette ou orpheline le dit encore. */
+  private rendreTableau() {
+    return html`
+      ${this.rendreADeclarer()}
+      <section class="section">
+        <h2>${this.piles.length} pile(s) suivie(s)</h2>
+        <table class="tableau">
+          <thead>
+            <tr><th>Pile</th><th>À faire</th><th>Niveau</th><th>Rechange</th></tr>
+          </thead>
+          <tbody>
+            ${this.piles.map((pile) => html`
+              <tr class="ligne">
+                <td class="libelle">
+                  <button class="pile ouvrir" @click=${() => this.ouvrir(pile)}>${pile.label}</button>
+                </td>
+                <td class="verbe">${pile.verb}</td>
+                <td class="detail">${niveauLisible(pile)}</td>
+                <td class="detail">${rechangeLisible(pile) ?? '—'}</td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
   render() {
     const choisie = this.piles.find((pile) => pile.id === this.selection) ?? null;
     if (choisie) return this.rendreFiche(choisie);
+    if (this.large) return this.rendreTableau();
     return html`
       ${this.rendreADeclarer()}
       <section class="section">

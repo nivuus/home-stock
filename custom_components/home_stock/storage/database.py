@@ -6,7 +6,9 @@ second, independent connection so a long write (import_catalog holds the lock
 across hundreds of products) never blocks — or is blocked by — a read, and a
 reader never observes a half-finished transaction the writer has not committed
 yet. WAL mode is exactly what makes this safe: a reader can run concurrently
-with the one writer without waiting on it.
+with the one writer without waiting on it. The price of handing the reader
+out bare is that close() must not free it under whoever holds it — see
+close().
 """
 from __future__ import annotations
 
@@ -46,29 +48,52 @@ class Database:
         self._read_conn = read_conn
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-        if self._read_conn is not None:
-            self._read_conn.close()
-            self._read_conn = None
+        """Let go of both connections — never sqlite3.Connection.close() them.
+
+        read() hands the read-only connection out bare, on purpose: a
+        coordinator refresh must not queue behind anything. So when
+        async_unload_entry runs this on one executor thread, another executor
+        thread is still using that same connection. sqlite3_close_v2 frees the
+        handle as soon as no statement is live on it, and the other thread is
+        preparing its next one right then, with the GIL released: it reads a
+        structure that has just been freed. The interpreter dies of a
+        segmentation fault, and when it survives, SQLite is left wedged — the
+        next connection's executescript never returns.
+
+        Dropping the reference is enough, and is what closes the file in the
+        normal case: CPython disposes of a connection as soon as its last
+        owner lets go, so with nobody reading, the sqlite3_close happens right
+        here, and with a reader in flight it happens the instant that reader
+        is done. Callers arriving after us get the RuntimeError below instead
+        of a connection. No lock is taken on either side, so a close can never
+        deadlock against the non-reentrant write lock a long import_catalog is
+        holding.
+        """
+        self._conn = None
+        self._read_conn = None
 
     def read(self) -> sqlite3.Connection:
         """Return the dedicated read-only connection."""
-        if self._read_conn is None:
+        # Read the attribute once: a close landing between the check and the
+        # return would otherwise hand the caller a None to call .execute() on.
+        conn = self._read_conn
+        if conn is None:
             raise RuntimeError("database is not connected")
-        return self._read_conn
+        return conn
 
     @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
         """Run a transaction. Commits on success, rolls back on any exception."""
-        if self._conn is None:
+        # Same reason as read(): one look at the attribute, then work on the
+        # local, so a concurrent close cannot swap it out mid-transaction.
+        conn = self._conn
+        if conn is None:
             raise RuntimeError("database is not connected")
         with self._lock:
             try:
-                yield self._conn
+                yield conn
             except Exception:
-                self._conn.rollback()
+                conn.rollback()
                 raise
             else:
-                self._conn.commit()
+                conn.commit()

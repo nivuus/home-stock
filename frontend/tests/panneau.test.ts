@@ -1398,3 +1398,139 @@ describe('la navigation du lot 4', () => {
     expect(libelles).not.toContain('Liste');
   });
 });
+
+// --- lot 6 : le socle de la vue dense ---------------------------------------
+//
+// `large` est MESURÉ (`window.innerWidth >= 1000`), jamais déduit d'un agent
+// utilisateur : c'est ce qui le rend testable sans navigateur, et c'est aussi
+// pourquoi il vaut hors du panneau Home Assistant, dans le harnais du
+// vérificateur de rendu, qui ne fournit aucun `narrow`.
+
+/** Les sept écrans que la largeur sert, plus `planning` qui la recevait déjà. */
+const ECRANS_DENSES = ['catalogue', 'journal', 'liste', 'reglages', 'ticket',
+                       'equipements', 'piles', 'planning'] as const;
+
+/** Les dix autres. Une main, debout, ou un magasin : la largeur ne leur
+ *  apporte rien, et une mise en page conditionnelle est une seconde mise en
+ *  page à tenir. */
+const ECRANS_ETROITS = ['scanner', 'fiche', 'panier', 'rangement', 'session',
+                        'recettes', 'recette', 'validation', 'consommation'] as const;
+
+/** De quoi laisser CHAQUE écran se charger sans lever : ce bloc les monte
+ *  tous les dix-sept pour vérifier qui reçoit `large`, et un écran qui
+ *  explose au chargement produirait un rejet non capturé — du bruit qui n'a
+ *  rien à voir avec ce qu'on mesure ici, et qui fait sortir vitest en erreur. */
+const REPONSES_VIDES: Record<string, unknown> = {
+  'home_stock/session/current': null,
+  'home_stock/products/list': { products: [] },
+  'home_stock/aisles/list': { aisles: [] },
+  'home_stock/locations/list': { locations: [] },
+  'home_stock/batches/list': { batches: [] },
+  'home_stock/stores/list': { stores: [] },
+  'home_stock/recurring/list': { recurring: [] },
+  'home_stock/batteries/list': { batteries: [] },
+  'home_stock/batteries/discover': { sensors: [] },
+  'home_stock/equipment/list': { equipment: [] },
+  'home_stock/recipes/list': { recipes: [] },
+  'home_stock/meals/list': { meals: [] },
+  'home_stock/journal/series': { granularity: 'day', buckets: [] },
+  'home_stock/journal/day': {
+    food_day: '2026-08-21', start: '2026-08-21T02:00:00', end: '2026-08-22T02:00:00',
+    entries: [], totals: { kcal: 0, cost: 0, waste_cost: 0, unvalued: 0 },
+  },
+  'home_stock/list/items': { items: [], store_id: null, store_name: null,
+                             estimate: { amount: 0, confidence: 0, priced: 0, total: 0 } },
+};
+
+const BALISE_ECRAN: Record<string, string> = {
+  scanner: 'home-stock-scanner', fiche: 'home-stock-fiche', panier: 'home-stock-panier',
+  rangement: 'home-stock-rangement', session: 'home-stock-session',
+  catalogue: 'home-stock-catalogue', reglages: 'home-stock-reglages',
+  consommation: 'home-stock-consommation', journal: 'home-stock-journal',
+  recettes: 'home-stock-recettes', recette: 'home-stock-recette',
+  planning: 'home-stock-planning', validation: 'home-stock-validation',
+  piles: 'home-stock-piles', equipements: 'home-stock-equipements',
+  liste: 'home-stock-liste', ticket: 'home-stock-ticket',
+};
+
+describe('panneau : le socle de la vue dense (lot 6)', () => {
+  const largeurInitiale = window.innerWidth;
+
+  beforeEach(() => { window.localStorage.clear(); });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    redimensionner(largeurInitiale);
+  });
+
+  function redimensionner(largeur: number): void {
+    Object.defineProperty(window, 'innerWidth', { value: largeur, configurable: true, writable: true });
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  async function monterLarge(options: { largeurFenetre: number; narrow?: boolean }) {
+    redimensionner(options.largeurFenetre);
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; narrow: boolean; large: boolean; ecran: string;
+      updateComplete: Promise<boolean>;
+    };
+    element.hass = hassAvecReponses(async (msg: any) =>
+      (msg.type in REPONSES_VIDES ? REPONSES_VIDES[msg.type] : {}) as any);
+    if (options.narrow !== undefined) element.narrow = options.narrow;
+    document.body.appendChild(element);
+    await element.updateComplete;
+    return element;
+  }
+
+  it('bascule large sur resize, dans les deux sens', async () => {
+    const p = await monterLarge({ largeurFenetre: 412 });
+    expect(p.large).toBe(false);
+    redimensionner(1280); await p.updateComplete;
+    expect(p.large).toBe(true);
+    redimensionner(999); await p.updateComplete;
+    expect(p.large).toBe(false);        // le retour compte autant que l'aller
+  });
+
+  it('un hôte qui se dit étroit gagne contre la largeur mesurée', async () => {
+    // Barre latérale Home Assistant dépliée sur une tablette large :
+    // `innerWidth` ment sur la place réellement laissée au panneau, et une
+    // mise en page dense écrasée dans 400 px est pire que l'étroite.
+    const p = await monterLarge({ largeurFenetre: 1280, narrow: true });
+    expect(p.large).toBe(false);
+  });
+
+  it('passe large aux sept écrans denses et à eux seuls', async () => {
+    // Le garde-fou de la décision « dix écrans ne changent pas » : si demain
+    // quelqu'un branche `large` sur le scanner, ce test le dit tout de suite.
+    const p = await monterLarge({ largeurFenetre: 1280 });
+    for (const ecran of ECRANS_DENSES) {
+      p.ecran = ecran;
+      await p.updateComplete;
+      const enfant = p.shadowRoot!.querySelector(BALISE_ECRAN[ecran]) as any;
+      expect(enfant, ecran).not.toBeNull();
+      expect(enfant.large, ecran).toBe(true);
+    }
+    for (const ecran of ECRANS_ETROITS) {
+      p.ecran = ecran;
+      await p.updateComplete;
+      const enfant = p.shadowRoot!.querySelector(BALISE_ECRAN[ecran]) as any;
+      // `fiche`, `recette` et `validation` n'ont rien à montrer sans leur
+      // donnée : absents, ils ne reçoivent rien non plus, ce qui est le
+      // verdict attendu.
+      if (enfant === null) continue;
+      expect(enfant.large ?? false, ecran).toBe(false);
+    }
+  });
+
+  it('ne casse aucun écran étroit', async () => {
+    // Chaque écran atteignable se monte et se démonte à 412 px, comme avant
+    // le lot : le câblage seul ne doit rien changer à ce qui se voit.
+    const p = await monterLarge({ largeurFenetre: 412 });
+    for (const ecran of [...ECRANS_DENSES, ...ECRANS_ETROITS]) {
+      p.ecran = ecran;
+      await p.updateComplete;
+      const enfant = p.shadowRoot!.querySelector(BALISE_ECRAN[ecran]) as any;
+      if (enfant === null) continue;
+      expect(enfant.large ?? false, ecran).toBe(false);
+    }
+  });
+});

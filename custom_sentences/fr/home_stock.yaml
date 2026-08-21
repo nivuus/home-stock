@@ -1,0 +1,111 @@
+# Les sept phrases du garde-manger, pour l'agent conversationnel de la maison.
+#
+# LIVRÉ, JAMAIS INSTALLÉ : copier ce fichier dans config/custom_sentences/fr/.
+# `home_stock` ne modifie jamais la configuration de la maison — même contrat
+# que les blueprints des lots 2 et 2bis.
+#
+# Identifiants d'intents, listes et slots EN ANGLAIS, comme tout le code depuis
+# le lot 0 ; seules les phrases et les réponses sont en français.
+#
+# Cinq lectures, deux écritures. Les deux écritures sont bornées et réparables :
+# une ligne de courses se décoche, un repas validé se contrepasse depuis le
+# panneau. Tout le reste — jeter, retirer une ligne, consommer au hasard —
+# reste hors de portée de la voix, et `tests/test_voice_package.py` le tient.
+language: fr
+intents:
+
+  # 1 — « Il me reste des œufs ? »
+  HomeStockQueryStock:
+    data:
+      - sentences:
+          - "(il me reste|est-ce qu'il me reste|est-ce qu'il reste) (du|de la|des|de l'|d') {product}"
+          - "(il y a|est-ce qu'il y a|est-ce que j'ai) (du|de la|des|de l'|d') {product}"
+          - "combien (il me reste|il reste|j'ai) (de|du|de la|des|de l'|d') {product}"
+
+  # 2 — « Qu'est-ce qu'on mange ce soir ? »
+  HomeStockQueryMeals:
+    data:
+      - sentences:
+          - "qu'est-ce qu'on mange {slot}"
+          - "qu'est-ce qui est prévu {slot}"
+          - "c'est quoi {slot}"
+      # Sans créneau : la journée entière. L'intent_script s'en accommode, et
+      # c'est pourquoi `slot_key` est OPTIONNEL sur `home_stock.query_meals`.
+      - sentences:
+          - "qu'est-ce qu'on mange"
+          - "qu'est-ce qui est prévu (à manger|au menu)"
+
+  # 3 — « Qu'est-ce qu'il faut acheter ? »
+  HomeStockQueryShoppingList:
+    data:
+      - sentences:
+          - "qu'est-ce qu'il faut acheter"
+          - "qu'est-ce qu'il y a sur la liste (de courses|)"
+          - "(lis|donne)-moi la liste de courses"
+
+  # 4 — « Ajoute du lait à la liste ». LA phrase où le vocal bat toutes les
+  # autres surfaces : les mains dans l'évier. Écrit sans confirmation, parce
+  # que l'effet tient en une ligne et se répare en ne l'achetant pas.
+  HomeStockAddToShoppingList:
+    data:
+      - sentences:
+          - "(ajoute|note) {quantity} {product} (à|sur) la liste"
+          - "(ajoute|note) (du|de la|des|de l'|d'|un|une) {product} (à|sur) la liste"
+      - sentences:
+          - "note (du|de la|des|de l'|d'|un|une) {product}"
+          - "il (me )?faut (du|de la|des|de l'|d'|un|une) {product}"
+
+  # 5 — « Qu'est-ce qui périme ? »
+  HomeStockQueryExpirations:
+    data:
+      - sentences:
+          - "qu'est-ce qui périme"
+          - "qu'est-ce qui est bientôt périmé"
+          - "qu'est-ce qui approche de sa date limite"
+
+  # 6 — « J'ai mangé le dîner », en DEUX TOURS.
+  #
+  # Le premier bloc annonce ce qui serait décrémenté et ne touche à rien
+  # (`dry_run: true`, défaut du lot 3). Le second — reconnaissable au slot
+  # fixe `confirm: yes` — écrit. Un « oui » nu n'en fait pas partie : il
+  # détournerait toutes les confirmations de la maison.
+  HomeStockValidateMeal:
+    data:
+      - sentences:
+          - "j'ai (mangé|fini) (le|mon|la) (dîner|diner|déjeuner|petit-déjeuner|collation|repas)"
+          - "j'ai (mangé|fini) mon repas"
+      - sentences:
+          - "oui je confirme (le repas|)"
+          - "confirme le repas"
+          - "valide le repas"
+        slots:
+          confirm: "yes"
+
+  # 7 — « Qu'est-ce que j'ai mangé aujourd'hui ? »
+  HomeStockQueryToday:
+    data:
+      - sentences:
+          - "qu'est-ce que j'ai mangé aujourd'hui"
+          - "qu'est-ce que j'ai mangé (de la journée|)"
+          - "combien j'ai mangé aujourd'hui"
+
+lists:
+  # Texte libre : un nom de produit ne s'énumère pas, le composant fait la
+  # recherche floue lui-même (`query_stock`, `add_to_shopping_list`).
+  product:
+    wildcard: true
+  quantity:
+    wildcard: true
+  # Le vocabulaire des créneaux appartient à `const.MEAL_SLOT_KEYS`, et à lui
+  # seul. Les valeurs `out` sont celles que `home_stock.query_meals` accepte —
+  # un mot de plus ici serait refusé au moment précis où quelqu'un parle.
+  slot:
+    values:
+      - in: "(ce soir|le dîner|le diner|au dîner|au diner)"
+        out: "dinner"
+      - in: "(ce midi|le déjeuner|au déjeuner|à midi)"
+        out: "lunch"
+      - in: "(ce matin|le petit-déjeuner|au petit-déjeuner|le petit déjeuner)"
+        out: "breakfast"
+      - in: "(le goûter|la collation|au goûter)"
+        out: "snack"

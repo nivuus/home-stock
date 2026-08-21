@@ -161,6 +161,11 @@ export function filtrerProduits(produits: Produit[], recherche: string, nomRayon
 @customElement('home-stock-catalogue')
 export class EcranCatalogue extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   /** La file hors-ligne : une correction depuis le catalogue est une
    *  écriture comme une autre (spec §14), même si le contexte — un bureau,
    *  pas un rayon — la rend rarement nécessaire en pratique. */
@@ -406,7 +411,33 @@ export class EcranCatalogue extends LitElement {
     `;
   }
 
-  render() {
+  /** Une ligne du tableau dense. Cinq colonnes de données — nom, unité,
+   *  seuil, catégorie, conservation — et les deux mêmes boutons qu'en étroit.
+   *  L'unité et la catégorie y sont du TEXTE, exactement comme en étroit :
+   *  élargir un écran n'élargit pas ses droits. */
+  private rendreLigneTableau(produit: Produit) {
+    const suffixe = produit.base_unit !== 'piece' ? ` ${produit.base_unit}` : '';
+    return html`
+      <tr class="ligne ${this.produitEditeId === produit.id ? 'ligne-editee' : ''}">
+        <td class="nom">${produit.name}</td>
+        <td class="cellule-unite">${produit.base_unit === 'piece' ? 'à la pièce' : produit.base_unit}</td>
+        <td class="cellule-seuil">${produit.min_quantity !== null
+          ? `${produit.min_quantity}${suffixe}` : '—'}</td>
+        <td class="cellule-categorie">${produit.category_id ?? '—'}</td>
+        <td class="cellule-conservation">${produit.default_shelf_life_days !== null
+          ? `${produit.default_shelf_life_days} j` : '—'}</td>
+        <td class="cellule-actions">
+          <button class="manger" @click=${() => this.mangerProduit(produit)}>Manger</button>
+          <button class="modifier" @click=${() => this.ouvrirEdition(produit)}>Modifier</button>
+        </td>
+      </tr>
+    `;
+  }
+
+  /** L'en-tête : recherche, file en attente, erreur de chargement, liste vide.
+   *  Le même dans les deux mises en page — seule la DISPOSITION change, jamais
+   *  les données ni les commandes. */
+  private rendreEntete() {
     return html`
       <input class="recherche" type="search" placeholder="Rechercher un produit ou un rayon…"
         .value=${this.recherche}
@@ -424,7 +455,39 @@ export class EcranCatalogue extends LitElement {
       ${!this.erreurChargement && this.produitsFiltres.length === 0 ? html`
         <p class="vide">Aucun produit.</p>
       ` : nothing}
+    `;
+  }
 
+  /** Au-delà de 1000 px : trente lignes d'un coup à gauche, le formulaire
+   *  d'édition à droite. C'est tout l'intérêt de la largeur — corriger un
+   *  seuil, voir la ligne suivante, corriger — et un formulaire qui remplacerait
+   *  la liste annulerait le gain. Le formulaire est le MÊME (`rendreEdition`) :
+   *  mêmes champs, mêmes validations, même file d'attente. */
+  private rendreDense() {
+    const edite = this.produitEnEdition;
+    return html`
+      ${this.rendreEntete()}
+      <div class="dense">
+        <table class="tableau">
+          <thead>
+            <tr>
+              <th>Nom</th><th>Unité</th><th>Seuil</th><th>Catégorie</th>
+              <th>Conservation</th><th class="colonne-actions"></th>
+            </tr>
+          </thead>
+          <tbody>${this.produitsFiltres.map((p) => this.rendreLigneTableau(p))}</tbody>
+        </table>
+        ${edite !== null ? html`
+          <aside class="volet-edition">${this.rendreEdition(edite)}</aside>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  render() {
+    if (this.large) return this.rendreDense();
+    return html`
+      ${this.rendreEntete()}
       <div class="liste">
         ${this.produitsFiltres.map((p) => this.rendreLigne(p))}
       </div>
@@ -478,5 +541,28 @@ export class EcranCatalogue extends LitElement {
     .enregistrer { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     .enregistrer:disabled { opacity: 0.5; }
     .annuler { background: var(--secondary-background-color); color: var(--primary-text-color); border: 1px solid var(--divider-color, #ddd); }
+
+    /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
+       La liste reste ENTIÈREMENT visible pendant l'édition : le volet se pose
+       à côté, jamais par-dessus. Sa largeur est bornée pour que le tableau ne
+       se réduise pas à rien sur un 1280, et que le texte ne s'étire pas sur un
+       1920 — les deux défauts que les trois formats du vérificateur mesurent. */
+    .dense { display: flex; align-items: flex-start; gap: 16px; }
+    .tableau { flex: 1 1 auto; min-width: 0; border-collapse: collapse; table-layout: fixed; }
+    .tableau th, .tableau td {
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--divider-color, #ddd);
+      overflow-wrap: anywhere;
+    }
+    .tableau th { font-size: 0.85rem; color: var(--secondary-text-color); font-weight: 600; }
+    .tableau .nom { font-weight: 600; }
+    .tableau .ligne { height: 48px; }
+    .ligne-editee { background: var(--secondary-background-color); }
+    .cellule-actions { white-space: nowrap; width: 1%; }
+    .cellule-actions .manger, .cellule-actions .modifier { padding: 0 12px; }
+    .volet-edition {
+      flex: 0 0 320px; position: sticky; top: 12px;
+      max-height: calc(100vh - 24px); overflow-y: auto;
+    }
+    .volet-edition .edition { margin-top: 0; }
   `;
 }

@@ -116,3 +116,50 @@ async def test_services_yaml_documents_every_new_field(hass: HomeAssistant,
         fields = set(described[service].get("fields") or {})
         expected = {str(key) for key in schema.schema}
         assert expected <= fields, f"{service}: {expected - fields}"
+
+
+# --- lot 6 : la SEULE asymétrie assumée du lot -----------------------------
+#
+# `slot_key` existe sur le service `query_meals` et PAS sur la commande
+# websocket `home_stock/meals/list`. Ce n'est pas un oubli : `meals/list` rend
+# la plage complète et le panneau la découpe lui-même, tandis que le filtrage
+# par créneau est une commodité pour le VOCAL, qui n'a pas de tableau où
+# chercher. Ajouter le filtre au websocket serait ajouter du code que personne
+# n'exerce — et du code jamais exercé est du code faux qui s'ignore.
+#
+# Ce que la parité continue d'exiger : le REFUS d'une valeur hors
+# `MEAL_SLOT_KEYS` doit être identique partout où ce champ existe, donc entre
+# `query_meals` et `home_stock/meal/plan`, qui le porte depuis le lot 3.
+
+async def test_slot_key_asymmetry_is_a_documented_choice(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """`meals/list` n'a pas de `slot_key`, et l'accepterait-il en silence que
+    ce test tomberait — un champ ignoré est pire qu'un champ refusé."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+    verdict = await _websocket_verdict(
+        hass, client, 1, "home_stock/meals/list",
+        {"start": "2026-08-21", "end": "2026-08-21", "slot_key": "dinner"})
+    assert verdict == "refusé"
+
+    # Et le service, lui, l'accepte : c'est l'asymétrie, écrite.
+    assert await _service_verdict(
+        hass, "query_meals",
+        {"start": "2026-08-21", "end": "2026-08-21", "slot_key": "dinner"}
+    ) == "accepté"
+
+
+async def test_the_slot_vocabulary_is_the_same_on_both_surfaces(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """`query_meals` et `home_stock/meal/plan` refusent le même mot."""
+    await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    from_websocket = await _websocket_verdict(
+        hass, client, 1, "home_stock/meal/plan",
+        {"day": "2026-08-21", "slot_key": "gouter", "note": "x"})
+    from_service = await _service_verdict(
+        hass, "query_meals",
+        {"start": "2026-08-21", "end": "2026-08-21", "slot_key": "gouter"})
+
+    assert from_websocket == from_service == "refusé"

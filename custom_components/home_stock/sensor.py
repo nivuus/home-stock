@@ -255,13 +255,18 @@ class NextMealSensor(HomeStockEntity, SensorEntity):
         meal = self._meal
         if meal is None:
             return {"day": None, "slot": None, "recipe_id": None,
-                    "missing_ingredients": 0}
+                    "missing_ingredients": 0, "meal_id": None}
         missing = (self.coordinator.data.get("meals") or {}).get("missing", [])
         return {
             "day": meal["day"],
             "slot": meal["slot_key"],
             "recipe_id": meal["recipe_id"],
             "missing_ingredients": len(missing),
+            # Lot 6 : ce que la tablette et le vocal doivent VALIDER après
+            # l'avoir annoncé. `None` et non `0` quand il n'y a pas de repas :
+            # zéro est un identifiant possible dans un monde où les clés
+            # commencent à 0, et cette entité n'a pas à laisser le doute.
+            "meal_id": meal["id"],
         }
 
 

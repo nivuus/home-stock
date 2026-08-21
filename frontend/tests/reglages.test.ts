@@ -448,3 +448,77 @@ describe('<home-stock-reglages> : magasins, parcours et récurrences (lot 4)', (
       .toContain('12,4 Mo');
   });
 });
+
+// --- lot 6 : trois colonnes au-delà de 1000 px ------------------------------
+
+const MAGASINS = [
+  { id: 1, name: 'Leclerc' },
+  { id: 2, name: 'Biocoop' },
+];
+
+function reponsesCompletes(type: string): Promise<unknown> {
+  if (type === 'home_stock/stores/list') return Promise.resolve({ stores: MAGASINS });
+  if (type === 'home_stock/recurring/list') return Promise.resolve({ recurring: [] });
+  return reponsesParDefaut(type);
+}
+
+async function monterReglages(options: { large: boolean; file?: unknown }) {
+  const connexion = connexionFactice(reponsesCompletes);
+  const element = monter({ connexion, file: options.file }) as HTMLElement & {
+    large: boolean; updateComplete: Promise<boolean>;
+  };
+  element.large = options.large;
+  await laisserPasserLesMicrotaches();
+  await element.updateComplete;
+  return element;
+}
+
+const ordreDes = (element: HTMLElement, selecteur: string): string[] =>
+  Array.from(element.shadowRoot!.querySelectorAll(selecteur)).map((n) => n.textContent!.trim());
+
+describe('<home-stock-reglages> : la vue dense (lot 6)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('rend trois colonnes au-delà de 1000 px', async () => {
+    const e = await monterReglages({ large: true });
+    const colonnes = e.shadowRoot!.querySelector('.trois-colonnes');
+    expect(colonnes).not.toBeNull();
+    // Les six sections restent les six sections : la largeur les dispose,
+    // elle n'en ajoute ni n'en retire une seule.
+    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(6);
+  });
+
+  it('reste empilée en étroit', async () => {
+    const e = await monterReglages({ large: false });
+    expect(e.shadowRoot!.querySelector('.trois-colonnes')).toBeNull();
+    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(6);
+  });
+
+  it('réordonne dans la BONNE liste quand elles sont côte à côte', async () => {
+    // Le piège de la tâche : trois listes réordonnables côte à côte. Déplacer
+    // « Frais » ne doit jamais toucher aux magasins — ce qui arriverait si la
+    // cible du déplacement se calculait sur la position dans le document
+    // plutôt que dans sa propre liste.
+    const file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
+                   rejouer: vi.fn().mockResolvedValue(undefined) };
+    const e = await monterReglages({ large: true, file });
+    const magasinsAvant = ordreDes(e, '.magasin-onglet');
+
+    const monterBoutons = e.shadowRoot!.querySelectorAll('.monter') as NodeListOf<HTMLButtonElement>;
+    monterBoutons[1].click();                       // « Frais » remonte d'un cran
+    await e.updateComplete;
+
+    expect(file.ajouter).toHaveBeenCalledWith('home_stock/aisles/reorder',
+      { aisle_ids: [2, 1, 3] });
+    expect(file.ajouter).toHaveBeenCalledTimes(1);  // une seule liste touchée
+    expect(ordreDes(e, '.rayon-nom')).toEqual(['Frais', 'Épicerie', 'Surgelés']);
+    expect(ordreDes(e, '.magasin-onglet')).toEqual(magasinsAvant);
+  });
+
+  it('garde emplacements et magasins lisibles et intacts en large', async () => {
+    const e = await monterReglages({ large: true });
+    expect(ordreDes(e, '.emplacement-nom')).toEqual(['Placard', 'Frigo']);
+    expect(ordreDes(e, '.magasin-onglet')).toEqual(['Leclerc', 'Biocoop']);
+    expect(e.shadowRoot!.querySelector('.resynchroniser')).not.toBeNull();
+  });
+});

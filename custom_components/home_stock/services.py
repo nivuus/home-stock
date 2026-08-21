@@ -195,6 +195,9 @@ ADAPT_RECIPE_SCHEMA = vol.Schema({vol.Required("recipe_id"): _id})
 QUERY_MEALS_SCHEMA = vol.Schema({
     vol.Required("start"): _meal_day,
     vol.Required("end"): _meal_day,
+    # Lot 6 : la porte du vocal. `vol.In(MEAL_SLOT_KEYS)` et non une liste
+    # recopiée — le vocabulaire des créneaux a UN seul propriétaire, `const.py`.
+    vol.Optional("slot_key"): vol.In(MEAL_SLOT_KEYS),
 })
 
 
@@ -731,6 +734,12 @@ def async_register_services(hass: HomeAssistant) -> None:
         runtime = _entry(hass).runtime_data
         meals = await _run(hass, partial(
             runtime.manager.list_meals, call.data["start"], call.data["end"]))
+        # Filtré ici et non dans le dépôt : `list_meals` rend déjà la plage, et
+        # une variante de requête SQL ouvrirait une SECONDE façon de lire un
+        # planning pour quelques dizaines de lignes.
+        slot = call.data.get("slot_key")
+        if slot is not None:
+            meals = [m for m in meals if m["slot_key"] == slot]
         return {"meals": meals}
 
     hass.services.async_register(DOMAIN, "resync_off", resync_off, schema=RESYNC_SCHEMA)

@@ -504,3 +504,135 @@ describe('« Ma portion » au catalogue', () => {
     expect(element.shadowRoot!.textContent).toContain('vide = déduite automatiquement');
   });
 });
+
+// --- lot 6 : la vue dense, au-delà de 1000 px -------------------------------
+
+const TROIS_CENTS = Array.from({ length: 300 }, (_, i) =>
+  produit({ id: i + 1, name: `Produit ${i + 1}`, aisle_id: (i % 2) + 1,
+            category_id: 7, min_quantity: 200 }));
+
+function reponsesTroisCents(type: string, charge?: any): Promise<unknown> {
+  if (type === 'home_stock/products/list') return Promise.resolve({ products: TROIS_CENTS });
+  if (type === 'home_stock/batches/list') return Promise.resolve({ batches: [] });
+  if (type === 'home_stock/product/get') {
+    return Promise.resolve({ product: TROIS_CENTS.find((p) => p.id === charge?.product_id) });
+  }
+  return reponsesParDefaut(type, charge);
+}
+
+async function monterCatalogue(options: { large: boolean; file?: unknown }) {
+  const connexion = connexionFactice(reponsesTroisCents);
+  const element = monter({ connexion, file: options.file }) as HTMLElement & {
+    large: boolean; updateComplete: Promise<boolean>;
+  };
+  element.large = options.large;
+  await laisserPasserLesMicrotaches();
+  await element.updateComplete;
+  return element;
+}
+
+function entetes(element: HTMLElement): string[] {
+  return Array.from(element.shadowRoot!.querySelectorAll('thead th'))
+    .map((th) => th.textContent!.trim());
+}
+
+function ligne(element: HTMLElement, index: number): HTMLElement {
+  return element.shadowRoot!.querySelectorAll('tbody tr')[index] as HTMLElement;
+}
+
+describe('<home-stock-catalogue> : la vue dense (lot 6)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('rend un tableau à colonnes au-delà de 1000 px', async () => {
+    const e = await monterCatalogue({ large: true });
+    expect(e.shadowRoot!.querySelector('table')).not.toBeNull();
+    // Les cinq colonnes de données de la spec, plus la colonne d'actions —
+    // les boutons doivent bien tenir quelque part, et son en-tête reste vide
+    // pour ne pas annoncer une donnée qui n'en est pas une.
+    expect(entetes(e)).toEqual(['Nom', 'Unité', 'Seuil', 'Catégorie',
+                                'Conservation', '']);
+    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(300);
+  });
+
+  it('reste une liste empilée en étroit', async () => {
+    const e = await monterCatalogue({ large: false });
+    expect(e.shadowRoot!.querySelector('table')).toBeNull();
+    expect(e.shadowRoot!.querySelectorAll('.ligne')).toHaveLength(300);
+  });
+
+  it('édite une ligne sans quitter la liste', async () => {
+    // C'est TOUT l'intérêt de la largeur : corriger, voir la ligne suivante,
+    // corriger. Un formulaire qui remplace la liste annule le gain.
+    const ajouter = vi.fn().mockReturnValue({ cle: 'c', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
+    const e = await monterCatalogue({ large: true, file });
+
+    (ligne(e, 12).querySelector('.modifier') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(300);
+
+    saisir(e, '.champ-seuil', '4');
+    await e.updateComplete;
+    (e.shadowRoot!.querySelector('.enregistrer') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+
+    // `min_stock` n'existe pas : la colonne s'appelle `min_quantity`, des
+    // deux côtés du websocket depuis le lot 1.
+    expect(ajouter).toHaveBeenCalledWith('home_stock/product/update', {
+      product_id: 13, fields: { min_quantity: 4 },
+    });
+  });
+
+  it("n'ouvre jamais l'unité de base ni la catégorie, même en large", async () => {
+    // Élargir un écran n'élargit pas ses droits : seul
+    // `home_stock/product/convert_unit` change une unité, atomiquement, et
+    // aucun `categories/list` n'existe pour vérifier une saisie.
+    const e = await monterCatalogue({ large: true });
+    (ligne(e, 12).querySelector('.modifier') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+
+    expect(e.shadowRoot!.querySelector('.champ-unite')).toBeNull();
+    expect(e.shadowRoot!.querySelector('.champ-categorie')).toBeNull();
+  });
+
+  it('refuse une virgule décimale mal formée plutôt que de deviner, en large aussi', async () => {
+    // `Number('7 jours')` vaut NaN et NaN sérialisé vaut null : sans ce refus,
+    // une saisie douteuse EFFACE un seuil en laissant croire à un
+    // enregistrement réussi. La règle vient de l'étroit ; elle ne se perd pas
+    // en chemin.
+    const ajouter = vi.fn().mockReturnValue({ cle: 'c', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
+    const e = await monterCatalogue({ large: true, file });
+
+    (ligne(e, 0).querySelector('.modifier') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+    saisir(e, '.champ-conservation', '7 jours');
+    await e.updateComplete;
+    (e.shadowRoot!.querySelector('.enregistrer') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+
+    expect(ajouter).not.toHaveBeenCalled();
+    expect(e.shadowRoot!.querySelector('.erreur')!.textContent)
+      .toContain('nombre invalide');
+  });
+
+  it('passe toute écriture par la file hors-ligne, jamais par la connexion', async () => {
+    const e = await monterCatalogue({ large: true });   // aucune file fournie
+    const connexion = (e as any).connexion;
+    (ligne(e, 0).querySelector('.modifier') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await e.updateComplete;
+    saisir(e, '.champ-seuil', '9');
+    await e.updateComplete;
+    (e.shadowRoot!.querySelector('.enregistrer') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+
+    expect(connexion.appeler).not.toHaveBeenCalledWith(
+      'home_stock/product/update', expect.anything());
+  });
+});

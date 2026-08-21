@@ -1,0 +1,93 @@
+blueprint:
+  name: Garde-manger — rappel de la liste de courses
+  description: >-
+    Chaque jour à l'heure choisie, fait annoncer par l'assistant conversationnel
+    ce qu'il reste à acheter, groupé par rayon.
+
+    Déclencheur horaire volontaire, comme pour les dates limites : le composant
+    constate un changement au moment où son coordinateur se rafraîchit, parfois
+    à trois heures du matin. Ce qu'un foyer veut, c'est « avant de partir,
+    rappelle-moi ce qu'il faut ».
+
+    L'annonce reste courte par construction : le compte, puis les rayons.
+    Le détail des lignes n'est dit que si la liste tient dans « Détail jusqu'à »
+    articles — au-delà, une énumération ne se retient pas et fait ignorer
+    l'annonce entière.
+
+    À importer une fois ; ce fichier n'est jamais installé par l'intégration.
+  domain: automation
+  input:
+    heure:
+      name: Heure de l'annonce
+      default: "18:00:00"
+      selector:
+        time:
+    agent:
+      name: Agent conversationnel
+      default: conversation.personas_studio_home_manager
+      selector:
+        entity:
+          domain: conversation
+    capteur:
+      name: Capteur de la liste de courses
+      default: sensor.home_stock_shopping_list
+      selector:
+        entity:
+          domain: sensor
+    detail_max:
+      name: Détail jusqu'à
+      description: >-
+        Nombre d'articles au-delà duquel l'annonce se contente du compte et des
+        rayons, sans énumérer les lignes.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 30
+          mode: box
+
+triggers:
+  - trigger: time
+    at: !input heure
+
+# Aucune ligne du tout : rien à annoncer, et le silence est ici la bonne
+# réponse — c'est une annonce non sollicitée, pas une question posée.
+conditions:
+  - condition: numeric_state
+    entity_id: !input capteur
+    above: 0
+
+# `!input capteur` ne s'interpole pas dans le Jinja ci-dessous : il doit passer
+# par une variable nommée, sinon le texte lu ne voit aucune ligne — sans la
+# moindre erreur. Piège déjà payé par `dlc_bleuenn.yaml`.
+variables:
+  nom_capteur: !input capteur
+  detail_max: !input detail_max
+
+actions:
+  - action: conversation.process
+    data:
+      agent_id: !input agent
+      text: >-
+        {% set lignes = (state_attr(nom_capteur, 'items') or [])
+                        | rejectattr('checked') | list %}
+        {%- set total = lignes | count %}
+        {%- if total == 0 %}
+        Il n'y a plus rien à acheter : toute la liste est cochée.
+        {%- else %}
+        {#- Pas d'accumulateur : le bac à sable Jinja de Home Assistant refuse
+            `list.append`, et l'erreur ne sort qu'au RENDU — donc le soir, à
+            l'heure de l'annonce, sans que rien ne l'ait vue avant. #}
+        {%- set etiquettes = lignes | map(attribute='aisle')
+                             | map('default', 'Sans rayon', true) | list %}
+        {{ total }} article{{ 's' if total > 1 else '' }} à acheter
+        {%- for rayon in etiquettes | unique | list %}
+        {{- ', dont ' ~ (etiquettes | select('equalto', rayon) | list | count)
+             ~ ' au rayon ' ~ rayon | lower }}
+        {%- endfor %}
+        {%- if total <= detail_max %} :
+        {% for l in lignes %}{{ l.name }}
+        {%- if not loop.last %}{{ ' et ' if loop.revindex == 2 else ', ' }}{% endif %}
+        {%- endfor %}
+        {%- endif %}.
+        {%- endif %}

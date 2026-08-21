@@ -83,7 +83,18 @@ const CONTRASTE_MIN = 4.5;
 const FORMATS = [
   { nom: 'Téléphone (Pixel, 412×915)', width: 412, height: 915 },
   { nom: 'Bureau (PC, 1280×800)', width: 1280, height: 800 },
+  // Lot 6 : le 1280 × 800 est à peine au-dessus du seuil `large` (1000 px) —
+  // il attrape les débordements, le cas où la mise en page dense est la plus
+  // serrée. Celui-ci attrape l'inverse : l'étirement, le vide, la ligne de
+  // texte trop longue pour être lue. Les deux défauts existent, aucun des
+  // deux formats précédents ne les voit tous les deux, et c'est pour ça qu'on
+  // garde les trois.
+  { nom: 'Grand écran (bureau, 1920×1080)', width: 1920, height: 1080 },
 ];
+
+/** Le format dans lequel la vue dense est la plus lâche — celui où les
+ *  scénarios de `SCENARIOS_LARGES` s'exécutent, et le seul. */
+const FORMAT_LARGE = FORMATS[FORMATS.length - 1];
 
 // --- construction du bundle, en mémoire ------------------------------------
 
@@ -1338,6 +1349,67 @@ async function executerScenarios(navigateur, urlHarnais) {
 // bouton de l'écran ne faisait alors rien du tout : ni erreur, ni pavé de
 // saisie. Ce contrôle-ci construit avec minification et pilote le repli
 // clavier pour de vrai.
+// --- les scénarios propres à la vue dense -----------------------------------
+//
+// Exécutés dans le SEUL 1920 × 1080. Ajoutés à `SCENARIOS`, ils tourneraient
+// aussi en 412 px, où ils mesureraient la mise en page ÉTROITE en croyant
+// mesurer la dense — un contrôle vert qui ne prouve rien. Une liste à part,
+// et son nom le dit.
+const SCENARIOS_LARGES = [
+  {
+    nom: 'Catalogue dense : tableau de trois cents produits, édition ouverte à côté',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/products/list': { products: PRODUITS_CATALOGUE },
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/batches/list': { batches: LOTS_CATALOGUE },
+        'home_stock/product/get': { product: PRODUITS_CATALOGUE[0] },
+      },
+    },
+    actions: [
+      { type: 'click-nav', texte: 'Catalogue' },
+      { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
+    ],
+    ecranAttendu: 'home-stock-catalogue',
+    // Le tableau ET le volet d'édition : c'est leur COEXISTENCE qui fait
+    // l'écran dense, et un volet qui aurait remplacé la liste passerait ce
+    // contrôle-ci sans elle.
+    elementAttendu: { enfant: 'home-stock-catalogue', selector: '.dense .volet-edition' },
+  },
+];
+
+async function executerScenariosLarges(navigateur, urlHarnais) {
+  console.log(`\n=== Vue dense (${FORMAT_LARGE.nom}) ===`);
+  let fautes = 0;
+  for (const scenario of SCENARIOS_LARGES) {
+    const contexte = await navigateur.newContext({
+      viewport: { width: FORMAT_LARGE.width, height: FORMAT_LARGE.height },
+    });
+    const page = await contexte.newPage();
+    await page.goto(urlHarnais, { waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: scenario.fixture, actions: scenario.actions,
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      ecranAttendu: scenario.ecranAttendu ?? null,
+      elementAttendu: scenario.elementAttendu ?? null,
+      sansScannerNatif: scenario.sansScannerNatif ?? false,
+    });
+    await contexte.close();
+
+    if (aDesDefauts(resultat)) {
+      fautes += 1;
+      console.log(`  ✗ ${scenario.nom}`);
+      for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+    } else {
+      console.log(`  ✓ ${scenario.nom}`);
+    }
+  }
+  return fautes;
+}
+
 const SCENARIOS_MINIFIES = [
   {
     nom: 'Repli clavier du scanner (sans caméra système ni BarcodeDetector)',
@@ -1524,6 +1596,12 @@ async function main() {
   const navigateur = await lancerNavigateur();
   try {
     let { fautes, total } = await executerScenarios(navigateur, urlHarnais);
+    // Le compte porte sur des EXÉCUTIONS, pas sur des scénarios : chaque
+    // scénario de `SCENARIOS` tourne dans les trois formats. Les scénarios
+    // denses, eux, n'en connaissent qu'un — et ils comptent quand même, sans
+    // quoi le chiffre affiché mentirait.
+    fautes += await executerScenariosLarges(navigateur, urlHarnais);
+    total += SCENARIOS_LARGES.length;
     const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie);
     fautes += fautesMinifie;
     total += SCENARIOS_MINIFIES.length;

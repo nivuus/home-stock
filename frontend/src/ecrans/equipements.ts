@@ -87,6 +87,11 @@ function stockLisible(consommable: Consommable): string {
 @customElement('home-stock-equipements')
 export class EcranEquipements extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   @property({ attribute: false }) file?: FileAttente;
 
   @state() private equipements: Equipement[] = [];
@@ -170,6 +175,25 @@ export class EcranEquipements extends LitElement {
     }
     button.delier { background: var(--secondary-background-color); color: var(--primary-text-color); }
     .lien { word-break: break-all; }
+
+    /* --- la vue dense (lot 6), au-delà de 1000 px ------------------------- */
+    .tableau { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .tableau th, .tableau td {
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--divider-color, #ddd);
+      overflow-wrap: anywhere; font-size: 0.9rem;
+    }
+    .tableau th { font-size: 0.85rem; color: var(--secondary-text-color); font-weight: 600; }
+    .tableau .ligne { height: 62px; }
+    /* Le bouton d'ouverture garde la classe de la carte étroite : c'est le
+       MÊME geste, et un seul sélecteur le désigne dans les deux mises en page
+       — y compris pour le vérificateur de rendu, qui n'a pas à connaître deux
+       noms pour une seule action. */
+    .tableau .ouvrir {
+      display: block; width: 100%; min-height: 48px; text-align: left; border: none;
+      border-radius: 8px; padding: 8px; margin-bottom: 0; font-size: 0.95rem;
+      font-weight: 600;
+      background: var(--secondary-background-color); color: var(--primary-text-color);
+    }
   `;
 
   private rendreFiche(fiche: FicheEquipement) {
@@ -228,8 +252,39 @@ export class EcranEquipements extends LitElement {
     `;
   }
 
+  /** Le tableau de la vue dense : une ligne par appareil, l'emplacement en
+   *  colonne plutôt qu'en titre de section. Même argument que le catalogue,
+   *  sur beaucoup moins de lignes — mais comparer deux garanties suppose de
+   *  les voir l'une sous l'autre, ce qu'un empilement par emplacement
+   *  interdit. Aucune information de moins : la garantie et le nombre de
+   *  consommables sont les mêmes phrases qu'en étroit. */
+  private rendreTableau() {
+    return html`
+      <table class="tableau">
+        <thead>
+          <tr><th>Appareil</th><th>Emplacement</th><th>Garantie</th><th>Consommables</th></tr>
+        </thead>
+        <tbody>
+          ${this.equipements.map((equipement) => html`
+            <tr class="ligne">
+              <td class="libelle">
+                <button class="equipement ouvrir" @click=${() => this.ouvrir(equipement)}>
+                  ${equipement.name}
+                </button>
+              </td>
+              <td class="detail">${equipement.location_name ?? 'Sans emplacement'}</td>
+              <td class="detail">${garantieLisible(equipement)}</td>
+              <td class="detail">${equipement.consumable_count || '—'}</td>
+            </tr>
+          `)}
+        </tbody>
+      </table>
+    `;
+  }
+
   render() {
     if (this.fiche) return this.rendreFiche(this.fiche);
+    if (this.large) return this.rendreTableau();
     return html`
       ${this.groupes().map(([emplacement, equipements]) => html`
         <section class="section">

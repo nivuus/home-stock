@@ -261,3 +261,73 @@ describe('<home-stock-ticket>', () => {
       .toContain('2 envois');
   });
 });
+
+// --- lot 6 : le rapprochement côte à côte -----------------------------------
+//
+// Le brief demandait « la photo à gauche, les lignes à droite ». Le panneau
+// n'a JAMAIS affiché la photo d'un ticket : `DonneesTicket` ne porte qu'un
+// `media_content_id`, un identifiant de source média que le navigateur ne sait
+// pas charger tel quel. Ce qu'on compare vraiment en rapprochant, c'est le
+// TEXTE LU (`raw`) contre les lignes — et lui existe. C'est donc lui qui passe
+// à gauche.
+
+function monterTicket(options: { large: boolean; ticket?: DonneesTicket;
+                                 file?: ReturnType<typeof fausseFile> }) {
+  const element = monter({ ticket: options.ticket ?? ticket({
+    raw: 'LECLERC\nLAIT 1L      1,05\nPAIN         1,05\nTOTAL        2,10',
+    lines: [ligneLue({ id: 1, candidates: [{ line_id: 10, label: 'Lait 1 L', score: 0.9 }] }),
+            ligneLue({ id: 2 })],
+  }), file: options.file }) as HTMLElement & { large: boolean; updateComplete: Promise<boolean> };
+  element.large = options.large;
+  return element;
+}
+
+describe('<home-stock-ticket> : la vue dense (lot 6)', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('montre le texte lu et les lignes en même temps au-delà de 1000 px', async () => {
+    const e = monterTicket({ large: true });
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelector('.deux-volets')).not.toBeNull();
+    expect(e.shadowRoot!.querySelector('.volet-ticket')!.textContent)
+      .toContain('LAIT 1L');
+    expect(e.shadowRoot!.querySelectorAll('.ligne-ticket')).toHaveLength(2);
+  });
+
+  it('reste empilé en étroit', async () => {
+    const e = monterTicket({ large: false });
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelector('.deux-volets')).toBeNull();
+    expect(e.shadowRoot!.querySelectorAll('.ligne-ticket')).toHaveLength(2);
+  });
+
+  it('garde le volet du ticket lisible : il ne prend jamais la moitié de la largeur', async () => {
+    // Un ticket de caisse est haut et étroit. Lui donner la moitié d'un
+    // 1920 px l'étirerait en lignes illisibles et écraserait les lignes
+    // rapprochées, qui sont le vrai travail de cet écran.
+    const styles = (customElements.get('home-stock-ticket') as any).styles;
+    const css = [styles].flat().map((s: any) => s.cssText).join('\n');
+    expect(css).toContain('.deux-volets');
+    expect(css).toMatch(/\.deux-volets\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*\d+px\)/);
+  });
+
+  it('rapproche une ligne sans faire disparaître le texte lu', async () => {
+    const file = fausseFile();
+    const e = monterTicket({ large: true, file });
+    await e.updateComplete;
+    const avant = e.shadowRoot!.querySelector('.volet-ticket')!.textContent;
+
+    (e.shadowRoot!.querySelector('.rapprocher') as HTMLButtonElement).click();
+    await e.updateComplete;
+
+    expect(file.ajouter).toHaveBeenCalled();
+    expect(e.shadowRoot!.querySelector('.volet-ticket')!.textContent).toBe(avant);
+  });
+
+  it('dit ce qu’il en est quand le ticket n’a pas encore été lu', async () => {
+    // Pas de texte brut : le volet gauche ne reste pas vide sans explication.
+    const e = monterTicket({ large: true, ticket: ticket({ raw: null, state: 'pending' }) });
+    await e.updateComplete;
+    expect(e.shadowRoot!.querySelector('.volet-ticket')!.textContent!.trim()).not.toBe('');
+  });
+});

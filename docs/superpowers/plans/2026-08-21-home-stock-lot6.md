@@ -178,7 +178,7 @@ Ces règles lient **toutes** les tâches. Elles sont recopiées de la spec et de
 
 **Pourquoi cet attribut.** La tablette affiche le repas suivant, puis doit pouvoir le **valider** (`home_stock/meal/validate`, qui exige un `meal_id`). Sans lui, elle devrait rappeler `home_stock/meals/list` juste pour retrouver l'identifiant de ce qu'elle affiche déjà — un aller-retour pour une donnée qu'elle a sous les yeux. Le vocal a le même besoin. L'attribut est **déjà calculé** : c'est une ligne.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_meal_sensors.py`, à la suite des tests existants du capteur. Lire d'abord le haut du fichier pour reprendre ses fixtures (planification d'un repas, rafraîchissement du coordinateur) plutôt que d'en écrire d'autres.
 
@@ -233,12 +233,12 @@ async def test_a_ticked_shopping_line_leaves_the_count(hass, ...):
     ...
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q`
 Expected: FAIL — `KeyError: 'meal_id'`, puis l'échec des deux tests d'état `todo` s'ils ne décrivent pas la réalité (dans ce cas, **corriger le test, pas le composant** : la forme actuelle est celle dont la tablette dépend).
 
-- [ ] **Step 3: Publier l'attribut**
+- [x] **Step 3: Publier l'attribut**
 
 Dans `custom_components/home_stock/sensor.py`, `NextMealSensor.extra_state_attributes` — les deux branches, jamais une seule :
 
@@ -265,21 +265,21 @@ Dans `custom_components/home_stock/sensor.py`, `NextMealSensor.extra_state_attri
 
 Vérifier le nom exact de la colonne rendue par `repo.next_meal` avant d'écrire `meal["id"]` — c'est le seul point de cette tâche qui peut se tromper en silence.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Remplacer `"meal_id": None` par `"meal_id": 0` dans la branche « aucun repas ». `test_next_meal_without_a_meal_has_a_none_meal_id` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète**
+- [x] **Step 6: Suite complète**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS — **1877 + 5 tests**, aucun échec.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/sensor.py tests/test_meal_sensors.py tests/test_entities.py
@@ -302,7 +302,7 @@ git commit -m "feat: next_meal publishes meal_id, and todo states are pinned as 
 
 **Le filtrage se fait dans le service, pas dans le dépôt.** `list_meals` rend déjà la plage ; filtrer une liste de quelques dizaines d'entrées en Python coûte moins qu'une variante de requête SQL, et surtout **n'ouvre pas une seconde façon de lire un planning**.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_services_meals.py` :
 
@@ -378,12 +378,12 @@ async def test_the_slot_vocabulary_is_the_same_on_both_surfaces(hass, ...):
     ...
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_services_meals.py tests/test_surface_parity.py -q`
 Expected: FAIL — `vol.Invalid: extra keys not allowed @ data['slot_key']`
 
-- [ ] **Step 3: Écrire le schéma et le filtre**
+- [x] **Step 3: Écrire le schéma et le filtre**
 
 Dans `services.py` :
 
@@ -424,21 +424,21 @@ Dans `services.yaml`, sous `query_meals.fields`, en **français** :
             - { value: snack, label: Collation }
 ```
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_services_meals.py tests/test_surface_parity.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Remplacer `vol.In(MEAL_SLOT_KEYS)` par `str`. `test_query_meals_refuses_an_unknown_slot` doit tomber. Puis remplacer le filtre par `m["slot_key"] == slot or True` : `test_query_meals_filters_on_a_slot` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète**
+- [x] **Step 6: Suite complète**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/services.py custom_components/home_stock/services.yaml \
@@ -462,7 +462,7 @@ git commit -m "feat: query_meals takes an optional slot_key, and the asymmetry i
 - Produit sept noms d'intents, **en anglais** comme tout identifiant du composant : `HomeStockQueryStock`, `HomeStockQueryMeals`, `HomeStockQueryShoppingList`, `HomeStockAddToShoppingList`, `HomeStockQueryExpirations`, `HomeStockValidateMeal`, `HomeStockQueryToday`.
 - Trois listes de slots : `product` (`wildcard: true`), `quantity` (`wildcard: true`), `slot` (valeurs → `breakfast`/`lunch`/`dinner`/`snack`).
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_voice_package.py`. **Ce fichier ne démarre pas Home Assistant et ne sort pas sur le réseau** : il lit deux fichiers YAML livrés et vérifie qu'ils tiennent ensemble.
 
@@ -543,12 +543,12 @@ def test_no_sentence_asks_to_throw_away_or_to_remove_a_line():
         assert interdit not in texte, interdit
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — `FileNotFoundError: custom_sentences/fr/home_stock.yaml`
 
-- [ ] **Step 3: Écrire le fichier de phrases**
+- [x] **Step 3: Écrire le fichier de phrases**
 
 Créer `custom_sentences/fr/home_stock.yaml`. Forme, sur l'exemple 1 :
 
@@ -596,12 +596,12 @@ lists:
 
 Les sept intents sont écrits en entier, avec au moins deux variantes chacun, en reprenant mot pour mot le tableau du § 9.1 de la spec.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS (les tests qui portent sur le paquet `intent_script` restent rouges — ils sont l'objet de la Task 4 ; les écrire maintenant et les laisser rouges est **interdit** : ne les ajouter qu'en Task 4.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_sentences/fr/home_stock.yaml tests/test_voice_package.py
@@ -633,7 +633,7 @@ git commit -m "feat: the seven French sentences of the pantry, delivered never i
 
 C'est le « deux appuis » de la tablette, transposé à l'oral. **Le `dry_run` par défaut du lot 3 vient de payer une seconde fois.**
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_voice_package.py`, à la suite. Le patron est **exactement** celui de `test_event_expiration.py` (validation d'un blueprint livré) : charger le YAML, puis le passer dans les schémas de Home Assistant eux-mêmes — un YAML qui « a l'air bon » n'est pas un YAML que HA accepte.
 
@@ -708,12 +708,12 @@ def test_every_intent_answers_something_when_there_is_nothing():
         assert "{% else %}" in corps["speech"]["text"], nom
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — `FileNotFoundError: packages/home_stock_intents.yaml`
 
-- [ ] **Step 3: Écrire le paquet**
+- [x] **Step 3: Écrire le paquet**
 
 Créer `packages/home_stock_intents.yaml`. Extrait, sur l'exemple 1 et l'exemple 6 :
 
@@ -761,20 +761,20 @@ intent_script:
 
 Les sept sont écrits en entier. Le second tour de `HomeStockValidateMeal` est porté par une phrase de confirmation déclarée en Task 3 et par une seconde clé d'intent-script documentée dans le fichier — le mécanisme exact (intent de confirmation dédié) est **écrit dans le fichier, en commentaire, à côté du code qui l'implémente**, pour que le propriétaire puisse le relire.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents**
+- [x] **Step 5: Vérifier que les tests ont des dents**
 
 Retirer `dry_run: true` du premier tour : `test_the_meal_intent_previews_before_it_writes` doit tomber. Remplacer un `action:` par `service:` : `test_every_action_validates_through_home_assistant` doit tomber. Ajouter `home_stock.waste` dans un `action` : `test_no_intent_calls_a_writing_service_other_than_the_two_allowed` doit tomber. Remettre le code correct après chaque mutation.
 
-- [ ] **Step 6: Les sept phrases dans `docs/exploitation.md`**
+- [x] **Step 6: Les sept phrases dans `docs/exploitation.md`**
 
 Ajouter la table des sept phrases, avec leurs variantes **et leur réponse attendue** — c'est le document qu'on relit quand une phrase ne marche pas, et il doit être **rejouable à la main en trois minutes**.
 
-- [ ] **Step 7: Suite complète et commit**
+- [x] **Step 7: Suite complète et commit**
 
 ```bash
 ./scripts/test.sh -q
@@ -800,7 +800,7 @@ git commit -m "feat: the intent_script package, with a two-turn confirmation bef
 
 **Refusé, et c'est écrit ici pour que personne n'aille le chercher** : l'alerte de fin de garantie à la voix, que le lot 5 (§ 18) laissait au lot 6. Une fin de garantie se traite **avec une facture sous les yeux**, pas en écoutant une enceinte. Le capteur `sensor.home_stock_warranty_next` reste disponible pour qui veut l'automation.
 
-- [ ] **Step 1: Écrire le test**
+- [x] **Step 1: Écrire le test**
 
 Dans `tests/test_voice_package.py`, en reprenant **mot pour mot** le patron de `tests/test_event_expiration.py` (chargement, substitution des `!input` par leurs défauts, `cv.CONDITION_SCHEMA` et `cv.SCRIPT_SCHEMA`) :
 
@@ -838,25 +838,25 @@ def test_the_shopping_blueprint_says_something_on_an_empty_list_or_nothing_at_al
     ...
 ```
 
-- [ ] **Step 2: Lancer le test, vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test, vérifier qu'il échoue**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — fichier absent
 
-- [ ] **Step 3: Écrire le blueprint**
+- [x] **Step 3: Écrire le blueprint**
 
 Créer `blueprints/automation/home_stock/courses_bleuenn.yaml`, dans la forme exacte de `dlc_bleuenn.yaml` : bloc `blueprint` avec `name`, `description` (dont la phrase « À importer une fois ; ce fichier n'est jamais installé par l'intégration. »), `domain: automation`, quatre `input`, puis `triggers` / `conditions` / `variables` / `actions`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Interpoler `!input capteur` directement dans le template au lieu de passer par `nom_capteur` : `test_the_shopping_blueprint_passes_its_entity_as_a_variable` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète et commit**
+- [x] **Step 6: Suite complète et commit**
 
 ```bash
 ./scripts/test.sh -q
@@ -880,7 +880,7 @@ git commit -m "feat: courses_bleuenn, the third blueprint — delivered, never i
 
 **Décision sur `narrow`.** Le frontend hôte sait s'il est étroit ; on n'a pas à le redécouvrir. **`large` reste la mesure qui décide** (elle vaut aussi hors panneau HA, dans le harnais du vérificateur, qui ne fournit pas `narrow`), mais un hôte qui affirme `narrow === true` **force** `large` à faux : c'est le cas de la barre latérale repliée sur une tablette large, où la place réelle du panneau est bien plus petite que `innerWidth`. Une seule ligne, et elle évite une mise en page dense écrasée dans une colonne de 400 px.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `frontend/tests/panneau.test.ts` :
 
@@ -921,12 +921,12 @@ it('ne casse aucun écran étroit', async () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- panneau`
 Expected: FAIL — les sept écrans ne reçoivent pas `large`, et `narrow` est ignoré.
 
-- [ ] **Step 3: Câbler**
+- [x] **Step 3: Câbler**
 
 Dans `panneau.ts`, la propriété devient une **dérivation** plutôt qu'un état recopié :
 
@@ -943,19 +943,19 @@ Dans `panneau.ts`, la propriété devient une **dérivation** plutôt qu'un éta
 
 puis `.large=${this.large}` sur les sept écrans, à côté de `planning` qui l'a déjà.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test -- panneau`
 Expected: PASS
 
-- [ ] **Step 5: Les deux suites**
+- [x] **Step 5: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: **499 + 4 tests** verts, **47 exécutions** vertes (le format n'a pas encore bougé, et aucun écran n'a encore changé de mise en page — c'est justement ce qu'on veut prouver ici : le câblage seul ne change rien à ce qui se voit).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/panneau.ts frontend/tests/panneau.test.ts
@@ -980,7 +980,7 @@ git commit -m "feat: large reaches the seven dense screens, and a narrow host wi
 
 **Ce que la vue dense n'ouvre pas.** Ni `base_unit` (seul `home_stock/product/convert_unit` le change, atomiquement), ni la catégorie (aucun `home_stock/categories/list` n'existe côté serveur). Les deux restent en **lecture seule**, comme en étroit — élargir un écran n'élargit pas ses droits.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `frontend/tests/catalogue.test.ts` :
 
@@ -1028,28 +1028,28 @@ it('passe toute écriture par la file hors-ligne', async () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- catalogue`
 Expected: FAIL — pas de `<table>`
 
-- [ ] **Step 3: Écrire la mise en page dense**
+- [x] **Step 3: Écrire la mise en page dense**
 
 Ajouter `@property({ type: Boolean }) large = false;` et une branche de rendu. **Une seule branche** — pas deux composants, pas deux fichiers : les données, les commandes et les validations sont les mêmes, seule la disposition change.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test -- catalogue`
 Expected: PASS
 
-- [ ] **Step 5: Les deux suites**
+- [x] **Step 5: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tout vert, **toujours 47 exécutions** — le scénario dense arrive en Task 11.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/catalogue.ts frontend/tests/catalogue.test.ts
@@ -1070,7 +1070,7 @@ git commit -m "feat: the catalogue becomes a table past 1000px, editable in plac
 - Consomme : `large`, `home_stock/journal/series` (`MAX_SERIES_COUNT = 60`), `home_stock/journal/day`.
 - Produit : deux colonnes au-delà de 1000 px — la série à gauche, le détail du jour sélectionné à droite. **Le panneau dessine ses barres lui-même** (lot 2) : rien de neuf à ce sujet ici.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('affiche la série et le détail en même temps au-delà de 1000 px', async () => {
@@ -1108,11 +1108,11 @@ it('corrige un mouvement en large, par la file, avec confirmation', async () => 
 });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- journal`
-- [ ] **Step 3: Écrire la mise en page dense**
-- [ ] **Step 4: Lancer, passer** — `npm test -- journal`
-- [ ] **Step 5: Les deux suites** — `npm test && node outils/verifier-rendu.mjs`, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- journal`
+- [x] **Step 3: Écrire la mise en page dense**
+- [x] **Step 4: Lancer, passer** — `npm test -- journal`
+- [x] **Step 5: Les deux suites** — `npm test && node outils/verifier-rendu.mjs`, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/journal.ts frontend/tests/journal.test.ts
@@ -1135,7 +1135,7 @@ git commit -m "feat: twelve monthly bars and the day's detail, side by side"
 
 **Le piège de `reglages`, et il est réel.** Les trois listes sont **réordonnables**. Un réordonnancement qui marche en colonne unique peut se casser en trois colonnes si la cible de dépôt est calculée sur la position dans le document plutôt que dans sa propre liste. Le test l'exige explicitement.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // liste.test.ts
@@ -1159,11 +1159,11 @@ it('réordonne dans la BONNE liste quand elles sont côte à côte', async () =>
 it('conserve les objectifs nutritionnels et leur validation', async () => { ... });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- liste reglages`
-- [ ] **Step 3: Écrire les deux mises en page**
-- [ ] **Step 4: Lancer, passer** — `npm test -- liste reglages`
-- [ ] **Step 5: Les deux suites**, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- liste reglages`
+- [x] **Step 3: Écrire les deux mises en page**
+- [x] **Step 4: Lancer, passer** — `npm test -- liste reglages`
+- [x] **Step 5: Les deux suites**, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/liste.ts frontend/src/ecrans/reglages.ts \
@@ -1185,7 +1185,7 @@ git commit -m "feat: aisles in columns, settings in three — reordering stays i
 - `ticket` : photo à gauche, lignes rapprochées à droite, au-delà de 1000 px.
 - `equipements`, `piles` : tableau — même argument que le catalogue, sur moins de lignes.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // ticket.test.ts
@@ -1208,11 +1208,11 @@ it('une garantie échue reste signalée dans les deux mises en page', async () =
 });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- ticket equipements piles`
-- [ ] **Step 3: Écrire les trois mises en page**
-- [ ] **Step 4: Lancer, passer** — `npm test -- ticket equipements piles`
-- [ ] **Step 5: Les deux suites**, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- ticket equipements piles`
+- [x] **Step 3: Écrire les trois mises en page**
+- [x] **Step 4: Lancer, passer** — `npm test -- ticket equipements piles`
+- [x] **Step 5: Les deux suites**, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/ticket.ts frontend/src/ecrans/equipements.ts frontend/src/ecrans/piles.ts \
@@ -1246,7 +1246,7 @@ git commit -m "feat: receipt side by side, equipment and batteries as tables"
 
 **Pourquoi 1920 × 1080 et pas seulement 1280 × 800.** Le 1280 × 800 est **à peine au-dessus** du seuil de 1000 px : c'est le cas où la mise en page dense est la plus **serrée**, donc celui qui détecte un débordement. Le 1920 × 1080 est le plus **lâche**, donc celui qui détecte l'inverse — un tableau qui laisse 700 px de vide, un texte qui s'étire sur une ligne illisible. **Les deux défauts existent, et aucun des deux formats actuels ne les voit tous les deux.**
 
-- [ ] **Step 1: Ajouter le format et le scénario dense**
+- [x] **Step 1: Ajouter le format et le scénario dense**
 
 ```js
 const FORMATS = [
@@ -1276,33 +1276,33 @@ const SCENARIOS_LARGES = [
 
 Les six autres écrans adaptés (`journal`, `liste`, `reglages`, `ticket`, `equipements`, `piles`) sont **déjà couverts par des scénarios existants**, qui les mesureront désormais dans **trois** formats — c'est précisément le gain du troisième format, et c'est pourquoi il n'y a qu'un scénario neuf.
 
-- [ ] **Step 2: Câbler l'exécution du nouveau lot de scénarios**
+- [x] **Step 2: Câbler l'exécution du nouveau lot de scénarios**
 
 Une boucle qui réutilise `monterEtMesurer` et `aDesDefauts` — **pas** une seconde implémentation de la mesure. Le compte `total` doit inclure ces exécutions, sinon le chiffre affiché ment.
 
-- [ ] **Step 3: Lancer le vérificateur**
+- [x] **Step 3: Lancer le vérificateur**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: **70 exécutions**, zéro faute. **Si le chiffre affiché n'est pas monté, le format n'a pas été ajouté** — c'est le contrôle le plus simple de cette tâche et le seul qui ne se triche pas.
 
-- [ ] **Step 4: Vérifier que les garde-fous existants tiennent toujours**
+- [x] **Step 4: Vérifier que les garde-fous existants tiennent toujours**
 
 Les deux mécanismes restent en vigueur et doivent être relancés tels quels :
 1. **l'auto-vérification** — le script casse volontairement cinq choses et vérifie qu'il les détecte ; sans elle, « aucun défaut » ne prouve rien ;
 2. **le contrôle d'écran atteint** — chaque scénario doit avoir *atteint* l'écran attendu avant d'être mesuré. Un scénario qui mesure l'écran `scanner` en croyant mesurer `catalogue` est vert et vide.
 
-- [ ] **Step 5: Vérifier que le nouveau format a des dents**
+- [x] **Step 5: Vérifier que le nouveau format a des dents**
 
 Donner au tableau du catalogue une largeur fixe de 2200 px. Le 1920 × 1080 doit signaler un **débordement** ; les deux autres formats ne le voient pas. Remettre le code correct. Puis rendre le libellé d'une colonne de tableau en gris clair (contraste < 4,5:1) : les **trois** formats doivent le signaler.
 
-- [ ] **Step 6: Les deux suites**
+- [x] **Step 6: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tests verts, **70 exécutions** vertes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs
@@ -1331,7 +1331,7 @@ git commit -m "chore: a third viewport, 1920x1080 — 47 render runs become 70"
 
 **Le gain, chiffré** : −3,8 Mo/jour de trafic HTTP, −1 client HTTP (8,3 ko et ses deux bases d'URL selon le protocole), et **−1 chemin de panne** : « Grocy muet » et sa règle « surtout ne pas passer au repas suivant » disparaissent, remplacés par `Etat.estUtilisable`, le masquage générique déjà en place pour toute entité indisponible.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/garde-manger.test.ts` :
 
@@ -1418,28 +1418,28 @@ describe('nombreDlc', () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `tools/wallpanel-app`) : `npm test -- garde-manger`
 Expected: FAIL — `Cannot find module './garde-manger'`
 
-- [ ] **Step 3: Écrire le module**
+- [x] **Step 3: Écrire le module**
 
 Créer `src/garde-manger.ts`. **Commentaires et identifiants en français**, comme tout `src/`. En-tête : ce que ce fichier remplace (`src/grocy.ts`), pourquoi il lit des attributs, et le chiffre du trafic économisé — c'est la mémoire de la décision.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run : `npm test -- garde-manger`
 Expected: PASS
 
-- [ ] **Step 5: Les deux contrôles du dépôt**
+- [x] **Step 5: Les deux contrôles du dépôt**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: **41 fichiers de tests** verts, vérificateur vert. **Rien n'a changé à l'écran** — c'est le résultat attendu d'une tâche purement additive.
 
-- [ ] **Step 6: Commit (dans `wallpanel-app`)**
+- [x] **Step 6: Commit (dans `wallpanel-app`)**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app add src/garde-manger.ts tests/garde-manger.test.ts
@@ -1465,7 +1465,7 @@ git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app commit -m "feat: lire 
 
 **Le point d'injection du vérificateur.** `verifier-rendu.mjs` de `wallpanel-app` injecte aujourd'hui un `PlanGrocy` complet (`__injecterPlan`) pour mesurer le pire cas **sans dépendre du vrai Grocy**. Le mécanisme est **conservé et renommé** (`__injecterRepas`), et il injecte désormais un repas déjà résolu : le contrôle ne doit pas plus dépendre de l'état réel de `home_stock` qu'il ne dépendait de celui de Grocy. **Sans cela, un planning vide dans la maison ferait passer le contrôle en mesurant un écran sans bloc.**
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // defaut.test.ts
@@ -1505,26 +1505,26 @@ it('aucun repas planifié : rendreEntretien prend la place, et masquerEntretien 
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run : `npm test -- repas defaut demarrage pannes`
 Expected: FAIL
 
-- [ ] **Step 3: Basculer la source**
+- [x] **Step 3: Basculer la source**
 
 Retirer de `demarrage.ts` : `chargerPlan`, `appliquerPlan`, `lireRecetteGrocy` pour le plan, l'intervalle de 15 minutes, `ClientGrocy.chargerPlan`, `recettesInjectees` pour le plan. **`src/grocy.ts` reste sur le disque** — sa suppression est la Task 17, quand plus rien ne l'appelle.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run : `npm test -- repas defaut demarrage pannes`
 Expected: PASS
 
-- [ ] **Step 5: Le vérificateur de rendu — la seule preuve qui compte**
+- [x] **Step 5: Le vérificateur de rendu — la seule preuve qui compte**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert, **et aucune constante de mise en page n'a bougé**. jsdom ne calcule aucune mise en page : c'est le seul outil qui dit « ça tient ». En cas d'échec, **retirer quelque chose** — jamais agrandir le cadre.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/repas.ts src/rendu/defaut.ts src/demarrage.ts outils/verifier-rendu.mjs tests/
@@ -1554,7 +1554,7 @@ git -C .../wallpanel-app commit -m "feat: le bloc repas de la cuisine vient de h
 
 **Décision sur le hors-ligne : la tablette n'a pas de file.** Le panneau en a une parce qu'on scanne dans un magasin sans réseau ; une tablette murale est à **trois mètres du routeur, qui est le serveur HA**. Un geste refusé hors ligne est **refusé visiblement**, jamais mis en attente : rejouer une validation de repas une heure plus tard, sans témoin, décrémenterait un stock à l'aveugle. Les commandes portent quand même une `idempotency_key` — toutes l'acceptent — parce qu'une reconnexion websocket peut faire douter d'un envoi.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // recette.test.ts
@@ -1606,24 +1606,24 @@ it("n'appelle plus aucun service grocy", () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- recette rendu-recette demarrage`
-- [ ] **Step 3: Écrire le raccordement**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- recette rendu-recette demarrage`
+- [x] **Step 3: Écrire le raccordement**
 
 Si `recipe/get` ne rend pas les étapes sous une forme directement utilisable par `decouperPages`, **c'est la tablette qui s'adapte**. Le lot 6 n'ajoute **aucune** commande websocket dont le seul but serait de pré-mâcher un rendu.
 
 Renommer les points d'injection du vérificateur (`__injecterIngredients` → alimenté par une réponse `meal/preview` de doublure) pour que le contrôle ne touche jamais l'instance réelle sur ce chemin.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- recette rendu-recette demarrage`
-- [ ] **Step 5: Le vérificateur**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- recette rendu-recette demarrage`
+- [x] **Step 5: Le vérificateur**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert. La vue recette **perd** un bouton par ingrédient : la hauteur baisse, elle ne monte pas.
 
-- [ ] **Step 6: Vérifier que les tests ont des dents**
+- [x] **Step 6: Vérifier que les tests ont des dents**
 
 Remplacer le libellé du second appui par « Toucher pour confirmer » : le test de libellé doit tomber. Rendre `meal/preview` appelé dans un `setInterval` : `ne relit jamais périodiquement` doit tomber. Remettre le code correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/recette.ts src/rendu/recette.ts src/demarrage.ts outils/verifier-rendu.mjs tests/
@@ -1663,7 +1663,7 @@ Mais `listesTachesPiece` collecte **automatiquement** toute entité `todo.` de `
 
 **L'ordre des listes de la cuisine devient une décision.** La vue « Tâches » passe de deux listes à trois : **entretien, puis DLC, puis courses**. `listesTachesPiece` respecte l'ordre de `synthese` puis celui de `listesTachesExtra` : déclarer la ligne DLC **après** `todo.maintenance` suffit. **Une DLC passe avant une course** : l'une a une échéance, l'autre non.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // pieces.test.ts
@@ -1713,8 +1713,8 @@ it('le budget de la vue Tâches tient : 6×64 + 5×8 + 112 = 536 ≤ 585', () =>
 it('cocher demande toujours deux appuis', () => { ... });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- pieces cochage taches maison`
-- [ ] **Step 3: Écrire les remplacements**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent** — `npm test -- pieces cochage taches maison`
+- [x] **Step 3: Écrire les remplacements**
 
 `cochage.ts`, la table de libellés :
 
@@ -1729,8 +1729,8 @@ const LIBELLES_LISTE: Record<string, string> = {
 
 **On garde `todo.update_item` pour cocher** — seule exception à la règle « la tablette écrit par websocket ». Trois raisons : c'est déjà écrit, testé et **partagé avec `todo.maintenance` et `todo.travail`**, deux listes qui ne sont pas `home_stock` et ne le seront jamais ; `ShoppingTodoList.async_update_todo_item` fait exactement la bonne chose (cocher vaut « je l'ai », jamais « c'est en stock », et un `uid` périmé est un no-op explicite) ; et écrire un `home_stock/list/check` en parallèle donnerait **deux façons de cocher la même ligne** sur la même dalle, avec deux traitements d'erreur. La lecture reste `Connexion.listerTaches` (`todo/item/list`), qui marche déjà sur ces entités **sans une ligne de plus**.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- pieces cochage taches maison`
-- [ ] **Step 5: Le vérificateur — la tâche la plus à risque du lot**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent** — `npm test -- pieces cochage taches maison`
+- [x] **Step 5: Le vérificateur — la tâche la plus à risque du lot**
 
 Run : `node outils/verifier-rendu.mjs`
 Expected: vert. **Deux points à surveiller nommément :**
@@ -1739,11 +1739,11 @@ Expected: vert. **Deux points à surveiller nommément :**
 
 En cas d'échec : **retirer**. La première chose à retirer est la ligne DLC du salon, pas une ligne de la cuisine.
 
-- [ ] **Step 6: Vérifier que le test a des dents**
+- [x] **Step 6: Vérifier que le test a des dents**
 
 Retirer `horsTaches` de la ligne du salon : `le salon ne rend PAS la liste des DLC` doit tomber. Déclarer la ligne DLC **avant** `todo.maintenance` : le test d'ordre doit tomber. Remettre le code correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C .../wallpanel-app add src/pieces.ts src/cochage.ts src/rendu/maison.ts tests/
@@ -1780,12 +1780,12 @@ it("aucune chaîne 'grocy' ne subsiste dans src/", () => {
 
 **Ce qui reste servi, et qu'on ne touche pas** : `/local/grocy-scanner.html` et `/local/grocy-recipes.html` restent en place tant que le lot 7 n'a pas conclu. Simplement, **plus aucune tablette n'y renvoie**. Le conteneur Grocy tourne toujours ; ses **données** sont l'affaire du lot 7.
 
-- [ ] **Step 1: Écrire le test de scan**
+- [x] **Step 1: Écrire le test de scan**
 
 Dans `tests/pieces.test.ts`, en tête de fichier — il est le gardien du lot, il doit être facile à trouver.
 
-- [ ] **Step 2: Lancer, vérifier qu'il échoue** — `npm test -- pieces` → FAIL, avec la liste des fichiers fautifs. **Cette liste est la liste de travail de la tâche.**
-- [ ] **Step 3: Supprimer et nettoyer**
+- [x] **Step 2: Lancer, vérifier qu'il échoue** — `npm test -- pieces` → FAIL, avec la liste des fichiers fautifs. **Cette liste est la liste de travail de la tâche.**
+- [x] **Step 3: Supprimer et nettoyer**
 
 ```bash
 git -C .../wallpanel-app rm src/grocy.ts tests/grocy.test.ts
@@ -1793,18 +1793,18 @@ git -C .../wallpanel-app rm src/grocy.ts tests/grocy.test.ts
 
 Puis reprendre chaque fichier de la liste : les commentaires qui expliquaient une décision **restent**, réécrits pour dire ce qui est vrai maintenant (`src/garde-manger.ts` au lieu de `src/grocy.ts`, `sensor.home_stock_next_meal` au lieu de `todo.grocy_meal_plan`). **On ne supprime pas une explication : on la met à jour.** Les chiffres mesurés (3,8 Mo/jour, 87 recettes, 62 tags sur 98) restent, avec leur date — ils justifient des seuils encore en vigueur.
 
-- [ ] **Step 4: Rafraîchir le `README.md`**
+- [x] **Step 4: Rafraîchir le `README.md`**
 
 Le nombre de fichiers de tests (**33 → le compte réel**) et la disparition de Grocy de la description de l'app.
 
-- [ ] **Step 5: Lancer, vérifier que tout passe**
+- [x] **Step 5: Lancer, vérifier que tout passe**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tout vert, **`grocy.test.ts` en moins**, `garde-manger.test.ts` en plus.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git -C .../wallpanel-app add -A
@@ -1821,7 +1821,7 @@ git -C .../wallpanel-app commit -m "chore: src/ ne connaît plus Grocy — le cl
 
 **Pourquoi ce n'est pas décoratif.** Avant la coalescence des redessins, ce projet mesurait **1712 recalculs de style à chaque connexion websocket** — de quoi faire tuer Fully par Android sur une page qui *rendait juste*. Une page correcte peut être une page qui tue son navigateur : **les tests et le vérificateur de rendu ne voient pas ce défaut-là.**
 
-- [ ] **Step 1: Relever l'état d'avant, sur le bundle DÉPLOYÉ**
+- [x] **Step 1: Relever l'état d'avant, sur le bundle DÉPLOYÉ**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app
@@ -1831,14 +1831,14 @@ node outils/mesurer-rendus.mjs cuisine 300
 
 Noter les deux chiffres. **C'est la seule référence disponible** : après la Task 18, le bundle d'avant n'existe plus.
 
-- [ ] **Step 2: Mesurer `src/`, celui du lot**
+- [x] **Step 2: Mesurer `src/`, celui du lot**
 
 ```bash
 node outils/mesurer-salve.mjs cuisine --src
 node outils/mesurer-rendus.mjs cuisine 300
 ```
 
-- [ ] **Step 3: Comparer, et décider**
+- [x] **Step 3: Comparer, et décider**
 
 | Mesure | Attendu |
 |---|---|
@@ -1847,7 +1847,7 @@ node outils/mesurer-rendus.mjs cuisine 300
 
 Une **hausse** de l'une des deux est un défaut à corriger **avant** la Task 18, pas une observation à consigner. La cause la plus probable serait une lecture ajoutée dans un chemin de redessin plutôt qu'à l'ouverture d'une vue.
 
-- [ ] **Step 4: Le contrôle complet, une dernière fois avant le mur**
+- [x] **Step 4: Le contrôle complet, une dernière fois avant le mur**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils/verifier-rendu.mjs
@@ -1856,7 +1856,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: **les cinq suites vertes**, 70 exécutions côté panneau. **Tout ce qui peut être vérifié avant le build l'a maintenant été.**
 
-- [ ] **Step 5: Consigner les chiffres**
+- [x] **Step 5: Consigner les chiffres**
 
 Dans le message de commit, et repris en Task 19 dans `docs/exploitation.md` — un chiffre mesuré qui n'est écrit nulle part est un chiffre à remesurer.
 
@@ -1880,34 +1880,34 @@ git -C .../wallpanel-app commit --allow-empty -m "chore: mesures salve et rendus
 
 **Files:** `config/www/wallpanel/*` (artefacts de build — **jamais édités à la main**), `src/*.html` versionnés.
 
-- [ ] **Step 1: Vérifier une dernière fois que rien n'attend**
+- [x] **Step 1: Vérifier une dernière fois que rien n'attend**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app status --porcelain
 ```
 Expected: propre. **Construire un arbre sale, c'est déployer ce qu'on n'a pas relu.**
 
-- [ ] **Step 2: Construire — une fois**
+- [x] **Step 2: Construire — une fois**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm run build
 ```
 
-- [ ] **Step 3: Vérifier ce qui a été écrit**
+- [x] **Step 3: Vérifier ce qui a été écrit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant status --porcelain config/www/wallpanel/
 ```
 Attendu : `wallpanel.js`, `wallpanel.css` et les **trois** pages `salon.html`, `bureau.html`, `cuisine.html` (leur `?v=` a changé). **Rien d'autre.**
 
-- [ ] **Step 4: Vérifier le bundle RÉELLEMENT en place**
+- [x] **Step 4: Vérifier le bundle RÉELLEMENT en place**
 
 ```bash
 node outils/verifier-rendu.mjs --deploye
 ```
 Expected: mêmes scénarios verts, cette fois sur le bundle construit et minifié. C'est le seul moment du lot où `--deploye` a un sens.
 
-- [ ] **Step 5: Faire recharger les trois tablettes**
+- [x] **Step 5: Faire recharger les trois tablettes**
 
 Le **seul** geste de contrôle autorisé sur l'instance vivante, dans cet ordre, pour chaque pièce :
 
@@ -1916,7 +1916,7 @@ Le **seul** geste de contrôle autorisé sur l'instance vivante, dans cet ordre,
 
 Aucun `docker compose`, aucun redémarrage, aucun rechargement d'intégration.
 
-- [ ] **Step 6: Contrôle visuel**
+- [x] **Step 6: Contrôle visuel**
 
 Lire `image.tablette_<piece>_capture_d_ecran` pour les trois pièces. Après un rechargement, la tablette met **plusieurs secondes** à peindre : on obtient des frames partiels. **Se fier à l'heure de l'horloge affichée, pas à `frame_timestamp`** (peu fiable).
 
@@ -1928,7 +1928,7 @@ Ce qu'on vérifie, pièce par pièce :
 | **Salon** | Rien de neuf **sauf** la ligne de synthèse DLC ; sa vue « Tâches » ne porte **que** l'entretien |
 | **Bureau** | **Strictement rien de changé** |
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app add -A
@@ -1947,7 +1947,7 @@ git -C /opt/nivuus/HomeAssistant/data/tools/wallpanel-app commit -m "chore: buil
 - Modify: `docs/exploitation.md`
 - Build: `custom_components/home_stock/panel/home-stock-panel.js`
 
-- [ ] **Step 1: Écrire la section « Lot 6 — les quatre surfaces »**
+- [x] **Step 1: Écrire la section « Lot 6 — les quatre surfaces »**
 
 Dans `docs/exploitation.md`, dans le ton des sections précédentes : ce que le propriétaire doit faire, et ce qui se répare.
 
@@ -1959,7 +1959,7 @@ Dans `docs/exploitation.md`, dans le ton des sections précédentes : ce que le 
 6. **Le rappel du lot 7** : Grocy tourne toujours, `/local/grocy-scanner.html` et `/local/grocy-recipes.html` restent servis, **plus aucune tablette n'y renvoie**. Les données Grocy et les six *chores* (litière, fontaine, croquettes, poubelles) sont le lot 7.
 7. **Les chiffres de la Task 17**, avant/après.
 
-- [ ] **Step 2: Écrire les amendements aux specs précédentes**
+- [x] **Step 2: Écrire les amendements aux specs précédentes**
 
 Toujours dans `docs/exploitation.md`, sous « Amendements aux specs précédents » — **ce sont des amendements de spec, pas du code**, et les documents d'origine ne sont pas réécrits (usage des lots précédents) :
 
@@ -1973,25 +1973,25 @@ Toujours dans `docs/exploitation.md`, sous « Amendements aux specs précédents
 
 Et la répartition qui vaut à partir du lot 6 : **Lovelace** (cartes natives sur les entités, aucune carte livrée par `home_stock` — le dashboard appartient au propriétaire) · **Panneau** (les dix-sept écrans, en étroit et en large) · **Tablettes murales** (`wallpanel-app` : bloc repas, ligne DLC, vue « Tâches », vue recette) · **Voix** (sept phrases).
 
-- [ ] **Step 3: Construire le bundle du panneau — une fois**
+- [x] **Step 3: Construire le bundle du panneau — une fois**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm run build
 ```
 
-- [ ] **Step 4: Vérifier ce qui a été écrit**
+- [x] **Step 4: Vérifier ce qui a été écrit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/home_stock/panel/
 ```
 **Un seul fichier doit avoir changé.**
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: mêmes scénarios verts, cette fois sur le bundle construit.
 
-- [ ] **Step 6: Les cinq suites, une dernière fois**
+- [x] **Step 6: Les cinq suites, une dernière fois**
 
 ```bash
 ./scripts/test.sh -q
@@ -2000,7 +2000,7 @@ cd /opt/nivuus/HomeAssistant/data/tools/wallpanel-app && npm test && node outils
 ```
 Expected: tout vert. Côté panneau, **70 exécutions**.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/data/meal add docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js

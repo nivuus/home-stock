@@ -301,6 +301,19 @@ query_meals:
       description: Dernière journée alimentaire, incluse.
       required: true
       selector: { text: }
+    slot_key:
+      name: Créneau
+      description: >-
+        Ne rend que ce créneau-là : petit-déjeuner, déjeuner, dîner ou
+        collation. Absent, la réponse porte tous les repas de la plage.
+      required: false
+      selector:
+        select:
+          options:
+            - { value: breakfast, label: Petit-déjeuner }
+            - { value: lunch, label: Déjeuner }
+            - { value: dinner, label: Dîner }
+            - { value: snack, label: Collation }
 maintenance_plan:
   name: Plan de maintenance
   description: >-
