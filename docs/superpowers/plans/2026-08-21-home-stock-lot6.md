@@ -178,7 +178,7 @@ Ces règles lient **toutes** les tâches. Elles sont recopiées de la spec et de
 
 **Pourquoi cet attribut.** La tablette affiche le repas suivant, puis doit pouvoir le **valider** (`home_stock/meal/validate`, qui exige un `meal_id`). Sans lui, elle devrait rappeler `home_stock/meals/list` juste pour retrouver l'identifiant de ce qu'elle affiche déjà — un aller-retour pour une donnée qu'elle a sous les yeux. Le vocal a le même besoin. L'attribut est **déjà calculé** : c'est une ligne.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_meal_sensors.py`, à la suite des tests existants du capteur. Lire d'abord le haut du fichier pour reprendre ses fixtures (planification d'un repas, rafraîchissement du coordinateur) plutôt que d'en écrire d'autres.
 
@@ -233,12 +233,12 @@ async def test_a_ticked_shopping_line_leaves_the_count(hass, ...):
     ...
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q`
 Expected: FAIL — `KeyError: 'meal_id'`, puis l'échec des deux tests d'état `todo` s'ils ne décrivent pas la réalité (dans ce cas, **corriger le test, pas le composant** : la forme actuelle est celle dont la tablette dépend).
 
-- [ ] **Step 3: Publier l'attribut**
+- [x] **Step 3: Publier l'attribut**
 
 Dans `custom_components/home_stock/sensor.py`, `NextMealSensor.extra_state_attributes` — les deux branches, jamais une seule :
 
@@ -265,21 +265,21 @@ Dans `custom_components/home_stock/sensor.py`, `NextMealSensor.extra_state_attri
 
 Vérifier le nom exact de la colonne rendue par `repo.next_meal` avant d'écrire `meal["id"]` — c'est le seul point de cette tâche qui peut se tromper en silence.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_meal_sensors.py tests/test_entities.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Remplacer `"meal_id": None` par `"meal_id": 0` dans la branche « aucun repas ». `test_next_meal_without_a_meal_has_a_none_meal_id` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète**
+- [x] **Step 6: Suite complète**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS — **1877 + 5 tests**, aucun échec.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/sensor.py tests/test_meal_sensors.py tests/test_entities.py
@@ -302,7 +302,7 @@ git commit -m "feat: next_meal publishes meal_id, and todo states are pinned as 
 
 **Le filtrage se fait dans le service, pas dans le dépôt.** `list_meals` rend déjà la plage ; filtrer une liste de quelques dizaines d'entrées en Python coûte moins qu'une variante de requête SQL, et surtout **n'ouvre pas une seconde façon de lire un planning**.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_services_meals.py` :
 
@@ -378,12 +378,12 @@ async def test_the_slot_vocabulary_is_the_same_on_both_surfaces(hass, ...):
     ...
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_services_meals.py tests/test_surface_parity.py -q`
 Expected: FAIL — `vol.Invalid: extra keys not allowed @ data['slot_key']`
 
-- [ ] **Step 3: Écrire le schéma et le filtre**
+- [x] **Step 3: Écrire le schéma et le filtre**
 
 Dans `services.py` :
 
@@ -424,21 +424,21 @@ Dans `services.yaml`, sous `query_meals.fields`, en **français** :
             - { value: snack, label: Collation }
 ```
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_services_meals.py tests/test_surface_parity.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Remplacer `vol.In(MEAL_SLOT_KEYS)` par `str`. `test_query_meals_refuses_an_unknown_slot` doit tomber. Puis remplacer le filtre par `m["slot_key"] == slot or True` : `test_query_meals_filters_on_a_slot` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète**
+- [x] **Step 6: Suite complète**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/services.py custom_components/home_stock/services.yaml \
@@ -462,7 +462,7 @@ git commit -m "feat: query_meals takes an optional slot_key, and the asymmetry i
 - Produit sept noms d'intents, **en anglais** comme tout identifiant du composant : `HomeStockQueryStock`, `HomeStockQueryMeals`, `HomeStockQueryShoppingList`, `HomeStockAddToShoppingList`, `HomeStockQueryExpirations`, `HomeStockValidateMeal`, `HomeStockQueryToday`.
 - Trois listes de slots : `product` (`wildcard: true`), `quantity` (`wildcard: true`), `slot` (valeurs → `breakfast`/`lunch`/`dinner`/`snack`).
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_voice_package.py`. **Ce fichier ne démarre pas Home Assistant et ne sort pas sur le réseau** : il lit deux fichiers YAML livrés et vérifie qu'ils tiennent ensemble.
 
@@ -543,12 +543,12 @@ def test_no_sentence_asks_to_throw_away_or_to_remove_a_line():
         assert interdit not in texte, interdit
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — `FileNotFoundError: custom_sentences/fr/home_stock.yaml`
 
-- [ ] **Step 3: Écrire le fichier de phrases**
+- [x] **Step 3: Écrire le fichier de phrases**
 
 Créer `custom_sentences/fr/home_stock.yaml`. Forme, sur l'exemple 1 :
 
@@ -596,12 +596,12 @@ lists:
 
 Les sept intents sont écrits en entier, avec au moins deux variantes chacun, en reprenant mot pour mot le tableau du § 9.1 de la spec.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS (les tests qui portent sur le paquet `intent_script` restent rouges — ils sont l'objet de la Task 4 ; les écrire maintenant et les laisser rouges est **interdit** : ne les ajouter qu'en Task 4.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_sentences/fr/home_stock.yaml tests/test_voice_package.py
@@ -633,7 +633,7 @@ git commit -m "feat: the seven French sentences of the pantry, delivered never i
 
 C'est le « deux appuis » de la tablette, transposé à l'oral. **Le `dry_run` par défaut du lot 3 vient de payer une seconde fois.**
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_voice_package.py`, à la suite. Le patron est **exactement** celui de `test_event_expiration.py` (validation d'un blueprint livré) : charger le YAML, puis le passer dans les schémas de Home Assistant eux-mêmes — un YAML qui « a l'air bon » n'est pas un YAML que HA accepte.
 
@@ -708,12 +708,12 @@ def test_every_intent_answers_something_when_there_is_nothing():
         assert "{% else %}" in corps["speech"]["text"], nom
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — `FileNotFoundError: packages/home_stock_intents.yaml`
 
-- [ ] **Step 3: Écrire le paquet**
+- [x] **Step 3: Écrire le paquet**
 
 Créer `packages/home_stock_intents.yaml`. Extrait, sur l'exemple 1 et l'exemple 6 :
 
@@ -761,20 +761,20 @@ intent_script:
 
 Les sept sont écrits en entier. Le second tour de `HomeStockValidateMeal` est porté par une phrase de confirmation déclarée en Task 3 et par une seconde clé d'intent-script documentée dans le fichier — le mécanisme exact (intent de confirmation dédié) est **écrit dans le fichier, en commentaire, à côté du code qui l'implémente**, pour que le propriétaire puisse le relire.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents**
+- [x] **Step 5: Vérifier que les tests ont des dents**
 
 Retirer `dry_run: true` du premier tour : `test_the_meal_intent_previews_before_it_writes` doit tomber. Remplacer un `action:` par `service:` : `test_every_action_validates_through_home_assistant` doit tomber. Ajouter `home_stock.waste` dans un `action` : `test_no_intent_calls_a_writing_service_other_than_the_two_allowed` doit tomber. Remettre le code correct après chaque mutation.
 
-- [ ] **Step 6: Les sept phrases dans `docs/exploitation.md`**
+- [x] **Step 6: Les sept phrases dans `docs/exploitation.md`**
 
 Ajouter la table des sept phrases, avec leurs variantes **et leur réponse attendue** — c'est le document qu'on relit quand une phrase ne marche pas, et il doit être **rejouable à la main en trois minutes**.
 
-- [ ] **Step 7: Suite complète et commit**
+- [x] **Step 7: Suite complète et commit**
 
 ```bash
 ./scripts/test.sh -q
@@ -800,7 +800,7 @@ git commit -m "feat: the intent_script package, with a two-turn confirmation bef
 
 **Refusé, et c'est écrit ici pour que personne n'aille le chercher** : l'alerte de fin de garantie à la voix, que le lot 5 (§ 18) laissait au lot 6. Une fin de garantie se traite **avec une facture sous les yeux**, pas en écoutant une enceinte. Le capteur `sensor.home_stock_warranty_next` reste disponible pour qui veut l'automation.
 
-- [ ] **Step 1: Écrire le test**
+- [x] **Step 1: Écrire le test**
 
 Dans `tests/test_voice_package.py`, en reprenant **mot pour mot** le patron de `tests/test_event_expiration.py` (chargement, substitution des `!input` par leurs défauts, `cv.CONDITION_SCHEMA` et `cv.SCRIPT_SCHEMA`) :
 
@@ -838,25 +838,25 @@ def test_the_shopping_blueprint_says_something_on_an_empty_list_or_nothing_at_al
     ...
 ```
 
-- [ ] **Step 2: Lancer le test, vérifier qu'il échoue**
+- [x] **Step 2: Lancer le test, vérifier qu'il échoue**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: FAIL — fichier absent
 
-- [ ] **Step 3: Écrire le blueprint**
+- [x] **Step 3: Écrire le blueprint**
 
 Créer `blueprints/automation/home_stock/courses_bleuenn.yaml`, dans la forme exacte de `dlc_bleuenn.yaml` : bloc `blueprint` avec `name`, `description` (dont la phrase « À importer une fois ; ce fichier n'est jamais installé par l'intégration. »), `domain: automation`, quatre `input`, puis `triggers` / `conditions` / `variables` / `actions`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_voice_package.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que le test a des dents**
+- [x] **Step 5: Vérifier que le test a des dents**
 
 Interpoler `!input capteur` directement dans le template au lieu de passer par `nom_capteur` : `test_the_shopping_blueprint_passes_its_entity_as_a_variable` doit tomber. Remettre le code correct.
 
-- [ ] **Step 6: Suite complète et commit**
+- [x] **Step 6: Suite complète et commit**
 
 ```bash
 ./scripts/test.sh -q
@@ -880,7 +880,7 @@ git commit -m "feat: courses_bleuenn, the third blueprint — delivered, never i
 
 **Décision sur `narrow`.** Le frontend hôte sait s'il est étroit ; on n'a pas à le redécouvrir. **`large` reste la mesure qui décide** (elle vaut aussi hors panneau HA, dans le harnais du vérificateur, qui ne fournit pas `narrow`), mais un hôte qui affirme `narrow === true` **force** `large` à faux : c'est le cas de la barre latérale repliée sur une tablette large, où la place réelle du panneau est bien plus petite que `innerWidth`. Une seule ligne, et elle évite une mise en page dense écrasée dans une colonne de 400 px.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `frontend/tests/panneau.test.ts` :
 
@@ -921,12 +921,12 @@ it('ne casse aucun écran étroit', async () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- panneau`
 Expected: FAIL — les sept écrans ne reçoivent pas `large`, et `narrow` est ignoré.
 
-- [ ] **Step 3: Câbler**
+- [x] **Step 3: Câbler**
 
 Dans `panneau.ts`, la propriété devient une **dérivation** plutôt qu'un état recopié :
 
@@ -943,19 +943,19 @@ Dans `panneau.ts`, la propriété devient une **dérivation** plutôt qu'un éta
 
 puis `.large=${this.large}` sur les sept écrans, à côté de `planning` qui l'a déjà.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test -- panneau`
 Expected: PASS
 
-- [ ] **Step 5: Les deux suites**
+- [x] **Step 5: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: **499 + 4 tests** verts, **47 exécutions** vertes (le format n'a pas encore bougé, et aucun écran n'a encore changé de mise en page — c'est justement ce qu'on veut prouver ici : le câblage seul ne change rien à ce qui se voit).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/panneau.ts frontend/tests/panneau.test.ts
@@ -980,7 +980,7 @@ git commit -m "feat: large reaches the seven dense screens, and a narrow host wi
 
 **Ce que la vue dense n'ouvre pas.** Ni `base_unit` (seul `home_stock/product/convert_unit` le change, atomiquement), ni la catégorie (aucun `home_stock/categories/list` n'existe côté serveur). Les deux restent en **lecture seule**, comme en étroit — élargir un écran n'élargit pas ses droits.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `frontend/tests/catalogue.test.ts` :
 
@@ -1028,28 +1028,28 @@ it('passe toute écriture par la file hors-ligne', async () => {
 });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- catalogue`
 Expected: FAIL — pas de `<table>`
 
-- [ ] **Step 3: Écrire la mise en page dense**
+- [x] **Step 3: Écrire la mise en page dense**
 
 Ajouter `@property({ type: Boolean }) large = false;` et une branche de rendu. **Une seule branche** — pas deux composants, pas deux fichiers : les données, les commandes et les validations sont les mêmes, seule la disposition change.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test -- catalogue`
 Expected: PASS
 
-- [ ] **Step 5: Les deux suites**
+- [x] **Step 5: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tout vert, **toujours 47 exécutions** — le scénario dense arrive en Task 11.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/catalogue.ts frontend/tests/catalogue.test.ts
@@ -1070,7 +1070,7 @@ git commit -m "feat: the catalogue becomes a table past 1000px, editable in plac
 - Consomme : `large`, `home_stock/journal/series` (`MAX_SERIES_COUNT = 60`), `home_stock/journal/day`.
 - Produit : deux colonnes au-delà de 1000 px — la série à gauche, le détail du jour sélectionné à droite. **Le panneau dessine ses barres lui-même** (lot 2) : rien de neuf à ce sujet ici.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('affiche la série et le détail en même temps au-delà de 1000 px', async () => {
@@ -1108,11 +1108,11 @@ it('corrige un mouvement en large, par la file, avec confirmation', async () => 
 });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- journal`
-- [ ] **Step 3: Écrire la mise en page dense**
-- [ ] **Step 4: Lancer, passer** — `npm test -- journal`
-- [ ] **Step 5: Les deux suites** — `npm test && node outils/verifier-rendu.mjs`, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- journal`
+- [x] **Step 3: Écrire la mise en page dense**
+- [x] **Step 4: Lancer, passer** — `npm test -- journal`
+- [x] **Step 5: Les deux suites** — `npm test && node outils/verifier-rendu.mjs`, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/journal.ts frontend/tests/journal.test.ts
@@ -1135,7 +1135,7 @@ git commit -m "feat: twelve monthly bars and the day's detail, side by side"
 
 **Le piège de `reglages`, et il est réel.** Les trois listes sont **réordonnables**. Un réordonnancement qui marche en colonne unique peut se casser en trois colonnes si la cible de dépôt est calculée sur la position dans le document plutôt que dans sa propre liste. Le test l'exige explicitement.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // liste.test.ts
@@ -1159,11 +1159,11 @@ it('réordonne dans la BONNE liste quand elles sont côte à côte', async () =>
 it('conserve les objectifs nutritionnels et leur validation', async () => { ... });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- liste reglages`
-- [ ] **Step 3: Écrire les deux mises en page**
-- [ ] **Step 4: Lancer, passer** — `npm test -- liste reglages`
-- [ ] **Step 5: Les deux suites**, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- liste reglages`
+- [x] **Step 3: Écrire les deux mises en page**
+- [x] **Step 4: Lancer, passer** — `npm test -- liste reglages`
+- [x] **Step 5: Les deux suites**, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/liste.ts frontend/src/ecrans/reglages.ts \
@@ -1185,7 +1185,7 @@ git commit -m "feat: aisles in columns, settings in three — reordering stays i
 - `ticket` : photo à gauche, lignes rapprochées à droite, au-delà de 1000 px.
 - `equipements`, `piles` : tableau — même argument que le catalogue, sur moins de lignes.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // ticket.test.ts
@@ -1208,11 +1208,11 @@ it('une garantie échue reste signalée dans les deux mises en page', async () =
 });
 ```
 
-- [ ] **Step 2: Lancer, échouer** — `npm test -- ticket equipements piles`
-- [ ] **Step 3: Écrire les trois mises en page**
-- [ ] **Step 4: Lancer, passer** — `npm test -- ticket equipements piles`
-- [ ] **Step 5: Les deux suites**, tout vert, 47 exécutions
-- [ ] **Step 6: Commit**
+- [x] **Step 2: Lancer, échouer** — `npm test -- ticket equipements piles`
+- [x] **Step 3: Écrire les trois mises en page**
+- [x] **Step 4: Lancer, passer** — `npm test -- ticket equipements piles`
+- [x] **Step 5: Les deux suites**, tout vert, 47 exécutions
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/ecrans/ticket.ts frontend/src/ecrans/equipements.ts frontend/src/ecrans/piles.ts \
@@ -1246,7 +1246,7 @@ git commit -m "feat: receipt side by side, equipment and batteries as tables"
 
 **Pourquoi 1920 × 1080 et pas seulement 1280 × 800.** Le 1280 × 800 est **à peine au-dessus** du seuil de 1000 px : c'est le cas où la mise en page dense est la plus **serrée**, donc celui qui détecte un débordement. Le 1920 × 1080 est le plus **lâche**, donc celui qui détecte l'inverse — un tableau qui laisse 700 px de vide, un texte qui s'étire sur une ligne illisible. **Les deux défauts existent, et aucun des deux formats actuels ne les voit tous les deux.**
 
-- [ ] **Step 1: Ajouter le format et le scénario dense**
+- [x] **Step 1: Ajouter le format et le scénario dense**
 
 ```js
 const FORMATS = [
@@ -1276,33 +1276,33 @@ const SCENARIOS_LARGES = [
 
 Les six autres écrans adaptés (`journal`, `liste`, `reglages`, `ticket`, `equipements`, `piles`) sont **déjà couverts par des scénarios existants**, qui les mesureront désormais dans **trois** formats — c'est précisément le gain du troisième format, et c'est pourquoi il n'y a qu'un scénario neuf.
 
-- [ ] **Step 2: Câbler l'exécution du nouveau lot de scénarios**
+- [x] **Step 2: Câbler l'exécution du nouveau lot de scénarios**
 
 Une boucle qui réutilise `monterEtMesurer` et `aDesDefauts` — **pas** une seconde implémentation de la mesure. Le compte `total` doit inclure ces exécutions, sinon le chiffre affiché ment.
 
-- [ ] **Step 3: Lancer le vérificateur**
+- [x] **Step 3: Lancer le vérificateur**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: **70 exécutions**, zéro faute. **Si le chiffre affiché n'est pas monté, le format n'a pas été ajouté** — c'est le contrôle le plus simple de cette tâche et le seul qui ne se triche pas.
 
-- [ ] **Step 4: Vérifier que les garde-fous existants tiennent toujours**
+- [x] **Step 4: Vérifier que les garde-fous existants tiennent toujours**
 
 Les deux mécanismes restent en vigueur et doivent être relancés tels quels :
 1. **l'auto-vérification** — le script casse volontairement cinq choses et vérifie qu'il les détecte ; sans elle, « aucun défaut » ne prouve rien ;
 2. **le contrôle d'écran atteint** — chaque scénario doit avoir *atteint* l'écran attendu avant d'être mesuré. Un scénario qui mesure l'écran `scanner` en croyant mesurer `catalogue` est vert et vide.
 
-- [ ] **Step 5: Vérifier que le nouveau format a des dents**
+- [x] **Step 5: Vérifier que le nouveau format a des dents**
 
 Donner au tableau du catalogue une largeur fixe de 2200 px. Le 1920 × 1080 doit signaler un **débordement** ; les deux autres formats ne le voient pas. Remettre le code correct. Puis rendre le libellé d'une colonne de tableau en gris clair (contraste < 4,5:1) : les **trois** formats doivent le signaler.
 
-- [ ] **Step 6: Les deux suites**
+- [x] **Step 6: Les deux suites**
 
 ```bash
 cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verifier-rendu.mjs
 ```
 Expected: tests verts, **70 exécutions** vertes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs
