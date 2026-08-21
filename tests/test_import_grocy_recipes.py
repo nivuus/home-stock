@@ -413,3 +413,152 @@ def test_a_confirmed_quantity_is_converted_into_the_base_unit(db_catalogue,
         " WHERE ri.match_state = 'confirmed' AND prod.base_unit = 'g'"
         "   AND ri.amount > 0 LIMIT 1").fetchone()
     assert row is not None and row["amount"] > 0
+
+
+# --- planning ---------------------------------------------------------------
+
+def test_forty_two_future_meals_come_over(db_catalogue, grocy_reel_db, tmp_media):
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True, today=AUJOURD_HUI)
+    assert rapport.meals == 42
+
+
+def test_the_sixty_six_past_entries_stay_out(db_catalogue, grocy_reel_db,
+                                             tmp_media):
+    """Un plan passé n'est ni un repas mangé ni un repas à cuisiner."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM meal WHERE day < ?", (AUJOURD_HUI,)
+    ).fetchone()["n"] == 0
+
+
+def test_no_meal_is_ever_written_done(db_catalogue, grocy_reel_db, tmp_media):
+    """Valider un repas écrit des mouvements. Un repas done sans mouvement
+    derrière est un mensonge dans une base dont le journal est la seule
+    source de vérité — et meal_plan.done est donc IGNORÉ."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    etats = {row["state"] for row in db_catalogue.read().execute(
+        "SELECT state FROM meal")}
+    assert etats == {"planned"}
+
+
+def test_the_minus_one_section_never_has_to_be_mapped(db_catalogue, grocy_reel_db,
+                                                      tmp_media):
+    """30 entrées utilisent la section -1 (le « sans section » de Grocy, que
+    m004 n'a pas semée) et LES TRENTE SONT DANS LE PASSÉ. La décision de ne
+    reprendre que l'avenir referme ce problème d'elle-même."""
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True, today=AUJOURD_HUI)
+    assert not [a for a in rapport.anomalies if "section" in a.lower()]
+
+
+def test_the_three_slots_get_their_share(db_catalogue, grocy_reel_db, tmp_media):
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    compte = {row["slot_key"]: row["n"] for row in db_catalogue.read().execute(
+        "SELECT slot_key, COUNT(*) AS n FROM meal GROUP BY slot_key")}
+    assert compte == {"breakfast": 12, "lunch": 19, "dinner": 11}
+
+
+def test_the_two_notes_travel_without_a_recipe(db_catalogue, grocy_reel_db,
+                                               tmp_media):
+    """20 des 108 entrées sont des notes ; 2 d'entre elles sont à venir."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM meal WHERE recipe_id IS NULL"
+        " AND note IS NOT NULL").fetchone()["n"] == 2
+
+
+def test_the_eleven_notes_carried_by_a_recipe_entry_are_reported(
+        db_catalogue, grocy_reel_db, tmp_media):
+    """meal impose « une recette OU un produit OU une note, jamais deux ».
+    Onze entrées à venir portent les deux : la recette gagne, et la note est
+    RAPPORTÉE au lieu d'être avalée. Le plan ne prévoyait pas ce cas."""
+    rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                             apply=True, today=AUJOURD_HUI)
+    citees = [a for a in rapport.anomalies if "note" in a.lower()]
+    assert len(citees) == 11
+    assert any("Curry de lentilles corail" in a for a in citees)
+
+
+def test_fractional_servings_pass_as_they_are(db_catalogue, grocy_reel_db,
+                                              tmp_media):
+    """0,15 ; 0,2 ; 0,25 sur 10 entrées. meal.servings est un REAL avec
+    CHECK (servings > 0) : elles passent telles quelles, sans arrondi."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    valeurs = [row["servings"] for row in db_catalogue.read().execute(
+        "SELECT servings FROM meal WHERE servings < 1")]
+    assert len(valeurs) == 10
+    assert 0.15 in valeurs
+
+
+def test_the_uid_makes_replay_free(db_catalogue, grocy_reel_db, tmp_media):
+    """meal.uid est UNIQUE : l'idempotence du planning est gratuite."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    uids = {row["uid"] for row in db_catalogue.read().execute("SELECT uid FROM meal")}
+    assert len(uids) == 42
+    assert all(u.startswith("grocy-meal-") and u.endswith("@home_stock")
+               for u in uids)
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM meal").fetchone()["n"] == 42
+
+
+def test_the_forty_two_reach_twenty_three_distinct_recipes(db_catalogue,
+                                                           grocy_reel_db,
+                                                           tmp_media):
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True,
+                   today=AUJOURD_HUI)
+    ids = {row["recipe_id"] for row in db_catalogue.read().execute(
+        "SELECT recipe_id FROM meal WHERE recipe_id IS NOT NULL")}
+    assert len(ids) == 23
+
+
+def test_an_entry_pointing_at_a_missing_recipe_stops_the_plan(db_catalogue,
+                                                              grocy_reel_db,
+                                                              tmp_media):
+    """Le planning se réimporte en dix secondes ; une entrée orpheline se
+    découvre au dîner."""
+    import sqlite3
+    conn = sqlite3.connect(grocy_reel_db)
+    conn.execute(
+        "UPDATE meal_plan SET recipe_id = 999999 WHERE id ="
+        " (SELECT MIN(id) FROM meal_plan WHERE day >= ?"
+        "    AND recipe_id IS NOT NULL)", (AUJOURD_HUI,))
+    conn.commit()
+    conn.close()
+    with pytest.raises(RecipeImportError):
+        import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                       apply=True, today=AUJOURD_HUI)
+
+
+def test_the_horizon_moves_with_today(db_catalogue, grocy_reel_db, tmp_media):
+    """« À venir » se calcule au jour de la bascule, jamais sur une date
+    figée : la cible bouge, et le code compte ce qu'il trouve."""
+    tot = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                         apply=False, today="2026-03-01").meals
+    tard = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
+                          apply=False, today="2026-08-31").meals
+    # 108 entrées depuis mars, dont 30 sur la section -1 de Grocy, que m004
+    # n'a pas semée : 78 repas. La spec annonçait 108, mais elle comptait des
+    # lignes de meal_plan, pas des repas que meal accepte — amendement A9. Et
+    # c'est bien la preuve que la section -1 n'existe QUE dans le passé : sur
+    # l'horizon du 21 août, aucune entrée n'est perdue.
+    assert tot == 78
+    assert tard == 4
+    assert tard < 42 < tot
+
+
+def test_today_is_never_written_into_the_code():
+    """La cible bouge : une date figée dans le code de production ferait de
+    « à venir » un souvenir du jour où le lot a été écrit."""
+    import inspect
+
+    from custom_components.home_stock import import_grocy_recipes
+    assert "2026-08-21" not in inspect.getsource(import_grocy_recipes)

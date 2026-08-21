@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from .const import GROCY_RECIPE_REF_PREFIX
+from .const import GROCY_MEAL_UID_TEMPLATE, GROCY_RECIPE_REF_PREFIX
 from .grocy import html as gh
 from .grocy import pictures as gp
 from .grocy.units import base_unit
@@ -94,6 +94,10 @@ def _open_grocy(path: str) -> sqlite3.Connection:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
 
 
 def _grocy_recipes(grocy) -> list[dict[str, Any]]:
@@ -319,6 +323,97 @@ def _import_ingredients_within(conn, grocy, recipe_ids: Mapping[int, int],
             " vérifie le stock de toute façon")
 
 
+# Les sections de Grocy vers les créneaux de m004. La ligne `id = -1` — le
+# « sans section » de Grocy, que m004 n'a pas semée — n'y est PAS : les 30
+# entrées qui l'utilisent sont toutes dans le passé, et la décision de ne
+# reprendre que l'avenir referme ce problème d'elle-même.
+GROCY_SECTION_TO_SLOT = {1: "breakfast", 2: "lunch", 3: "dinner"}
+
+
+def _import_meal_plan_within(conn, grocy, recipe_ids: Mapping[int, int],
+                             report: RecipeReport, *, today: str,
+                             apply: bool) -> None:
+    """The 42 entries ahead. The 66 behind are dropped, and neither middle
+    ground works:
+
+    - importing them `state = 'done'` would assert validated meals — and
+      validating a meal WRITES movements (lot 3), of which there would be
+      none behind. A `done` meal with no movement is a lie in a database
+      whose journal is the only source of truth;
+    - importing them `planned` would fill the calendar with 66 meals to cook
+      in the past, and `sensor.home_stock_next_meal` would go looking for
+      them.
+
+    `today` is a PARAMETER, never a literal: the target moves, and "ahead" is
+    computed on switchover day.
+    """
+    connues = {row["source_ref"]: row["id"] for row in conn.execute(
+        "SELECT source_ref, id FROM recipe WHERE source = 'grocy'"
+        "   AND source_ref IS NOT NULL")}
+    connues.update({str(gid): interne for gid, interne in recipe_ids.items()
+                    if interne is not None})
+    # En simulation rien n'est inséré, donc rien n'a d'identifiant interne :
+    # la résolvabilité se juge sur les recettes VUES, et le rapport compte
+    # exactement ce qu'un vrai passage écrirait.
+    resolvables = set(connues) | {str(gid) for gid in recipe_ids}
+    deja = {row["uid"] for row in conn.execute("SELECT uid FROM meal")}
+    maintenant = _now()
+
+    for ligne in grocy.execute(
+        "SELECT plan.id AS id, plan.day AS day, plan.type AS type,"
+        "       plan.recipe_id AS recipe_id,"
+        "       plan.recipe_servings AS recipe_servings, plan.note AS note,"
+        "       plan.section_id AS section_id"
+        " FROM meal_plan AS plan WHERE plan.day >= ? ORDER BY plan.id",
+        (today,)
+    ):
+        uid = GROCY_MEAL_UID_TEMPLATE.format(id=ligne["id"])
+        slot = GROCY_SECTION_TO_SLOT.get(ligne["section_id"])
+        if slot is None:
+            report.anomalies.append(
+                f"planning du {ligne['day']} : section Grocy"
+                f" {ligne['section_id']} sans créneau correspondant, entrée"
+                " ignorée")
+            continue
+
+        recipe_id = None
+        if ligne["type"] == "recipe":
+            if str(ligne["recipe_id"]) not in resolvables:
+                # Le planning se réimporte en dix secondes ; une entrée
+                # orpheline se découvre au dîner.
+                raise RecipeImportError(
+                    f"planning du {ligne['day']} : la recette"
+                    f" {ligne['recipe_id']} n'a pas été importée")
+            recipe_id = connues.get(str(ligne["recipe_id"]))
+
+        note = ligne["note"] or None
+        est_recette = ligne["type"] == "recipe"
+        if est_recette and note:
+            # meal impose « une recette OU un produit OU une note, jamais
+            # deux ». La recette gagne, et la note est RAPPORTÉE plutôt
+            # qu'avalée : c'est une phrase que quelqu'un a écrite.
+            report.anomalies.append(
+                f"planning du {ligne['day']} : la note « {note} » accompagne"
+                " une recette et n'a pas de colonne où aller — meal n'accepte"
+                " qu'une recette OU une note")
+            note = None
+        if not est_recette and not note:
+            report.anomalies.append(
+                f"planning du {ligne['day']} : entrée sans recette ni note,"
+                " ignorée")
+            continue
+
+        report.meals += 1
+        if not apply or uid in deja:
+            continue
+        deja.add(uid)
+        repo.insert_meal(
+            conn, uid=uid, day=ligne["day"], slot_key=slot,
+            created_at=maintenant, recipe_id=recipe_id, note=note,
+            servings=ligne["recipe_servings"] or 1,
+            external_ref=str(ligne["id"]))
+
+
 def _nombre(valeur) -> str:
     """« 500 » et non « 500.0 » : raw_text est ce que la source disait."""
     if valeur is None:
@@ -337,14 +432,17 @@ def import_recipes(db, grocy_path: str, *, picture_dir, apply: bool = False,
     grocy = _open_grocy(grocy_path)
     try:
         with db.write() as conn:            # UNE transaction, et une seule
-            recipe_ids: dict[int, int] = {}
+            recipe_ids: dict[int, int | None] = {}
             for ligne in _grocy_recipes(grocy):
-                interne = _import_recipe_within(conn, ligne, dossier, report,
-                                                apply=apply)
-                if interne is not None:
-                    recipe_ids[ligne["id"]] = interne
+                # Toutes les recettes VUES, pas seulement celles écrites :
+                # en simulation il n'y a pas d'identifiant interne, et le
+                # planning doit quand même pouvoir dire si sa recette existe.
+                recipe_ids[ligne["id"]] = _import_recipe_within(
+                    conn, ligne, dossier, report, apply=apply)
             _import_ingredients_within(conn, grocy, recipe_ids, report,
                                        apply=apply)
+            _import_meal_plan_within(conn, grocy, recipe_ids, report,
+                                     today=today or _today(), apply=apply)
             if not apply:
                 conn.rollback()
     finally:
