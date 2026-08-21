@@ -265,11 +265,28 @@ def insert_packaging(conn, *, scope: str, target_id: int, name: str,
 
 
 def insert_price(conn, *, article_id: int, observed_on: str,
-                 price_per_base_unit: float, source: str, store: str | None = None) -> int:
+                 price_per_base_unit: float, source: str, store: str | None = None,
+                 store_id: int | None = None) -> int:
     return _insert(conn, "price", {
         "article_id": article_id, "observed_on": observed_on,
         "price_per_base_unit": price_per_base_unit, "source": source, "store": store,
+        "store_id": store_id,
     })
+
+
+def set_batch_price(conn, batch_id: int, price_per_base_unit: float | None) -> None:
+    """The current price of one batch in the fridge — an UPDATE, not a journal
+    line. What a batch is worth today is state, not history."""
+    conn.execute("UPDATE batch SET price_per_base_unit = ? WHERE id = ?",
+                 (price_per_base_unit, batch_id))
+
+
+def movements_of_meal(conn, meal_id: int) -> list[dict[str, Any]]:
+    """Every row one meal validation wrote, in writing order."""
+    return _rows(conn.execute(
+        "SELECT m.* FROM movement m"
+        " WHERE m.ref_type = 'meal' AND m.ref_id = ? ORDER BY m.id", (meal_id,)
+    ))
 
 
 def rescale_prices_for_article(conn, article_id: int, factor: float) -> None:

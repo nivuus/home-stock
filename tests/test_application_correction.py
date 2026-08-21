@@ -321,3 +321,150 @@ def test_an_unknown_movement_is_refused_in_french(manager):
     with pytest.raises(LookupError) as refus:
         manager.correct_movement(4242, occurred_at="2026-08-21T09:00:00")
     assert french_message(refus.value) == "Mouvement 4242 inconnu."
+
+
+# --- § 12.4 : corriger un prix ---------------------------------------------
+
+def test_correcting_a_price_updates_the_batch_and_records_an_observation(manager, pasta):
+    """La moitié « en avant » : toutes les sorties FUTURES seront chiffrées
+    juste, sans rien réécrire."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+
+    result = manager.correct_price(batch_id, price_per_base_unit=0.006,
+                                   observed_on="2026-08-21", source="receipt")
+
+    assert result["batch_id"] == batch_id
+    conn = manager.db.read()
+    assert conn.execute("SELECT price_per_base_unit FROM batch WHERE id = ?",
+                        (batch_id,)).fetchone()[0] == pytest.approx(0.006)
+    price = conn.execute("SELECT * FROM price WHERE id = ?",
+                         (result["price_id"],)).fetchone()
+    assert price["price_per_base_unit"] == pytest.approx(0.006)
+    assert price["source"] == "receipt"
+    assert price["observed_on"] == "2026-08-21"
+
+
+def test_the_normal_case_writes_no_journal_line_at_all(manager, pasta):
+    """Un lot dont rien n'est sorti : `corrected_movements == 0`. C'est pour
+    ça que le ticket se photographie à la caisse et pas la semaine d'après."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+    conn = manager.db.read()
+    before = conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"]
+
+    result = manager.correct_price(batch_id, price_per_base_unit=0.006,
+                                   observed_on="2026-08-21")
+
+    # L'achat lui-même est corrigé : il entre dans la valeur du stock et dans
+    # l'export du journal. Aucune SORTIE ne l'est, il n'y en a pas.
+    assert result["corrected_movements"] == 1
+    conn = manager.db.read()
+    assert conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"] == before + 2
+
+
+def test_each_affected_movement_gets_a_reversal_then_a_rewrite(manager, pasta):
+    """Deux lignes par mouvement, dans cet ordre, `corrects_id` sur la
+    première seulement, toutes dans la même transaction."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+    eaten = manager.consume_batch(batch_id, quantity=200.0,
+                                  occurred_at="2026-08-14T18:00:00")
+
+    manager.correct_price(batch_id, price_per_base_unit=0.006,
+                          observed_on="2026-08-21", moment="2026-08-21T09:00:00")
+
+    conn = manager.db.read()
+    rows = repo.movements_of_batch(conn, batch_id)
+    tail = [r for r in rows if r["id"] > eaten]
+    # achat contrepassé, achat réécrit, sortie contrepassée, sortie réécrite
+    assert [r["corrects_id"] for r in tail] == [1, None, eaten, None]
+    assert all(r["occurred_at"] == "2026-08-21T09:00:00" for r in tail)
+    assert tail[3]["cost"] == pytest.approx(200.0 * 0.006)
+
+
+def test_the_nutritional_balance_of_a_price_correction_is_zero(manager, pasta):
+    """Épinglé explicitement (§ 12.4) : un prix faux n'a jamais faussé des
+    calories. La somme des trois lignes vaut celle de l'originale."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+    eaten = manager.consume_batch(batch_id, quantity=200.0,
+                                  occurred_at="2026-08-14T18:00:00")
+    conn = manager.db.read()
+    original = repo.get_movement(conn, eaten)
+
+    manager.correct_price(batch_id, price_per_base_unit=0.006,
+                          observed_on="2026-08-21", moment="2026-08-21T09:00:00")
+
+    conn = manager.db.read()
+    trio = [r for r in repo.movements_of_batch(conn, batch_id)
+            if r["id"] == eaten or r["corrects_id"] == eaten
+            or (r["id"] > eaten and r["reason"] == "consumption")]
+    assert len(trio) == 3
+    for column in ("kcal", "proteins", "carbohydrates", "fat", "salt"):
+        assert sum(r[column] or 0.0 for r in trio) == pytest.approx(original[column] or 0.0)
+
+
+def test_only_the_cost_moves(manager, pasta):
+    """`cost` bouge de la différence exacte ; `kcal` ne bouge pas d'un iota."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+    manager.consume_batch(batch_id, quantity=200.0, occurred_at="2026-08-14T18:00:00")
+    conn = manager.db.read()
+    before = repo.totals_between(conn)
+
+    manager.correct_price(batch_id, price_per_base_unit=0.006,
+                          observed_on="2026-08-21", moment="2026-08-21T09:00:00")
+
+    conn = manager.db.read()
+    after = repo.totals_between(conn)
+    assert after["kcal"] == pytest.approx(before["kcal"])
+    assert after["cost"] == pytest.approx(before["cost"] + 200.0 * (0.006 - 0.004))
+
+
+def test_the_purchase_movement_is_corrected_too(manager, pasta):
+    """Il entre dans l'export du journal et dans la valeur du stock."""
+    batch_id = _stocked(manager, pasta, quantity=500.0, price=0.004)
+    conn = manager.db.read()
+    purchase = repo.movements_of_batch(conn, batch_id)[0]
+
+    manager.correct_price(batch_id, price_per_base_unit=0.006,
+                          observed_on="2026-08-21", moment="2026-08-21T09:00:00")
+
+    conn = manager.db.read()
+    assert repo.correction_of(conn, purchase["id"])["cost"] == pytest.approx(-2.0)
+    rewritten = [r for r in repo.movements_of_batch(conn, batch_id)
+                 if r["reason"] == "purchase" and r["corrects_id"] is None
+                 and r["id"] != purchase["id"]]
+    assert len(rewritten) == 1
+    assert rewritten[0]["cost"] == pytest.approx(3.0)
+    # Le lot n'a pas bougé : contrepassation puis réécriture s'annulent.
+    assert conn.execute("SELECT remaining FROM batch WHERE id = ?",
+                        (batch_id,)).fetchone()["remaining"] == pytest.approx(500.0)
+
+
+def test_correcting_a_price_twice_only_corrects_what_is_not_yet_corrected(manager, pasta):
+    """L'index unique tient : la seconde correction ne contrepasse pas ce qui
+    l'est déjà, elle corrige les lignes que la première a écrites."""
+    batch_id = _stocked(manager, pasta, price=0.004)
+    manager.consume_batch(batch_id, quantity=200.0, occurred_at="2026-08-14T18:00:00")
+    manager.correct_price(batch_id, price_per_base_unit=0.006,
+                          observed_on="2026-08-21", moment="2026-08-21T09:00:00")
+
+    second = manager.correct_price(batch_id, price_per_base_unit=0.005,
+                                   observed_on="2026-08-22",
+                                   moment="2026-08-22T09:00:00")
+
+    assert second["corrected_movements"] == 2      # les deux réécritures
+    conn = manager.db.read()
+    totals = repo.totals_between(conn)
+    assert totals["cost"] == pytest.approx(200.0 * 0.005)
+
+
+def test_preview_of_a_price_correction_counts_what_will_be_rewritten(manager, pasta):
+    batch_id = _stocked(manager, pasta, price=0.004)
+    assert manager.preview_price_correction(
+        batch_id, price_per_base_unit=0.006)["corrected_movements"] == 1
+    manager.consume_batch(batch_id, quantity=200.0, occurred_at="2026-08-14T18:00:00")
+    preview = manager.preview_price_correction(batch_id, price_per_base_unit=0.006)
+    assert preview["corrected_movements"] == 2
+    assert preview["batch_id"] == batch_id
+    assert preview["price_per_base_unit"] == pytest.approx(0.006)
+    conn = manager.db.read()
+    assert conn.execute("SELECT price_per_base_unit FROM batch WHERE id = ?",
+                        (batch_id,)).fetchone()[0] == pytest.approx(0.004)

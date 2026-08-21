@@ -1933,18 +1933,24 @@ class StockManager:
 
     def _correct_movement_within(self, conn, movement: Mapping[str, Any], *,
                                  moment: str,
-                                 allow_cooked: bool = False) -> int:
+                                 allow_cooked: bool = False,
+                                 adjust_stock: bool = True) -> int:
         """Le corps d'une contrepassation, sur une connexion déjà tenue.
 
         Extrait pour `correct_price` et `correct_meal`, qui en écrivent
         plusieurs dans UNE transaction. `Database._lock` n'est pas réentrant :
         appeler `correct_movement` depuis l'intérieur d'un `db.write()` fige le
         processus, sans exception et sans trace.
+
+        `adjust_stock=False` sert à `correct_price`, dont la paire
+        contrepassation + réécriture est de solde NUL sur la quantité :
+        ajuster le lot entre les deux le ferait passer par un état négatif
+        et déclencherait un refus sur une correction pourtant légitime.
         """
         check_correctable(movement, allow_cooked=allow_cooked)
         line = reversal(movement, moment=moment)
         batch_id = line.pop("batch_id")
-        if batch_id is not None:
+        if batch_id is not None and adjust_stock:
             batch = conn.execute(
                 "SELECT remaining FROM batch WHERE id = ?", (batch_id,)
             ).fetchone()
@@ -1963,6 +1969,131 @@ class StockManager:
                     conn, batch_id, 0.0 if closes else after,
                     closed_at=moment if closes else None)
         return repo.insert_movement(conn, batch_id=batch_id, **line)
+
+    # --- § 12.4 : corriger un prix ----------------------------------------
+
+    @staticmethod
+    def _movements_to_reprice(conn, batch_id: int) -> list[dict[str, Any]]:
+        """Les lignes de ce lot qui ne sont ni des annulations ni annulées.
+
+        Une ligne déjà contrepassée ne se contrepasse pas deux fois (index
+        UNIQUE), et une contrepassation ne se corrige pas : ce sont les
+        réécritures qui portent le coût courant.
+        """
+        return [
+            row for row in repo.movements_of_batch(conn, batch_id)
+            if row["corrects_id"] is None
+            and repo.correction_of(conn, row["id"]) is None
+        ]
+
+    def preview_price_correction(self, batch_id: int, *,
+                                 price_per_base_unit: float | None) -> dict[str, Any]:
+        """« 3 mouvements déjà écrits seront corrigés », ou zéro. N'écrit rien."""
+        conn = self.db.read()
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        if batch is None:
+            raise LookupError(f"unknown batch {batch_id}")
+        affected = self._movements_to_reprice(conn, batch_id)
+        return {
+            "batch_id": batch_id,
+            "price_per_base_unit": price_per_base_unit,
+            "previous_price_per_base_unit": batch["price_per_base_unit"],
+            "corrected_movements": len(affected),
+        }
+
+    def correct_price(self, batch_id: int, *, price_per_base_unit: float | None,
+                      observed_on: str | None = None,
+                      store_id: int | None = None,
+                      source: str = "manual",
+                      moment: str | None = None) -> dict[str, Any]:
+        """Corriger le prix d'un lot, des deux côtés (§ 12.4), en UNE transaction.
+
+        En avant : le lot porte désormais le bon prix, et une observation
+        `price` le dit. Toutes les sorties futures seront chiffrées juste
+        sans rien réécrire.
+
+        En arrière : chaque mouvement déjà pris sur ce lot est contrepassé
+        PUIS réécrit au coût corrigé. Deux lignes par mouvement, `corrects_id`
+        sur la première seulement. Les nutriments sont recopiés à l'identique :
+        un prix faux n'a jamais faussé des calories.
+
+        Le cas normal ne produit aucune écriture arrière hors l'achat : un
+        ticket lu le soir même corrige des lots dont rien n'est sorti.
+        """
+        when = moment or _now()
+        with self.db.write() as conn:
+            batch = conn.execute("SELECT * FROM batch WHERE id = ?",
+                                 (batch_id,)).fetchone()
+            if batch is None:
+                raise LookupError(f"unknown batch {batch_id}")
+            affected = self._movements_to_reprice(conn, batch_id)
+            repo.set_batch_price(conn, batch_id, price_per_base_unit)
+            price_id = None
+            if price_per_base_unit is not None:
+                price_id = repo.insert_price(
+                    conn, article_id=batch["article_id"],
+                    observed_on=observed_on or when[:10],
+                    price_per_base_unit=price_per_base_unit,
+                    source=source, store_id=store_id)
+            written: list[int] = []
+            for movement in affected:
+                self._correct_movement_within(conn, movement, moment=when,
+                                              adjust_stock=False)
+                line = reprice(movement, price_per_base_unit=price_per_base_unit,
+                               moment=when)
+                line["idempotency_key"] = f"reprice:{movement['id']}"
+                written.append(repo.insert_movement(conn, **line))
+            return {
+                "batch_id": batch_id,
+                "corrected_movements": len(affected),
+                "movement_ids": written,
+                "price_id": price_id,
+            }
+
+    # --- § 12.5 : corriger un repas validé ---------------------------------
+
+    def correct_meal(self, meal_id: int, *,
+                     occurred_at: str | None = None) -> dict[str, Any]:
+        """Annuler un repas validé : le bloc entier, dans l'ordre INVERSE.
+
+        Une validation écrit N sorties `cooked`, une entrée `cooked` (le plat)
+        et une `consumption`. Les contrepasser dans l'ordre où elles ont été
+        écrites remettrait le plat en stock avant d'avoir annulé ce qu'on en a
+        mangé — d'où l'ordre inverse, et une seule transaction.
+        """
+        when = occurred_at or _now()
+        with self.db.write() as conn:
+            meal = repo.get_meal(conn, meal_id)
+            if meal is None:
+                raise LookupError(f"unknown meal {meal_id}")
+            movements = repo.movements_of_meal(conn, meal_id)
+            already = [row for row in movements
+                       if repo.correction_of(conn, row["id"]) is not None]
+            if len(already) == len(movements) and movements:
+                # Rejeu : la file hors ligne rejoue, et le résultat ne change pas.
+                return {"meal_id": meal_id,
+                        "reversed_movements": [row["id"] for row in reversed(movements)],
+                        "state": meal["state"]}
+            if meal["state"] != "done" or not movements:
+                raise ValueError(f"meal {meal_id} was never validated")
+            dish_batches = {row["batch_id"] for row in movements
+                            if row["reason"] == REASON_COOKED and row["quantity"] > 0}
+            for dish_batch_id in dish_batches:
+                foreign = [row for row in repo.movements_of_batch(conn, dish_batch_id)
+                           if (row["ref_type"], row["ref_id"]) != ("meal", meal_id)]
+                if foreign:
+                    raise ValueError(
+                        f"meal {meal_id} cannot be corrected: its dish has been started")
+            reversed_ids: list[int] = []
+            for movement in reversed(movements):
+                self._correct_movement_within(conn, movement, moment=when,
+                                              allow_cooked=True)
+                reversed_ids.append(movement["id"])
+            repo.update_meal_fields(conn, meal_id, {
+                "state": "planned", "validated_at": None, "portions_eaten": None,
+            })
+            return {"meal_id": meal_id, "reversed_movements": reversed_ids,
+                    "state": "planned"}
 
 
 # =============================================================================

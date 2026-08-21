@@ -396,3 +396,125 @@ def test_a_dinner_validated_at_one_in_the_morning_lands_on_the_evening(manager):
 def _at(text):
     from datetime import datetime
     return datetime.fromisoformat(text).replace(tzinfo=PARIS)
+
+
+# --- § 12.5 : corriger un repas validé --------------------------------------
+
+def _ingredient_batches(manager):
+    return {r["id"]: r["remaining"] for r in manager.db.read().execute(
+        "SELECT b.id, b.remaining FROM batch b ORDER BY b.id")}
+
+
+def test_correcting_a_meal_reverses_the_whole_block_in_reverse_order(manager):
+    """N mouvements `cooked` négatifs, le lot de plat et son `cooked` positif,
+    puis la `consumption` : contrepassés dans l'ordre INVERSE, en une
+    transaction, et le repas repasse de `done` à `planned`."""
+    _, _, meal_id = _simple(manager, nutrition={"kcal_per_base_unit": 2.0})
+    written = manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                                    occurred_at="2026-08-21T19:00:00")
+
+    result = manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+
+    assert result["meal_id"] == meal_id
+    assert result["state"] == "planned"
+    assert len(result["reversed_movements"]) == len(written["movement_ids"])
+    reversed_targets = [
+        r["corrects_id"] for r in manager.db.read().execute(
+            "SELECT corrects_id FROM movement WHERE corrects_id IS NOT NULL"
+            " ORDER BY id")]
+    assert reversed_targets == list(reversed(written["movement_ids"]))
+    meal = repo.get_meal(manager.db.read(), meal_id)
+    assert meal["state"] == "planned"
+    assert meal["validated_at"] is None
+
+
+def test_correct_meal_is_the_only_caller_allowed_to_reverse_a_cooked(manager):
+    """`correct_movement` sur un `cooked` de ce même repas reste refusé."""
+    from custom_components.home_stock.domain.correction import CorrectionError
+    _, _, meal_id = _simple(manager)
+    written = manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                                    occurred_at="2026-08-21T19:00:00")
+    cooked = [r["id"] for r in _movements(manager, "cooked")]
+    assert cooked
+    with pytest.raises(CorrectionError):
+        manager.correct_movement(cooked[0], occurred_at="2026-08-22T09:00:00")
+    assert written["movement_ids"]
+
+
+def test_correcting_a_meal_whose_dish_batch_was_started_is_refused(manager):
+    """Une part mangée hors du repas rend le passé non reconstituable. Le
+    refus DIT quoi faire : consommer le reste, ou corriger la seule
+    consommation fautive."""
+    from custom_components.home_stock.messages import french_message
+    _, _, meal_id = _simple(manager)
+    written = manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                                    occurred_at="2026-08-21T19:00:00")
+    manager.consume_batch(written["batch_id"], quantity=1.0,
+                          occurred_at="2026-08-21T22:00:00")
+
+    with pytest.raises(ValueError) as refus:
+        manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+    assert french_message(refus.value) == (
+        "Ce plat a été entamé depuis : corrigez la consommation fautive, "
+        "ou finissez le plat avant d'annuler le repas."
+    )
+
+
+def test_correcting_a_meal_leaves_the_stock_exactly_as_before(manager):
+    """Le critère de recette : quantités de tous les lots d'ingrédients
+    identiques à l'octet près avant validation et après correction."""
+    _, _, meal_id = _simple(manager, nutrition={"kcal_per_base_unit": 2.0},
+                            price=0.003)
+    before = _ingredient_batches(manager)
+    manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                          occurred_at="2026-08-21T19:00:00")
+
+    manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+
+    after = _ingredient_batches(manager)
+    for batch_id, remaining in before.items():
+        assert after[batch_id] == pytest.approx(remaining)
+    # Le lot de plat existe toujours, vide et clôturé : le journal reste lisible.
+    dish = [r for r in manager.db.read().execute(
+        "SELECT * FROM batch ORDER BY id") if r["id"] not in before]
+    assert len(dish) == 1
+    assert dish[0]["remaining"] == pytest.approx(0.0)
+    assert dish[0]["closed_at"] == "2026-08-22T09:00:00"
+
+
+def test_correcting_a_meal_zeroes_its_kcal_and_its_cost(manager):
+    """La preuve de l'amendement A1 sur un bloc entier : le total de tous
+    les temps revient exactement là où il était."""
+    _, _, meal_id = _simple(manager, nutrition={"kcal_per_base_unit": 2.0},
+                            price=0.003)
+    before = dict(repo.totals_between(manager.db.read()))
+    manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                          occurred_at="2026-08-21T19:00:00")
+    manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+
+    after = dict(repo.totals_between(manager.db.read()))
+    assert after["kcal"] == pytest.approx(before["kcal"])
+    assert after["cost"] == pytest.approx(before["cost"])
+
+
+def test_correcting_a_meal_is_idempotent_on_replay(manager):
+    """Clé dérivée par mouvement ; un rejeu rend le même résultat."""
+    _, _, meal_id = _simple(manager)
+    manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
+                          occurred_at="2026-08-21T19:00:00")
+    first = manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+    again = manager.correct_meal(meal_id, occurred_at="2026-08-22T09:05:00")
+
+    assert again["reversed_movements"] == first["reversed_movements"]
+    assert manager.db.read().execute(
+        "SELECT COUNT(*) AS n FROM movement WHERE corrects_id IS NOT NULL"
+    ).fetchone()["n"] == len(first["reversed_movements"])
+
+
+def test_correcting_a_meal_that_was_never_validated_is_refused(manager):
+    from custom_components.home_stock.messages import french_message
+    _, _, meal_id = _simple(manager)
+    with pytest.raises(ValueError) as refus:
+        manager.correct_meal(meal_id, occurred_at="2026-08-22T09:00:00")
+    assert french_message(refus.value) == (
+        "Ce repas n'a pas été validé : il n'y a rien à annuler.")

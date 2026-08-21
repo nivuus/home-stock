@@ -158,6 +158,12 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
                 r" only (.+) left$"), "insufficient_stock",
      lambda m: f"Impossible d'annuler cette ligne : le lot n'a plus que {m.group(3)}. "
                "Le stock a déjà été repris ailleurs."),
+    (re.compile(r"^meal (\d+) was never validated$"), "invalid_value",
+     lambda m: "Ce repas n'a pas été validé : il n'y a rien à annuler."),
+    (re.compile(r"^meal (\d+) cannot be corrected: its dish has been started$"),
+     "invalid_value",
+     lambda m: "Ce plat a été entamé depuis : corrigez la consommation fautive, "
+               "ou finissez le plat avant d'annuler le repas."),
 )
 
 GENERIC_CODE: Final = "invalid_value"
