@@ -107,7 +107,8 @@ def grocy_vide(tmp_path, grocy_reel_db):
     chemin = tmp_path / "grocy_vide.db"
     source = sqlite3.connect(grocy_reel_db)
     schema = [ligne[0] for ligne in source.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")]
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL"
+        "   AND name NOT LIKE 'sqlite_%'")]
     source.close()
     conn = sqlite3.connect(str(chemin))
     for instruction in schema:
@@ -333,3 +334,299 @@ def test_details_are_capped_at_fifty(db_migre, grocy_reel_db):
     for controle in check_migration(db_migre, grocy_reel_db,
                                     archive=False).checks:
         assert len(controle.details) <= 50
+
+
+# --- C7 à C11 ---------------------------------------------------------------
+
+@pytest.fixture
+def media_complet(db_migre, tmp_media, grocy_reel):
+    """Le dossier media APRÈS le geste 3 : les 62 images en ligne écrites par
+    l'import, plus les 55 fichiers hébergés copiés par le propriétaire."""
+    from custom_components.home_stock.grocy import pictures as gp
+    dossier = tmp_media / "recipes"
+    for ligne in grocy_reel["recipes"]:
+        for ref in gp.references(ligne["description"]):
+            if ref.family == "grocy":
+                (dossier / ref.filename).write_bytes(b"\xff\xd8fichier\xff\xd9")
+    return tmp_media
+
+
+@pytest.fixture
+def db_piles(db_migre, grocy_reel_db):
+    """La base après le geste 7 : piles et équipements importés.
+
+    L'import du lot 5 est REJOUÉ ici, pas refait autrement : C7 vérifie ce
+    qu'il a produit, et un ensemencement à la main prouverait seulement que
+    le test sait remplir une table.
+    """
+    from custom_components.home_stock.import_grocy_equipment import (
+        import_grocy_equipment,
+    )
+    etats = json.loads(
+        (Path(__file__).parent / "fixtures" / "maintenance" / "etats.json")
+        .read_text(encoding="utf-8"))
+    registre = [
+        {"entity_registry_id": f"uuid-{index}", "entity_id": row["entity_id"],
+         "device_id": None,
+         "name": row["attributes"].get("friendly_name") or row["entity_id"],
+         "model": None}
+        for index, row in enumerate(etats)
+        if row["attributes"].get("device_class") == "battery"
+    ]
+    import_grocy_equipment(db_migre, grocy_reel_db, hass_states=etats,
+                           registry_rows=registre, apply=True)
+    return db_migre
+
+
+@pytest.fixture
+def db_sans_piles(db_migre):
+    """Tout est là sauf l'import des piles : le geste 7 a été sauté."""
+    with db_migre.write() as conn:
+        conn.execute("DELETE FROM battery")
+        conn.execute("DELETE FROM equipment")
+    return db_migre
+
+
+def _config(tmp_path, nom, *, raccord: bool):
+    """Un dossier config/ jetable, bâti depuis les fixtures du dépôt.
+
+    JAMAIS depuis /opt/nivuus/HomeAssistant/config/ : aucun test ne lit
+    l'instance vivante, et aucun ne l'écrit.
+    """
+    racine = tmp_path / nom
+    (racine / "custom_templates").mkdir(parents=True)
+    fixtures = Path(__file__).parent / "fixtures" / "maintenance"
+    if raccord:
+        (racine / "custom_templates" / "maintenance.jinja").write_text(
+            (Path(__file__).parent.parent / "docs" / "raccord"
+             / "maintenance.jinja").read_text("utf-8"), "utf-8")
+        (racine / "automations.yaml").write_text(
+            (Path(__file__).parent.parent / "docs" / "raccord"
+             / "maintenance_sync.yaml").read_text("utf-8"), "utf-8")
+        (racine / "scripts.yaml").write_text("[]\n", "utf-8")
+    else:
+        (racine / "custom_templates" / "maintenance.jinja").write_text(
+            (fixtures / "avant.jinja").read_text("utf-8"), "utf-8")
+        (racine / "automations.yaml").write_text(
+            (fixtures / "automation_avant.yaml").read_text("utf-8"), "utf-8")
+        (racine / "scripts.yaml").write_text(
+            "- alias: Afficher recette\n"
+            "  sequence: [{ url: /local/grocy-recipes.html }]\n", "utf-8")
+    return str(racine)
+
+
+@pytest.fixture
+def config_avec_raccord_absent(tmp_path):
+    return _config(tmp_path, "config_avant", raccord=False)
+
+
+@pytest.fixture
+def config_avec_raccord_pose(tmp_path):
+    return _config(tmp_path, "config_apres", raccord=True)
+
+
+def test_every_declared_check_has_a_floor():
+    """Garde-fou structurel : un contrôle sans plancher ne doit pas pouvoir
+    exister dans le module."""
+    from custom_components.home_stock import migration_check as mc
+    from custom_components.home_stock.const import MIGRATION_CHECKS
+    assert len(MIGRATION_CHECKS) == 12          # C0..C11
+    for code in MIGRATION_CHECKS:
+        assert code in mc.FLOORS, code
+        assert callable(mc.FLOORS[code])
+
+
+def test_c7_verifies_lot5_but_never_redoes_it():
+    import inspect
+
+    from custom_components.home_stock import migration_check as mc
+    assert "import_grocy_equipment(" not in inspect.getsource(mc)
+
+
+def test_c7_fails_when_batteries_are_empty(db_sans_piles, grocy_reel_db):
+    """Sans cet import, le raccord du lot 5 FERME 14 tâches de pile au lieu
+    de les déplacer. C'est la seule dépendance d'ordre du lot 5 vers le 7."""
+    c7 = _check(check_migration(db_sans_piles, grocy_reel_db, archive=False), "C7")
+    assert c7.verdict == "empty" and c7.blocking is True
+
+
+def test_c7_matches_equipment_row_for_row(db_piles, grocy_reel_db):
+    """34 équipements chez Grocy, 34 chez nous : c'est une recopie, et elle se
+    compte ligne à ligne.
+
+    Les PILES, elles, ne se comptent pas ainsi : l'import du lot 5 part du
+    registre d'entités de Home Assistant et se sert des 26 lignes Grocy pour
+    renseigner ce qu'il y trouve. Le plan attendait 26 = 26 ; les deux nombres
+    n'ont aucune raison d'être égaux, et exiger l'égalité ferait échouer C7
+    parce que l'import a bien fonctionné. Amendement A11 du § 22.
+    """
+    c7 = _check(check_migration(db_piles, grocy_reel_db, archive=False), "C7")
+    assert c7.grocy_count == 34 and c7.home_count == 34
+    assert c7.verdict == "ok"
+    assert any("26 piles chez Grocy" in d for d in c7.details)
+
+
+def test_c8_counts_all_four_numbers(db_migre, grocy_reel_db):
+    c8 = _check(check_migration(db_migre, grocy_reel_db, archive=False), "C8")
+    detail = " ".join(c8.details)
+    assert "102" in detail and "510" in detail and "561" in detail and "116" in detail
+
+
+def test_c8_catches_a_phantom_that_slipped_through(db_migre, grocy_reel_db):
+    """Une copie fantôme a un source_ref NÉGATIF. Si une seule passe, le
+    filtre type IN ('normal','1') a été relâché quelque part."""
+    with db_migre.write() as conn:
+        conn.execute("UPDATE recipe SET source_ref = '-42' WHERE source_ref = '1'")
+    assert _check(check_migration(db_migre, grocy_reel_db, archive=False),
+                  "C8").blocking is True
+
+
+def test_c8_lists_the_twenty_five_unmatched_without_blocking_on_counts(
+        db_migre, grocy_reel_db):
+    c8 = _check(check_migration(db_migre, grocy_reel_db, archive=False), "C8")
+    assert c8.verdict == "unacknowledged"
+    assert len([d for d in c8.details if "sans quantité" in d]) == 25
+
+
+def test_c8_passes_when_the_twenty_five_are_acknowledged(db_migre, grocy_reel_db):
+    ids = _ids_unmatched(db_migre)
+    assert len(ids) == 25
+    c8 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                acknowledged=ids), "C8")
+    assert c8.verdict == "ok"
+
+
+def test_c9_stats_every_file(db_migre, grocy_reel_db, media_complet):
+    """Cas 3 du §16.3 : les images sont dans le mauvais dossier, les
+    image_url sont écrites, la base est cohérente avec elle-même, tout est
+    vert — jusqu'à ce que C9 aille stat() chaque fichier."""
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=media_complet), "C9")
+    # 82 fichiers : 27 images en ligne (62 balises <img>, mais une recette
+    # réutilise la même image sur plusieurs pages) plus 55 fichiers hébergés.
+    # La spec annonçait 117, en comptant des balises — amendement A10.
+    assert c9.home_count == 82 and c9.verdict == "ok"
+
+
+def test_c9_fails_when_the_folder_is_empty(db_migre, grocy_reel_db, tmp_path):
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=str(tmp_path / "nulle-part")), "C9")
+    assert c9.verdict == "empty" and c9.blocking is True
+
+
+def test_c9_refuses_a_zero_byte_file(db_migre, grocy_reel_db, media_complet):
+    """Un fichier de 0 octet passerait tous les contrôles de base et
+    n'afficherait rien sur la tablette."""
+    cible = next((media_complet / "recipes").iterdir())
+    cible.write_bytes(b"")
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=media_complet), "C9")
+    assert c9.blocking is True
+    assert any(cible.name in d for d in c9.details)
+
+
+def test_c9_finds_no_residual_grocy_url(db_migre, grocy_reel_db, media_complet):
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=media_complet), "C9")
+    assert not [d for d in c9.details if "grocy.allanic.me" in d]
+
+
+def test_c9_catches_a_residual_grocy_url(db_migre, grocy_reel_db, media_complet):
+    with db_migre.write() as conn:
+        conn.execute("UPDATE recipe_step SET image_url ="
+                     " 'https://grocy.allanic.me/api/files/recipepictures/x'"
+                     " WHERE id = (SELECT MIN(id) FROM recipe_step)")
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=media_complet), "C9")
+    assert c9.blocking is True
+    assert any("grocy.allanic.me" in d for d in c9.details)
+
+
+def test_c9_leaves_unsplash_alone(db_migre, grocy_reel_db, media_complet):
+    """46 images distinctes, 112 emplacements, laissées à leur source. Le
+    critère est « est-ce que ça meurt avec le conteneur ? » — Unsplash n'en
+    dépend pas, et C9 ne va JAMAIS les chercher sur le réseau."""
+    c9 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                picture_dir=media_complet), "C9")
+    assert c9.verdict == "ok"
+
+
+def test_c10_wants_forty_two_meals_and_nine_list_items(db_migre, grocy_reel_db):
+    c10 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                 now="2026-08-21T12:00:00"), "C10")
+    detail = " ".join(c10.details)
+    assert "42" in detail and "23" in detail and "9" in detail
+
+
+def test_a_meal_pointing_at_a_missing_recipe_cannot_even_be_written(db_migre):
+    """La clé étrangère l'interdit AVANT que C10 ait à le voir.
+
+    Le plan demandait de fabriquer un repas orphelin pour vérifier que C10 le
+    signale ; la base refuse l'écriture. C10 garde sa mesure — elle sert si
+    quelqu'un ouvre une base avec les clés étrangères coupées — mais la vraie
+    garantie est ici, et elle est plus forte qu'un contrôle.
+    """
+    with pytest.raises(sqlite3.IntegrityError):
+        with db_migre.write() as conn:
+            conn.execute("UPDATE meal SET recipe_id = 999999 WHERE id ="
+                         " (SELECT MIN(id) FROM meal WHERE recipe_id IS NOT NULL)")
+
+
+def test_c11_blocks_while_the_lot5_raccord_is_not_applied(
+        db_migre, grocy_reel_db, config_avec_raccord_absent):
+    """Vérifié au 2026-08-21 : maintenance.jinja a encore ses 142 lignes et
+    son bloc 3, et automations.yaml lit encore todo.grocy_batteries. Le poser
+    est un PRÉALABLE à toute extinction — et ce plan ne le pose pas."""
+    c11 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                 config_dir=config_avec_raccord_absent), "C11")
+    assert c11.blocking is True
+    assert any("maintenance.jinja" in d for d in c11.details)
+    assert any("todo.grocy_batteries" in d for d in c11.details)
+
+
+def test_c11_passes_once_the_raccord_is_in_place(db_migre, grocy_reel_db,
+                                                 config_avec_raccord_pose):
+    c11 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                 config_dir=config_avec_raccord_pose), "C11")
+    assert c11.verdict == "ok"
+
+
+def test_c11_is_empty_when_it_could_not_look(db_migre, grocy_reel_db, tmp_path):
+    """Il ne prétend pas que la maison est propre parce qu'il n'a pas su
+    regarder. C'est un plancher, comme les onze autres."""
+    c11 = _check(check_migration(db_migre, grocy_reel_db, archive=False,
+                                 config_dir=str(tmp_path / "nulle-part")), "C11")
+    assert c11.verdict == "empty"
+
+
+def test_c11_never_writes_anything(db_migre, grocy_reel_db,
+                                   config_avec_raccord_absent):
+    """LE test qui empêche le composant de « réparer » la maison tout seul."""
+    avant = _empreinte_dossier(config_avec_raccord_absent)
+    check_migration(db_migre, grocy_reel_db, archive=False,
+                    config_dir=config_avec_raccord_absent)
+    assert _empreinte_dossier(config_avec_raccord_absent) == avant
+
+
+def test_nothing_in_the_module_stops_a_container():
+    """Le composant n'arrête JAMAIS Grocy. Arrêter un conteneur de la maison
+    est un geste humain, et rien de ce module ne doit pouvoir le faire."""
+    import inspect
+
+    from custom_components.home_stock import migration_check as mc
+    source = inspect.getsource(mc)
+    for interdit in ("docker", "subprocess", "os.system", "Popen"):
+        assert interdit not in source
+
+
+def test_all_twelve_pass_on_a_fully_migrated_database(db_piles, grocy_reel_db,
+                                                      media_complet,
+                                                      config_avec_raccord_pose):
+    """Le seul chemin vers ok: true — et il exige les deux acquittements."""
+    rapport = check_migration(
+        db_piles, grocy_reel_db, archive=False, picture_dir=media_complet,
+        config_dir=config_avec_raccord_pose,
+        acknowledged=[*SEPT_LOTS, *_ids_unmatched(db_piles)])
+    assert rapport.blocking == []
+    assert rapport.ok is True
+    assert len(rapport.checks) == 12

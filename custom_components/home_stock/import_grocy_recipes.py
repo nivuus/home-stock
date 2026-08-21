@@ -131,6 +131,13 @@ def _write_pictures(recipe_id: int, description: str, picture_dir: Path,
             mapping[reference.src] = gp.media_id(RECIPE_MEDIA_DIR,
                                                  reference.filename)
             continue
+        if reference.src in mapping:
+            # La MÊME charge utile revient sur plusieurs pages d'une recette :
+            # 62 occurrences pour 27 images réelles. Lui donner un nom par
+            # occurrence écrirait 62 fichiers dont 35 que plus rien ne
+            # référencerait — et un fichier que personne ne référence est
+            # exactement ce que C9 signale comme orphelin.
+            continue
         nom = gp.nom_inline(recipe_id, rang)
         rang += 1
         mapping[reference.src] = gp.media_id(RECIPE_MEDIA_DIR, nom)

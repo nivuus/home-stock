@@ -271,4 +271,14 @@ def grocy_reel_db(tmp_path, grocy_reel) -> str:
     # volumétrie continuent de compter 102 recettes.
     tables["recipes"] = tables["recipes"] + grocy_reel["recipes_phantoms"]
     _build_grocy_db(chemin, tables)
+    # Les tables `batteries` et `equipment` viennent de l'extrait SQL versionné
+    # du lot 5 — la même donnée, prise le même jour. Les redécouper en JSON
+    # ferait deux copies d'une même mesure, et c'est exactement ce que le lot 7
+    # interdit ailleurs.
+    conn = sqlite3.connect(str(chemin))
+    conn.executescript(
+        (Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql")
+        .read_text(encoding="utf-8"))
+    conn.commit()
+    conn.close()
     return str(chemin)

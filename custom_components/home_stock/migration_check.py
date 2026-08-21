@@ -97,6 +97,32 @@ class Measures:
     movement_gaps: list[str] = field(default_factory=list)
     polluted_movements: list[str] = field(default_factory=list)
 
+    grocy_batteries: int = 0
+    grocy_equipment: int = 0
+    home_batteries: int = 0
+    home_equipment: int = 0
+    battery_gaps: list[str] = field(default_factory=list)
+
+    recipes: int = 0
+    ingredients: int = 0
+    instructions: int = 0
+    timers: int = 0
+    phantoms: list[str] = field(default_factory=list)
+    unmatched_lines: list[tuple[str, str]] = field(default_factory=list)
+
+    picture_dir_seen: bool = False
+    pictures_referenced: int = 0
+    pictures_present: int = 0
+    picture_gaps: list[str] = field(default_factory=list)
+
+    meals: int = 0
+    meal_recipes: int = 0
+    list_items: int = 0
+    plan_gaps: list[str] = field(default_factory=list)
+
+    config_seen: bool = False
+    residues: list[str] = field(default_factory=list)
+
 
 # Le plancher AVANT la comparaison. Un contrôle qui compare 0 à 0 est rouge,
 # jamais vert : le lot 6 a démontré qu'un vérificateur qui mesure du vide
@@ -116,7 +142,34 @@ FLOORS: dict[str, Callable[[Measures], bool]] = {
     "C4": lambda m: m.home_batches > 0,
     "C5": lambda m: m.entry_movements > 0,
     "C6": lambda m: m.entry_movements > 0,
+    # Sans cet import, le raccord du lot 5 FERME 14 tâches de pile au lieu de
+    # les déplacer. C'est la seule dépendance d'ordre du lot 5 vers le lot 7,
+    # et le lot 7 la VÉRIFIE — il ne refait pas l'import.
+    "C7": lambda m: m.home_batteries > 0 and m.home_equipment > 0,
+    "C8": lambda m: m.recipes > 0,
+    # C9 sort de la base. Un contrôle qui ne fait que relire des colonnes ne
+    # prouve RIEN sur des fichiers : les image_url peuvent être parfaitement
+    # cohérentes et pointer un dossier vide.
+    "C9": lambda m: m.picture_dir_seen and m.pictures_present > 0,
+    "C10": lambda m: m.meals > 0,
+    # Quand le dossier n'existe pas, C11 ne prétend pas que la maison est
+    # propre : il dit qu'il n'a pas su regarder.
+    "C11": lambda m: m.config_seen,
 }
+
+# Ce que C11 cherche, en LECTURE SEULE, dans une copie du dossier config qu'on
+# lui désigne. Il n'écrit jamais rien, ne recharge rien, et n'applique JAMAIS
+# le raccord du lot 5.
+GROCY_RESIDUES = (
+    ("todo.grocy_batteries", "une liste de piles que l'import du lot 5 remplace"),
+    ("grocy_shopping_list", "la liste de courses de Grocy"),
+    ("sensor.grocy_meal_plan", "le planning de Grocy"),
+    ("grocy-recipes.html", "la page de recettes servie depuis www/"),
+    ("grocy-scanner.html", "le scanner servi depuis www/"),
+)
+# Le bloc 3 du .jinja : c'est lui que le raccord retire, et sa présence dit à
+# elle seule que le raccord n'est pas posé.
+JINJA_BATTERY_BLOCK = "3. Piles"
 
 
 def _open_grocy(path: str) -> sqlite3.Connection:
@@ -153,6 +206,9 @@ def _measure(db, grocy_path: str, *, now: datetime) -> Measures:
     grocy = _open_grocy(grocy_path)
     try:
         _measure_freeze(grocy, measures)
+        _measure_equipment(conn, grocy, measures)
+        _measure_recipes(conn, measures)
+        _measure_plan(conn, measures)
         if measures.schema_version >= SCHEMA_VERSION_EXPECTED:
             # Avant m008 il n'y a pas de batch.external_ref : les dix autres
             # contrôles n'ont rien à lire, et leur plancher les rendra `empty`
@@ -304,6 +360,158 @@ def _measure_movements(conn, measures: Measures) -> None:
             " coût — les trois cumuls sauteraient d'un bloc")
 
 
+def _measure_equipment(conn, grocy, measures: Measures) -> None:
+    """What lot 5's import produced. This module VERIFIES it; it never redoes
+    it — a check that re-runs the thing it checks proves only that it can."""
+    try:
+        measures.grocy_batteries = grocy.execute(
+            "SELECT COUNT(*) AS n FROM batteries WHERE active = 1").fetchone()["n"]
+    except sqlite3.Error:
+        measures.grocy_batteries = 0
+    # Les piles ne se comptent PAS ligne à ligne contre Grocy : l'import du
+    # lot 5 part du registre d'entités de Home Assistant et se sert des lignes
+    # Grocy pour renseigner ce qu'il trouve. Les deux nombres n'ont aucune
+    # raison d'être égaux, et exiger l'égalité ferait échouer C7 parce que
+    # l'import a bien fonctionné. Ce qui se compare ligne à ligne, c'est
+    # l'équipement, qui est une recopie.
+    measures.home_batteries = conn.execute(
+        "SELECT COUNT(*) AS n FROM battery").fetchone()["n"]
+    try:
+        measures.grocy_equipment = grocy.execute(
+            "SELECT COUNT(*) AS n FROM equipment").fetchone()["n"]
+    except sqlite3.Error:
+        measures.grocy_equipment = 0
+    measures.home_equipment = conn.execute(
+        "SELECT COUNT(*) AS n FROM equipment").fetchone()["n"]
+    for row in conn.execute(
+        "SELECT bt.label AS label FROM battery AS bt"
+        " WHERE bt.tracked = 1 AND bt.entity_registry_id IS NULL"
+        "   AND bt.device_id IS NULL"
+    ):
+        measures.battery_gaps.append(
+            f"{row['label']} : suivie mais ancrée à rien — la tâche de"
+            " maintenance ne saura pas de quelle pile elle parle")
+
+
+def _measure_recipes(conn, measures: Measures) -> None:
+    measures.recipes = conn.execute(
+        "SELECT COUNT(*) AS n FROM recipe WHERE source = 'grocy'").fetchone()["n"]
+    measures.ingredients = conn.execute(
+        "SELECT COUNT(*) AS n FROM recipe_ingredient").fetchone()["n"]
+    measures.instructions = conn.execute(
+        "SELECT COUNT(*) AS n FROM recipe_instruction").fetchone()["n"]
+    measures.timers = conn.execute(
+        "SELECT COUNT(*) AS n FROM recipe_instruction"
+        " WHERE timer_seconds IS NOT NULL").fetchone()["n"]
+    for row in conn.execute(
+        "SELECT rec.name AS name, rec.source_ref AS ref FROM recipe AS rec"
+        " WHERE rec.source = 'grocy' AND CAST(rec.source_ref AS INTEGER) <= 0"
+    ):
+        measures.phantoms.append(
+            f"{row['name']} (source_ref {row['ref']}) : copie fantôme de"
+            " meal_plan importée — le filtre a été relâché")
+    for row in conn.execute(
+        "SELECT ri.id AS id, ri.raw_text AS raw_text, rec.name AS recipe"
+        " FROM recipe_ingredient AS ri"
+        " JOIN recipe AS rec ON rec.id = ri.recipe_id"
+        " WHERE ri.match_state = 'unmatched' ORDER BY ri.id"
+    ):
+        measures.unmatched_lines.append(
+            (str(row["id"]),
+             f"{row['recipe']} : ligne {row['id']} sans quantité —"
+             f" « {row['raw_text']} », à trancher à la main"))
+
+
+def _measure_plan(conn, measures: Measures) -> None:
+    measures.meals = conn.execute(
+        "SELECT COUNT(*) AS n FROM meal").fetchone()["n"]
+    measures.meal_recipes = conn.execute(
+        "SELECT COUNT(DISTINCT recipe_id) AS n FROM meal"
+        " WHERE recipe_id IS NOT NULL").fetchone()["n"]
+    measures.list_items = conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_list_item"
+        " WHERE checked_at IS NULL AND removed_at IS NULL").fetchone()["n"]
+    for row in conn.execute(
+        "SELECT ml.day AS day, ml.recipe_id AS recipe_id FROM meal AS ml"
+        " WHERE ml.recipe_id IS NOT NULL"
+        "   AND NOT EXISTS (SELECT 1 FROM recipe AS rec WHERE rec.id = ml.recipe_id)"
+    ):
+        measures.plan_gaps.append(
+            f"repas du {row['day']} : la recette {row['recipe_id']} n'existe"
+            " pas — il se découvrirait au dîner")
+
+
+def _measure_pictures(conn, measures: Measures, picture_dir) -> None:
+    """Go out to the file system. A check that only re-reads columns proves
+    NOTHING about files: the image_url can be perfectly consistent with each
+    other and point at an empty folder. A zero-byte file is a failure — it
+    would pass every database check and display nothing."""
+    racine = Path(picture_dir) if picture_dir else None
+    measures.picture_dir_seen = racine is not None and racine.exists()
+
+    references: set[str] = set()
+    # `article` nomme sa colonne `image`, les deux autres `image_url` : le
+    # lot 0 l'a écrit ainsi et le lot 7 ne renomme rien.
+    for table, colonne in (("recipe", "image_url"), ("recipe_step", "image_url"),
+                           ("article", "image")):
+        for row in conn.execute(f"SELECT {colonne} AS url FROM {table}"
+                                f"  WHERE {colonne} IS NOT NULL"):
+            url = row["url"]
+            if "grocy.allanic.me" in url:
+                measures.picture_gaps.append(
+                    f"{table} : une URL grocy.allanic.me résiduelle"
+                    f" ({url}) — elle mourra avec le conteneur")
+            elif url.startswith("media-source://media_source/local/"):
+                references.add(url.split("/local/", 1)[1])
+            # Les URL externes (Unsplash) ne sont NI comptées NI visitées :
+            # elles ne meurent pas avec le conteneur.
+    measures.pictures_referenced = len(references)
+    if racine is None:
+        return
+    for relative in sorted(references):
+        # `home_stock/recipes/x.jpg` sous une racine qui EST `media/home_stock`.
+        chemin = racine / Path(relative).relative_to("home_stock") \
+            if relative.startswith("home_stock/") else racine / relative
+        if not chemin.exists():
+            measures.picture_gaps.append(
+                f"{chemin.name} : référencé mais absent du dossier media")
+        elif chemin.stat().st_size == 0:
+            measures.picture_gaps.append(
+                f"{chemin.name} : fichier de 0 octet — il n'afficherait rien")
+        else:
+            measures.pictures_present += 1
+
+
+def _measure_config(measures: Measures, config_dir) -> None:
+    """Read config/ — READ ONLY, through a path handed in as a parameter.
+
+    Never written, never reloaded, and the lot 5 raccord is NEVER applied.
+    When the path does not exist, C11 reports `empty`: it does not claim the
+    house is clean because it could not look.
+    """
+    if not config_dir:
+        return
+    racine = Path(config_dir)
+    if not racine.exists():
+        return
+    measures.config_seen = True
+    fichiers = [racine / "automations.yaml", racine / "scripts.yaml",
+                racine / "custom_templates" / "maintenance.jinja"]
+    for chemin in fichiers:
+        if not chemin.exists():
+            continue
+        texte = chemin.read_text("utf-8", errors="replace")
+        for motif, quoi in GROCY_RESIDUES:
+            if motif in texte:
+                measures.residues.append(
+                    f"{chemin.name} cite encore {motif} — {quoi}")
+        if chemin.name == "maintenance.jinja" and JINJA_BATTERY_BLOCK in texte:
+            measures.residues.append(
+                f"{chemin.name} porte encore son bloc « {JINJA_BATTERY_BLOCK} »"
+                " — appliquer le raccord de docs/raccord/README.md AVANT toute"
+                " extinction, sinon 14 tâches de pile disparaissent")
+
+
 def _verdict(code: str, gap: int, measures: Measures,
              acknowledged: set[str], to_acknowledge: set[str]) -> str:
     if not FLOORS[code](measures):
@@ -425,8 +633,67 @@ def _c6(measures: Measures, acknowledged: set[str]) -> CheckResult:
                    measures=measures, acknowledged=acknowledged)
 
 
+def _c7(measures: Measures, acknowledged: set[str]) -> CheckResult:
+    return _result("C7", "Piles et équipements (lot 5)",
+                   grocy_count=measures.grocy_equipment,
+                   home_count=measures.home_equipment,
+                   gap=abs(measures.grocy_equipment - measures.home_equipment)
+                   + len(measures.battery_gaps),
+                   details=[f"{measures.grocy_batteries} piles chez Grocy,"
+                            f" {measures.home_batteries} dans home_stock",
+                            f"{measures.home_equipment} équipements",
+                            *measures.battery_gaps],
+                   measures=measures, acknowledged=acknowledged)
+
+
+def _c8(measures: Measures, acknowledged: set[str]) -> CheckResult:
+    """Recipes, and the 25 lines a human has to sign.
+
+    Blocking on the counts, NOT on the 25 unmatched — those are listed and
+    acknowledged by name, because they are work to do, not a defect to fix.
+    """
+    details = [
+        f"{measures.recipes} recettes", f"{measures.ingredients} ingrédients",
+        f"{measures.instructions} instructions", f"{measures.timers} minuteurs",
+        *measures.phantoms,
+        *[texte for _, texte in measures.unmatched_lines],
+    ]
+    return _result("C8", "Recettes, ingrédients, instructions, minuteurs",
+                   grocy_count=measures.recipes, home_count=measures.recipes,
+                   gap=len(measures.phantoms), details=details,
+                   measures=measures, acknowledged=acknowledged,
+                   to_acknowledge={ident for ident, _ in measures.unmatched_lines})
+
+
+def _c9(measures: Measures, acknowledged: set[str]) -> CheckResult:
+    return _result("C9", "Les images, sur le disque",
+                   grocy_count=measures.pictures_referenced,
+                   home_count=measures.pictures_present,
+                   gap=len(measures.picture_gaps), details=measures.picture_gaps,
+                   measures=measures, acknowledged=acknowledged)
+
+
+def _c10(measures: Measures, acknowledged: set[str]) -> CheckResult:
+    details = [f"{measures.meals} repas à venir",
+               f"{measures.meal_recipes} recettes distinctes atteignables",
+               f"{measures.list_items} lignes de courses ouvertes",
+               *measures.plan_gaps]
+    return _result("C10", "Planning et liste de courses",
+                   grocy_count=measures.meals, home_count=measures.meals,
+                   gap=len(measures.plan_gaps), details=details,
+                   measures=measures, acknowledged=acknowledged)
+
+
+def _c11(measures: Measures, acknowledged: set[str]) -> CheckResult:
+    return _result("C11", "Ce qui lit encore Grocy dans la maison",
+                   grocy_count=len(measures.residues), home_count=0,
+                   gap=len(measures.residues), details=measures.residues,
+                   measures=measures, acknowledged=acknowledged)
+
+
 _CHECKS: dict[str, Callable[[Measures, set[str]], CheckResult]] = {
     "C0": _c0, "C1": _c1, "C2": _c2, "C3": _c3, "C4": _c4, "C5": _c5, "C6": _c6,
+    "C7": _c7, "C8": _c8, "C9": _c9, "C10": _c10, "C11": _c11,
 }
 
 
@@ -441,6 +708,8 @@ def check_migration(db, grocy_path: str, *, acknowledged=(), archive: bool = Tru
     """
     moment = _parse(now) or datetime.now(UTC)
     measures = _measure(db, grocy_path, now=moment)
+    _measure_pictures(db.read(), measures, picture_dir)
+    _measure_config(measures, config_dir)
     acquittes = set(acknowledged)
 
     report = CheckReport()

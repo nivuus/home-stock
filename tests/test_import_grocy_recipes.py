@@ -164,13 +164,36 @@ def test_adapted_at_stays_null(db_catalogue, grocy_reel_db, tmp_media):
     ).fetchone()["n"] == 0
 
 
-def test_the_sixty_two_inline_images_become_files(db_catalogue, grocy_reel_db,
-                                                  tmp_media):
+def test_the_sixty_two_inline_references_become_twenty_seven_files(
+        db_catalogue, grocy_reel_db, tmp_media):
+    """62 occurrences de data-URI, 27 images réelles : une recette réutilise
+    la même sur sa couverture et sur ses étapes.
+
+    Un nom par OCCURRENCE écrirait 62 fichiers dont 35 que plus aucune
+    colonne ne référencerait — 35 orphelins, et 35 fois le même octet écrit
+    deux fois. Amendement A10 du § 22 : la spec comptait des balises <img>,
+    pas des fichiers.
+    """
     rapport = import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media,
                              apply=True)
     ecrits = list((tmp_media / "recipes").glob("*-inline-*.jpg"))
-    assert len(ecrits) == 62
-    assert rapport.pictures == 62
+    assert len(ecrits) == 27
+    assert rapport.pictures == 27
+
+
+def test_every_written_file_is_referenced_by_a_column(db_catalogue,
+                                                      grocy_reel_db, tmp_media):
+    """Aucun orphelin : un fichier que rien ne référence est du poids mort
+    dans media/, et C9 le signalerait à chaque contrôle."""
+    import_recipes(db_catalogue, grocy_reel_db, picture_dir=tmp_media, apply=True)
+    ecrits = {p.name for p in (tmp_media / "recipes").iterdir()}
+    references = set()
+    for table, colonne in (("recipe", "image_url"), ("recipe_step", "image_url")):
+        for row in db_catalogue.read().execute(
+                f"SELECT {colonne} AS url FROM {table} WHERE {colonne} LIKE"
+                " 'media-source:%'"):
+            references.add(row["url"].rsplit("/", 1)[-1])
+    assert ecrits - references == set()
 
 
 def test_no_image_url_still_points_at_grocy(db_catalogue, grocy_reel_db,
