@@ -92,6 +92,14 @@ export class PanneauGardeManger extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('resize', this.surRedimensionnement);
+    // Écoutés sur l'hôte, pas sur chaque enfant : `recette-ouverte` est émis
+    // par la liste ET par le planning, et les deux événements remontent
+    // (bubbles + composed). Un écouteur ici couvre les deux émetteurs, et
+    // rend surtout ces écrans atteignables autrement qu'en câblant chaque
+    // parent — c'est ce que fait déjà `manger-produit` au lot 2.
+    this.addEventListener('recette-ouverte', this.surRecetteOuverte as EventListener);
+    this.addEventListener('valider-repas', this.surValiderRepas as EventListener);
+    this.addEventListener('repas-valide', this.surRepasValide as EventListener);
     this.connexion = new Connexion(this.hass);
     this.file = new FileAttente(
       window.localStorage,
@@ -137,6 +145,9 @@ export class PanneauGardeManger extends LitElement {
     this.desabonner = undefined;
     window.removeEventListener('online', this.auRetourDuReseau);
     window.removeEventListener('resize', this.surRedimensionnement);
+    this.removeEventListener('recette-ouverte', this.surRecetteOuverte as EventListener);
+    this.removeEventListener('valider-repas', this.surValiderRepas as EventListener);
+    this.removeEventListener('repas-valide', this.surRepasValide as EventListener);
     this.removeEventListener('manger-produit', this.surMangerProduit as EventListener);
     this.removeEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
@@ -483,31 +494,26 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'recettes') {
       return html`
         <home-stock-recettes .connexion=${this.connexion} .file=${this.file}
-          .enAttente=${this.enAttente} @recette-ouverte=${this.surRecetteOuverte}
-          @file-changee=${this.surFileChangee}>
+          .enAttente=${this.enAttente} @file-changee=${this.surFileChangee}>
         </home-stock-recettes>`;
     }
     if (this.ecran === 'recette' && this.recetteOuverte !== null) {
       return html`
         <home-stock-recette .connexion=${this.connexion} .file=${this.file}
           .recipeId=${this.recetteOuverte} .mealId=${this.repasDeLaRecette}
-          @valider-repas=${this.surValiderRepas}
           @recette-fermee=${() => this.demanderNavigation('recettes')}>
         </home-stock-recette>`;
     }
     if (this.ecran === 'validation' && this.repasAValider !== null) {
       return html`
         <home-stock-validation .connexion=${this.connexion} .file=${this.file}
-          .mealId=${this.repasAValider} @repas-valide=${this.surRepasValide}
-          @file-changee=${this.surFileChangee}>
+          .mealId=${this.repasAValider} @file-changee=${this.surFileChangee}>
         </home-stock-validation>`;
     }
     if (this.ecran === 'planning') {
       return html`
         <home-stock-planning .connexion=${this.connexion} .file=${this.file}
-          .large=${this.large} @recette-ouverte=${this.surRecetteOuverte}
-          @valider-repas=${this.surValiderRepas}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-planning>`;
     }
     return html`

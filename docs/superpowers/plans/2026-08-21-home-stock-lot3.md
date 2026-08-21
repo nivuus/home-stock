@@ -2440,7 +2440,7 @@ git commit -m "feat: the planning screen, and the navigation that makes lot 3 re
 
 **C'est la seule tâche autorisée à lancer `npm run build`.** Le répertoire est bind-monté dans Home Assistant : le bundle construit est servi tel quel. Une seule construction, à la fin, quand tout le reste est vert.
 
-- [ ] **Step 1: Compléter le vérificateur**
+- [x] **Step 1: Compléter le vérificateur**
 
 Deux gestes préalables, sans lesquels les scénarios mentiraient :
 - ajouter les quatre nouveaux tags à la liste en dur de `reglerAttente()` (`home-stock-recettes`, `home-stock-recette`, `home-stock-validation`, `home-stock-planning`) — sans quoi le vérificateur mesure une page pas encore peinte ;
@@ -2490,14 +2490,14 @@ Définir les fixtures avec des données **réalistes**, pas symboliques : `RECET
 
 Ajouter un scénario à `SCENARIOS_MINIFIES` : la vue cuisine sur le bundle minifié — c'est l'écran qui dépend le plus de noms de classes CSS, et `terser` est passé par là.
 
-- [ ] **Step 2: Lancer le vérificateur**
+- [x] **Step 2: Lancer le vérificateur**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: aucun défaut sur les **deux** formats — aucun débordement, aucune cible sous 48 px, aucun contraste sous 4,5:1, aucun texte tronqué, et l'écran attendu réellement atteint.
 
 Corriger les styles jusqu'à ce que ce soit vrai. **Ne jamais désactiver un contrôle.** Le point de rupture attendu est le planning : si les sept colonnes ne tiennent pas en 1280, c'est la grille qui change, pas le seuil.
 
-- [ ] **Step 3: Mettre à jour la documentation d'exploitation**
+- [x] **Step 3: Mettre à jour la documentation d'exploitation**
 
 Dans `docs/exploitation.md`, une section `## Lot 3 — recettes, planning et validation d'un repas` **à la fin du fichier**, en français et sans jargon :
 
@@ -2512,7 +2512,7 @@ Dans `docs/exploitation.md`, une section `## Lot 3 — recettes, planning et val
 - **Les images de recettes importées restent chez la source** : une recette perd sa photo si TheMealDB disparaît. Dette assumée, à reprendre au lot 7 avec les images Grocy.
 - **Ce que le lot 3 ne fait pas** : pas de liste de courses depuis le planning, pas de correction d'un repas validé, pas encore les 87 recettes de Grocy.
 
-- [ ] **Step 4: Construire le bundle**
+- [x] **Step 4: Construire le bundle**
 
 Run (depuis `frontend/`) : `npm run build`
 
@@ -2523,12 +2523,12 @@ git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/
 ```
 Un seul fichier doit avoir changé.
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: mêmes scénarios verts, cette fois sur le bundle construit et minifié.
 
-- [ ] **Step 6: Lancer les deux suites une dernière fois**
+- [x] **Step 6: Lancer les deux suites une dernière fois**
 
 ```bash
 ./scripts/test.sh -q
@@ -2536,7 +2536,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: tout vert, et les deux compteurs **au-dessus** de 623 et 247.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js

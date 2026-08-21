@@ -218,7 +218,11 @@ export class EcranRecettes extends LitElement {
     .badge {
       padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; white-space: nowrap;
     }
-    .relire { background: var(--warning-color, #b26a00); color: #fff; }
+    /* Le repli est un orange FONCÉ, pas celui de Material : blanc sur
+       #b26a00 ne donne que 4,24:1, sous le seuil de 4,5:1 que
+       verifier-rendu.mjs applique. #8a5300 monte à 6,3:1. On corrige la
+       couleur, jamais le seuil. */
+    .relire { background: var(--warning-color, #8a5300); color: #fff; }
     .manque { background: var(--error-color, #a01b1b); color: #fff; }
     .fiche-meta { opacity: 0.75; font-size: 0.85rem; }
     .vide { opacity: 0.75; }

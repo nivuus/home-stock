@@ -372,6 +372,108 @@ const SERIE_QUATORZE_JOURS = {
 // des neuf écrans du spec — jamais en modifiant directement son état
 // interne, pour que le vérificateur exerce vraiment le câblage plutôt que
 // de le contourner.
+// --- lot 3 : des fixtures RÉALISTES, pas symboliques -----------------------
+//
+// Une liste à trois entrées ne prouve rien sur le débordement. Quarante
+// recettes avec des noms longs, sept jours × quatre créneaux, huit lignes de
+// validation : c'est à cette densité-là qu'une grille casse.
+
+const RECETTES_DENSES = {
+  recipes: Array.from({ length: 40 }, (_, i) => ({
+    id: i + 1,
+    name: i % 3 === 0
+      ? `Bœuf bourguignon à l'ancienne et ses légumes racines ${i + 1}`
+      : `Recette ${i + 1}`,
+    servings: (i % 6) + 1,
+    total_minutes: 20 + (i % 8) * 15,
+    image_url: null,
+    summary: null,
+    language: i % 4 === 0 ? 'en' : 'fr',
+    needs_review: i % 4 === 0 ? 1 : 0,
+    unmatched_count: i % 5,
+  })),
+};
+
+const RECETTE_LONGUE = {
+  recipe: {
+    id: 4, name: 'Gratin de courgettes au chèvre et thym frais', servings: 4,
+    total_minutes: 75, utensils: 'mandoline, plat à gratin, poêle',
+    summary: 'Un gratin fondant, doré au four, qui se prépare la veille.',
+    image_url: null, language: 'fr', needs_review: 0,
+  },
+  steps: Array.from({ length: 6 }, (_, i) => ({
+    id: i + 1, position: i + 1,
+    title: `Étape ${i + 1} — préparation détaillée du gratin`,
+    image_url: null,
+    instructions: i === 1
+      ? [
+        { id: 21, position: 1, text: 'Émincer les courgettes à la mandoline, en rondelles de trois millimètres.', timer_label: null, timer_seconds: null },
+        { id: 22, position: 2, text: 'Faire suer les rondelles à la poêle avec un filet d’huile d’olive.', timer_label: 'Cuisson', timer_seconds: 600 },
+        { id: 23, position: 3, text: 'Saler, poivrer, ajouter le thym frais effeuillé.', timer_label: null, timer_seconds: null },
+        { id: 24, position: 4, text: 'Égoutter sur un papier absorbant pour retirer l’eau de végétation.', timer_label: null, timer_seconds: null },
+        { id: 25, position: 5, text: 'Réserver hors du feu pendant la préparation de l’appareil.', timer_label: null, timer_seconds: null },
+      ]
+      : [{ id: 100 + i, position: 1, text: `Instruction de l’étape ${i + 1}, suffisamment longue pour occuper deux lignes sur une dalle étroite.`, timer_label: null, timer_seconds: null }],
+  })),
+  ingredients: [
+    { id: 41, position: 1, product_id: 8, product_name: 'Courgette', product_base_unit: 'g', amount: 900, measure_name: null, packaging_name: null, raw_text: '900 g de courgettes', match_state: 'auto', display_amount: '900 g' },
+    { id: 42, position: 2, product_id: 9, product_name: 'Bûche de chèvre', product_base_unit: 'g', amount: 200, measure_name: null, packaging_name: null, raw_text: '200 g de chèvre', match_state: 'confirmed', display_amount: '200 g' },
+    { id: 43, position: 3, product_id: null, product_name: null, product_base_unit: null, amount: null, measure_name: null, packaging_name: null, raw_text: 'quelques brins de thym frais', match_state: 'unmatched', candidates: [{ product_id: 12, name: 'Thym', score: 0.8 }, { product_id: 13, name: 'Thym citron', score: 0.6 }] },
+  ],
+};
+
+const SEMAINE_CHARGEE = {
+  meals: (() => {
+    const jours = Array.from({ length: 7 },
+      (_, i) => `2026-08-${String(21 + i).padStart(2, '0')}`);
+    const creneaux = ['breakfast', 'lunch', 'dinner', 'snack'];
+    const repas = [];
+    let id = 1;
+    jours.forEach((jour, j) => {
+      creneaux.forEach((creneau, c) => {
+        if ((j + c) % 3 === 0) return;          // partiellement rempli
+        repas.push({
+          id: id++, uid: `u${id}`, day: jour, slot_key: creneau, position: 0,
+          recipe_id: c === 2 ? 4 : null,
+          recipe_name: c === 2 ? 'Gratin de courgettes au chèvre et thym frais' : null,
+          product_id: c === 3 ? 8 : null,
+          product_name: c === 3 ? 'Yaourt nature' : null,
+          note: c < 2 ? 'Restes de la veille' : null,
+          servings: 2,
+          state: j === 0 && c === 1 ? 'done' : 'planned',
+        });
+      });
+    });
+    // Un jour à trois repas sur le même créneau.
+    repas.push({ id: id++, uid: 'x1', day: jours[3], slot_key: 'dinner', position: 1, recipe_id: null, recipe_name: null, product_id: null, product_name: null, note: 'Entrée', servings: 1, state: 'planned' });
+    repas.push({ id: id++, uid: 'x2', day: jours[3], slot_key: 'dinner', position: 2, recipe_id: null, recipe_name: null, product_id: null, product_name: null, note: 'Dessert', servings: 1, state: 'planned' });
+    return repas;
+  })(),
+};
+
+const PREVIEW_AVEC_MANQUE = {
+  meal_id: 12, day: '2026-08-21', slot_key: 'dinner',
+  recipe: { id: 4, name: 'Gratin de courgettes au chèvre et thym frais', servings: 2 },
+  servings: 4, factor: 2,
+  lines: [
+    { ingredient_id: 41, label: '1,8 kg', product_id: 8, product_name: 'Courgette', base_unit: 'g', status: 'ok', needed: 1800, available: 2400, raw_text: '900 g de courgettes', batches: [{ batch_id: 3, quantity: 1800 }] },
+    { ingredient_id: 42, label: '400 g', product_id: 9, product_name: 'Bûche de chèvre affinée', base_unit: 'g', status: 'short', needed: 400, available: 180, raw_text: '200 g de chèvre', batches: [{ batch_id: 5, quantity: 180 }] },
+    { ingredient_id: 44, label: '4 cuillères à soupe', product_id: 10, product_name: "Huile d'olive vierge extra", base_unit: 'ml', status: 'ok', needed: 60, available: 500, raw_text: '2 cs d’huile', batches: [{ batch_id: 7, quantity: 60 }] },
+    { ingredient_id: 45, label: '200 g', product_id: 11, product_name: 'Crème fraîche épaisse', base_unit: 'ml', status: 'ok', needed: 200, available: 400, raw_text: '100 g de crème', batches: [{ batch_id: 9, quantity: 200 }] },
+    { ingredient_id: 46, label: '4 pièces', product_id: 14, product_name: 'Œufs plein air', base_unit: 'piece', status: 'ok', needed: 4, available: 12, raw_text: '2 œufs', batches: [{ batch_id: 11, quantity: 4 }] },
+    { ingredient_id: 47, label: '100 g', product_id: 15, product_name: 'Parmesan râpé', base_unit: 'g', status: 'ok', needed: 100, available: 250, raw_text: '50 g de parmesan', batches: [{ batch_id: 13, quantity: 100 }] },
+  ],
+  by_hand: [
+    { ingredient_id: 43, label: '', product_id: null, product_name: null, base_unit: null, status: 'unmatched', needed: null, available: 0, raw_text: 'quelques brins de thym frais', batches: [] },
+    { ingredient_id: 48, label: '', product_id: 16, product_name: 'Muscade', base_unit: 'piece', status: 'unquantified', needed: null, available: 1, raw_text: 'une pointe de muscade', batches: [] },
+  ],
+  dish: {
+    product_name: 'Reste — Gratin de courgettes au chèvre et thym frais',
+    parts: 4, best_before: '2026-08-24', cost: 7.35, kcal: 486, unvalued: 0,
+  },
+  blocking: ['short'],
+};
+
 const SCENARIOS = [
   {
     nom: 'Scanner (écran par défaut)',
@@ -536,6 +638,45 @@ const SCENARIOS = [
     actions: [{ type: 'click-nav', texte: 'Journal' }],
     ecranAttendu: 'home-stock-journal',
   },
+  {
+    nom: 'Recettes (liste dense, badges à relire et non appariés)',
+    fixture: { reponses: { 'home_stock/session/current': null,
+                           'home_stock/recipes/list': RECETTES_DENSES } },
+    actions: [{ type: 'click-nav', texte: 'Recettes' }],
+    ecranAttendu: 'home-stock-recettes',
+  },
+  {
+    // Pas de `click-nav` : la vue cuisine n'est pas une destination de la
+    // barre, on y entre depuis une liste — d'où l'événement, comme « manger ».
+    nom: 'Recette (étape avec minuteur, vue cuisine)',
+    fixture: { reponses: { 'home_stock/session/current': null,
+                           'home_stock/recipe/get': RECETTE_LONGUE } },
+    actions: [
+      { type: 'dispatch-evenement', nom: 'recette-ouverte', detail: { recipe_id: 4 } },
+      { type: 'click-in-child', enfant: 'home-stock-recette', selector: '.suivant' },
+      { type: 'click-in-child', enfant: 'home-stock-recette', selector: '.suivant' },
+    ],
+    ecranAttendu: 'home-stock-recette',
+    elementAttendu: { enfant: 'home-stock-recette', selector: '.minuteur' },
+  },
+  {
+    nom: 'Planning (semaine chargée)',
+    fixture: { reponses: { 'home_stock/session/current': null,
+                           'home_stock/meals/list': SEMAINE_CHARGEE } },
+    actions: [{ type: 'click-nav', texte: 'Planning' }],
+    ecranAttendu: 'home-stock-planning',
+  },
+  {
+    nom: 'Validation (un ingrédient manquant, partage ouvert)',
+    fixture: { reponses: { 'home_stock/session/current': null,
+                           'home_stock/meal/preview': PREVIEW_AVEC_MANQUE } },
+    actions: [
+      { type: 'dispatch-evenement', nom: 'valider-repas', detail: { meal_id: 12 } },
+      { type: 'click-in-child', enfant: 'home-stock-validation',
+        selector: '.partage-bascule input' },
+    ],
+    ecranAttendu: 'home-stock-validation',
+  },
 ];
 
 // --- ce qui s'exécute DANS la page ------------------------------------------
@@ -601,7 +742,9 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
     await panneau.updateComplete;
     const enfants = ['home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
       'home-stock-rangement', 'home-stock-catalogue', 'home-stock-reglages',
-      'home-stock-consommation', 'home-stock-journal'];
+      'home-stock-consommation', 'home-stock-journal',
+      'home-stock-recettes', 'home-stock-recette', 'home-stock-validation',
+      'home-stock-planning'];
     for (const nom of enfants) {
       const enfant = panneau.shadowRoot.querySelector(nom);
       if (enfant && enfant.updateComplete) await enfant.updateComplete;
@@ -924,6 +1067,22 @@ const SCENARIOS_MINIFIES = [
     },
     actions: [{ type: 'dispatch-evenement', nom: 'manger-produit', detail: { product_id: 1 } }],
     ecranAttendu: 'home-stock-consommation',
+  },
+  {
+    // La vue cuisine est l'écran qui dépend le plus de noms de classes CSS —
+    // minuteurs, puces, bloc Ingrédients — et `terser` est passé par là. Elle
+    // s'atteint elle aussi par un événement, donc elle exerce le même
+    // écouteur d'hôte que « manger », sur le bundle réellement livré.
+    nom: 'Recette (bundle minifié, vue cuisine avec minuteur)',
+    fixture: { reponses: { 'home_stock/session/current': null,
+                           'home_stock/recipe/get': RECETTE_LONGUE } },
+    actions: [
+      { type: 'dispatch-evenement', nom: 'recette-ouverte', detail: { recipe_id: 4 } },
+      { type: 'click-in-child', enfant: 'home-stock-recette', selector: '.suivant' },
+      { type: 'click-in-child', enfant: 'home-stock-recette', selector: '.suivant' },
+    ],
+    ecranAttendu: 'home-stock-recette',
+    elementAttendu: { enfant: 'home-stock-recette', selector: '.minuteur' },
   },
 ];
 
