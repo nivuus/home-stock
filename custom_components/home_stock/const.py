@@ -126,3 +126,8 @@ DEFAULT_KEEP_PERCENT: Final = 25.0
 
 CONSUMABLE_ROLES: Final = ("filter", "bag", "brush", "cartridge", "other")
 CONSUMABLE_UNITS: Final = ("percent", "minutes")
+
+# Les quatre destinations d'un emballage en France depuis l'extension des
+# consignes de tri (2023). Le serveur rend ces clés ; les phrases françaises
+# sont l'affaire du panneau (frontend/src/tri.ts).
+RECYCLING_BINS: Final = ("yellow", "glass", "household", "dropoff")
