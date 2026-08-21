@@ -2300,7 +2300,7 @@ git commit -m "feat: the kitchen view — one page per step, buttons only, no ge
 
 **L'écran dit qu'il n'y a pas de retour en arrière.** En toutes lettres, avant l'appui de confirmation, plutôt que de laisser croire à une annulation possible.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('affiche une ligne par ingrédient avec son statut', ...);
@@ -2334,7 +2334,7 @@ it('affiche « en attente » quand la file garde l’action hors ligne', ...);
 it('n’envoie rien deux fois si on double-clique la confirmation', ...);
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 Ajouter `'home_stock/meal/validate'` à `EXPECTED_QUEUED_COMMAND_TYPES` **dans cette tâche**, en même temps que le littéral côté front.
 
@@ -2344,7 +2344,7 @@ cd frontend && npm test
 ./scripts/test.sh tests/test_offline_queue_contract.py -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add frontend/src/ecrans/validation.ts frontend/tests/validation.test.ts tests/test_offline_queue_contract.py
 git commit -m "feat: the validation screen — two taps, and it says there is no undo"

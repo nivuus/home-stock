@@ -80,6 +80,10 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # It is a write like any other and goes through the same queue — the
     # kitchen's network is no better than a shop aisle's.
     "home_stock/recipe/update",
+    # Lot 3, task 20: the validation screen. Cooking then eating is the
+    # heaviest write the panel makes, and it is made standing in a kitchen —
+    # the queue must be able to hold it and replay it exactly once.
+    "home_stock/meal/validate",
 }
 
 
@@ -192,6 +196,24 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert updated_recipe["success"] is True, updated_recipe.get("error")
     tested.add("home_stock/recipe/update")
+
+    planned_meal = await _send(
+        client, _id(), "home_stock/meal/plan", day="2026-08-21",
+        slot_key="dinner", note="Repas du contrat",
+        idempotency_key="contract-meal-plan",
+    )
+    assert planned_meal["success"] is True, planned_meal.get("error")
+
+    # A note meal decrements nothing, which is exactly what this contract
+    # needs: the point is the SCHEMA's acceptance of the queue's key, not the
+    # arithmetic — that is proven in test_websocket_meals.py.
+    validated_meal = await _send(
+        client, _id(), "home_stock/meal/validate",
+        meal_id=planned_meal["result"]["meal_id"], portions_eaten=0,
+        idempotency_key="contract-meal-validate",
+    )
+    assert validated_meal["success"] is True, validated_meal.get("error")
+    tested.add("home_stock/meal/validate")
 
     # --- the shopping-session lifecycle, exactly as the panel drives it -
     started = await _send(client, _id(), "home_stock/session/start", store="Leclerc",
