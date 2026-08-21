@@ -31,7 +31,11 @@ FIELDS: Final = (
     "nutrition_data_per,nutrition_data_prepared_per,nutriscore_grade,nova_group,"
     "ecoscore_grade,categories_tags,labels_tags,allergens_tags,traces_tags,"
     "additives_tags,ingredients_text_fr,ingredients_text,image_front_url,"
-    "image_nutrition_url,image_ingredients_url,obsolete,completeness,last_modified_t"
+    "image_nutrition_url,image_ingredients_url,obsolete,completeness,last_modified_t,"
+    # Lot 2bis : le matériau d'emballage. Absent jusqu'ici, donc absent de tous
+    # les `off_raw` déjà stockés — la consigne de tri n'apparaîtra que sur les
+    # articles scannés ou resynchronisés après cette version (spec § 9.1).
+    "packagings,packaging_tags"
 )
 
 TIMEOUT_PER_BASE: Final = 10.0

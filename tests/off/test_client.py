@@ -147,7 +147,8 @@ async def test_the_requested_fields_are_the_ones_the_mapping_reads(clock):
 
     for needed in ("product_quantity", "nutriments", "categories_tags",
                    "generic_name_fr", "nutrition_data_per", "serving_quantity",
-                   "nutriscore_grade", "labels_tags", "image_front_url"):
+                   "nutriscore_grade", "labels_tags", "image_front_url",
+                   "packagings", "packaging_tags"):
         assert needed in FIELDS
 
 
@@ -312,3 +313,31 @@ async def test_lookup_swallows_what_the_aiohttp_transport_raises(clock):
     assert result.record is None
     assert result.throttled is False
     assert result.timed_out is False
+
+
+def test_the_packaging_fields_are_asked_for_by_name():
+    """La donnée d'emballage n'est PAS gratuite : `off_raw` ne contient que ce
+    que `fields=` a demandé. Retirer ces deux champs un jour viderait
+    silencieusement la consigne de tri de tout le catalogue — sans erreur,
+    sans log, sans que rien d'autre ne tombe. D'où ce test nommé."""
+    from custom_components.home_stock.off.client import FIELDS
+
+    assert "packagings" in FIELDS
+    assert "packaging_tags" in FIELDS
+
+
+def test_the_existing_fixtures_carry_no_packaging_which_is_the_point():
+    """Les fiches déjà capturées n'ont pas d'emballage, et n'en auront jamais :
+    il n'a pas été demandé au moment de la capture. Ce test fige la
+    conséquence — aucune migration, aucun `apply()`, aucun backfill ne peut
+    inventer cette donnée (spec § 4, amendement A1)."""
+    import json
+    from pathlib import Path
+
+    fiches = json.loads(
+        (Path(__file__).parent.parent / "fixtures/off/soeurs.json").read_text())
+    for code, fiche in fiches.items():
+        # La fiche capturée est sous "product" : c'est là que le champ manquerait.
+        produit = fiche["product"]
+        assert "packagings" not in produit, code
+        assert "packaging_tags" not in produit, code
