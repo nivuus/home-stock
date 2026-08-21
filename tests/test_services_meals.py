@@ -257,3 +257,76 @@ async def test_every_new_service_has_a_french_name_and_description(hass, setup_e
         for field, spec in described.get("fields", {}).items():
             assert spec.get("name"), f"{name}.{field}"
             assert "selector" in spec, f"{name}.{field}"
+
+
+# --- lot 6 : le créneau, la porte du vocal ---------------------------------
+
+async def _plan_three_meals_a_day(hass, days=("2026-08-21",)):
+    """Petit-déjeuner, déjeuner et dîner, chaque jour de `days`."""
+    for day in days:
+        for slot in ("breakfast", "lunch", "dinner"):
+            await hass.services.async_call(
+                DOMAIN, "plan_meal",
+                {"day": day, "slot_key": slot, "note": f"{slot} {day}"},
+                blocking=True)
+
+
+async def _call_query_meals(hass, **payload):
+    return await hass.services.async_call(
+        DOMAIN, "query_meals", payload, blocking=True, return_response=True)
+
+
+async def test_query_meals_without_slot_key_is_unchanged(hass, setup_entry):
+    """Le contrat d'avant le lot 6, tenu par un test : les six autres phrases
+    vocales et le panneau appellent ce service SANS `slot_key`."""
+    await setup_entry()
+    await _plan_three_meals_a_day(hass)
+    response = await _call_query_meals(hass, start="2026-08-21", end="2026-08-21")
+    assert len(response["meals"]) == 3
+
+
+async def test_query_meals_filters_on_a_slot(hass, setup_entry):
+    await setup_entry()
+    await _plan_three_meals_a_day(hass)
+    response = await _call_query_meals(hass, start="2026-08-21", end="2026-08-21",
+                                       slot_key="dinner")
+    assert [m["slot_key"] for m in response["meals"]] == ["dinner"]
+
+
+async def test_query_meals_refuses_an_unknown_slot(hass, setup_entry):
+    """« goûter » n'est pas un créneau de ce modèle. Le refus vient de
+    `vol.In(MEAL_SLOT_KEYS)`, la MÊME source que le websocket `meal/plan` —
+    jamais d'une liste recopiée dans le service."""
+    import voluptuous as vol
+
+    await setup_entry()
+    with pytest.raises(vol.Invalid):
+        await _call_query_meals(hass, start="2026-08-21", end="2026-08-21",
+                                slot_key="gouter")
+
+
+async def test_query_meals_on_an_empty_slot_answers_an_empty_list(hass, setup_entry):
+    """PAS une erreur. « Rien n'est prévu ce soir » est une réponse, et
+    l'intent doit pouvoir la mettre en phrase — le silence est une panne."""
+    await setup_entry()
+    await hass.services.async_call(
+        DOMAIN, "plan_meal",
+        {"day": "2026-08-21", "slot_key": "dinner", "note": "Restaurant"},
+        blocking=True)
+    response = await _call_query_meals(hass, start="2026-08-21", end="2026-08-21",
+                                       slot_key="breakfast")
+    assert response["meals"] == []
+
+
+async def test_query_meals_keeps_the_range_when_a_slot_is_given(hass, setup_entry):
+    """Le filtre est un ET, pas un OU : trois jours × un créneau rendent trois
+    repas au plus, un par jour. Se tromper ici rendrait « qu'est-ce qui est
+    prévu demain midi ? » bavard de trois jours de dîners."""
+    await setup_entry()
+    await _plan_three_meals_a_day(
+        hass, days=("2026-08-21", "2026-08-22", "2026-08-23"))
+    response = await _call_query_meals(hass, start="2026-08-21", end="2026-08-23",
+                                       slot_key="dinner")
+    assert {m["day"] for m in response["meals"]} == {"2026-08-21", "2026-08-22",
+                                                     "2026-08-23"}
+    assert {m["slot_key"] for m in response["meals"]} == {"dinner"}
