@@ -1,4 +1,8 @@
 """Shared fixtures. The custom integration must be enabled for every test."""
+import json
+import sqlite3
+from pathlib import Path
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -191,3 +195,68 @@ def setup_entry(hass):
         return entry
 
     return _setup_entry
+
+
+# --- lot 7 : les tables Grocy figées ----------------------------------------
+
+_FIXTURES_GROCY = (
+    "recipes", "recipes_pos", "stock", "products", "meal_plan",
+    "meal_plan_sections", "shopping_list", "quantity_unit_conversions",
+    "quantity_units", "locations", "stock_log", "chores_log", "chores",
+    "inline_images",
+)
+
+
+@pytest.fixture(scope="session")
+def grocy_reel() -> dict[str, list[dict]]:
+    """Les tables Grocy figées le 2026-08-21. Lecture seule, jamais réécrites."""
+    base = Path(__file__).parent / "fixtures" / "grocy"
+    return {nom: json.loads((base / f"{nom}.json").read_text("utf-8"))
+            for nom in _FIXTURES_GROCY}
+
+
+def _affinity(values) -> str:
+    """Le type SQLite d'une colonne, déduit de ce que la fixture y met."""
+    for value in values:
+        if isinstance(value, bool):
+            return "INTEGER"
+        if isinstance(value, int):
+            return "INTEGER"
+        if isinstance(value, float):
+            return "REAL"
+        if isinstance(value, str):
+            return "TEXT"
+    return "TEXT"
+
+
+def _build_grocy_db(path, tables: dict[str, list[dict]]) -> None:
+    conn = sqlite3.connect(str(path))
+    try:
+        for nom, lignes in tables.items():
+            if not lignes:
+                continue
+            colonnes = list(lignes[0])
+            declaration = ", ".join(
+                f'"{col}" {_affinity(l[col] for l in lignes)}' for col in colonnes)
+            conn.execute(f'CREATE TABLE "{nom}" ({declaration})')
+            conn.executemany(
+                f'INSERT INTO "{nom}" VALUES ({", ".join("?" * len(colonnes))})',
+                [tuple(ligne[col] for col in colonnes) for ligne in lignes])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def grocy_reel_db(tmp_path, grocy_reel) -> str:
+    """Une base SQLite reconstruite depuis les fixtures.
+
+    Reconstruite, et pas copiée : le schéma minimal qu'on écrit ici est
+    exactement ce que les imports lisent, donc une colonne lue et non
+    déclarée devient une erreur de test au lieu d'un import qui « marche
+    parce que la vraie base l'avait ».
+    """
+    chemin = tmp_path / "grocy_reel.db"
+    _build_grocy_db(chemin, {nom: lignes for nom, lignes in grocy_reel.items()
+                             if nom != "inline_images"})
+    return str(chemin)
