@@ -1108,11 +1108,11 @@ class MealDbClient:
 
 **Le contrat réseau est celui du lot 1, mot pour mot.** Transport injecté, **timeout 10 s, une seule tentative, aucune reprise**. **Aucune méthode ne lève jamais** : elle rend une liste vide ou `None`, et l'appelant affiche un message. Un import en lot respecte `BULK_INTERVAL`, comme l'ingestion Open Food Facts.
 
-- [ ] **Step 1: Capturer les fixtures**
+- [x] **Step 1: Capturer les fixtures**
 
 Deux fichiers, capturés une fois puis versionnés : la réponse de `lookup.php?i=52772` (une fiche complète, avec ses `strIngredient1..20` et `strMeasure1..20` dont la plupart sont vides) et celle de `search.php?s=chicken`. Les capturer **hors du composant**, à la main ; le dépôt ne versionne pas de script d'appel.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 Créer `tests/recipes/test_source.py`. Le double de transport suit `_InertTransport` de `conftest.py` : `async def get_json(self, url, headers, timeout)`.
 
@@ -1162,15 +1162,15 @@ async def test_the_real_contract_has_not_moved():
 
 Déclarer le marqueur dans `pytest.ini` (`markers = network: touche le réseau réel`) et l'exclure par défaut (`addopts = -m "not network"`) — **en vérifiant d'abord** qu'ajouter `addopts` ne casse aucune invocation existante de `scripts/test.sh`.
 
-- [ ] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_source.py -q`
+- [x] **Step 3: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_source.py -q`
 
-- [ ] **Step 4: Écrire `recipes/source.py`**
+- [x] **Step 4: Écrire `recipes/source.py`**
 
 Motif recopié de `off/client.py` : budget de temps, `except Exception: return []` autour de l'appel de transport, statut non-200 → vide, charge non-`dict` → vide, `meals` absent ou `null` → vide. Aucun `hass`, aucun import de `homeassistant`.
 
-- [ ] **Step 5: Vert** — `./scripts/test.sh tests/recipes -q`
+- [x] **Step 5: Vert** — `./scripts/test.sh tests/recipes -q`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add custom_components/home_stock/recipes tests/recipes tests/fixtures/recipes pytest.ini
 git commit -m "feat: a TheMealDB client that never blocks and never retries"
