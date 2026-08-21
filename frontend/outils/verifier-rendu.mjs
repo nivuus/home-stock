@@ -372,6 +372,106 @@ const SERIE_QUATORZE_JOURS = {
 // des neuf écrans du spec — jamais en modifiant directement son état
 // interne, pour que le vérificateur exerce vraiment le câblage plutôt que
 // de le contourner.
+// --- lot 5 : les pires cas réels des deux nouveaux écrans --------------------
+//
+// Quatorze piles suivies (le compte de la maison), dont une muette, une
+// orpheline et une jamais relevée ; trois capteurs à déclarer ; des libellés
+// longs (« Interrupteur salle de bain ») ; un stock de rechange à zéro. Un
+// écran qui ne déborde que sur les cas faciles n'a pas été vérifié.
+const PILES_QUATORZE = { batteries: [
+  { id: 1, label: 'Interrupteur salle de bain', kind: 'primary', verb: 'Pile à changer',
+    tracked: true, exclusion_reason: null, entity_id: 'sensor.interrupteur_sdb_batterie',
+    state: '4', orphaned: false, device_name: 'Philips Hue RWL022', model: 'RWL022',
+    equipment_id: null, cell_count: 1, low_percent: 20, keep_percent: 25,
+    last_percent: 4, last_reading_at: '2026-08-21T06:00:00', installed_on: null,
+    note: null, spare_label: 'CR2032', spare_in_stock: 0 },
+  { id: 2, label: 'Rideau Cuisine', kind: 'built_in', verb: 'Recharger', tracked: true,
+    exclusion_reason: null, entity_id: 'sensor.0xa4c1386d02de3c39_battery', state: '12',
+    orphaned: false, device_name: 'Rideau Cuisine', model: 'TS030F', equipment_id: null,
+    cell_count: 1, low_percent: 20, keep_percent: 25, last_percent: 12,
+    last_reading_at: '2026-08-21T06:00:00', installed_on: null, note: null,
+    spare_label: null, spare_in_stock: null },
+  { id: 3, label: 'Capteur Chambre', kind: 'rechargeable_cell', verb: 'Piles à recharger',
+    tracked: true, exclusion_reason: null, entity_id: 'sensor.capteur_batterie_2',
+    state: 'unavailable', orphaned: false, device_name: null, model: null,
+    equipment_id: null, cell_count: 2, low_percent: 20, keep_percent: 25,
+    last_percent: 18, last_reading_at: '2026-08-19T06:00:00', installed_on: null,
+    note: null, spare_label: 'AAA', spare_in_stock: 4 },
+  { id: 4, label: 'Thermomètre Salon (retiré)', kind: 'primary', verb: 'Pile à changer',
+    tracked: true, exclusion_reason: null, entity_id: null, state: null, orphaned: true,
+    device_name: null, model: null, equipment_id: null, cell_count: 1,
+    low_percent: 20, keep_percent: 25, last_percent: null, last_reading_at: null,
+    installed_on: null, note: null, spare_label: null, spare_in_stock: null },
+  { id: 5, label: 'Aqara Smart lock U200 Lite', kind: 'built_in', verb: 'Recharger',
+    tracked: true, exclusion_reason: null, entity_id: 'sensor.aqara_smart_lock_u200_lite_batterie',
+    state: 'unknown', orphaned: false, device_name: 'Aqara Smart lock U200 Lite',
+    model: 'U200 Lite', equipment_id: null, cell_count: 1, low_percent: 20,
+    keep_percent: 25, last_percent: null, last_reading_at: null, installed_on: null,
+    note: null, spare_label: null, spare_in_stock: null },
+  ...Array.from({ length: 9 }, (unused, index) => ({
+    id: 6 + index, label: `Capteur ${index + 1}`, kind: 'primary', verb: 'Pile à changer',
+    tracked: true, exclusion_reason: null, entity_id: `sensor.capteur_${index}_batterie`,
+    state: String(30 + index * 7), orphaned: false, device_name: null, model: null,
+    equipment_id: null, cell_count: 1, low_percent: 20, keep_percent: 25,
+    last_percent: 30 + index * 7, last_reading_at: '2026-08-21T06:00:00',
+    installed_on: null, note: null, spare_label: 'CR2032', spare_in_stock: 0 })),
+] };
+
+const PILES_A_DECLARER = { sensors: [
+  { entity_registry_id: 'u-a', entity_id: 'sensor.browser_mod_606bfd06_browser_battery',
+    device_id: 'd-a', device_name: 'tablette-cuisine Browser battery',
+    model: 'browser_mod', state: '100' },
+  { entity_registry_id: 'u-b', entity_id: 'sensor.cle_de_la_peugeot_e208_batterie_ble',
+    device_id: 'd-b', device_name: 'Sac Batterie BLE', model: 'MiTag', state: '100' },
+  { entity_registry_id: 'u-c', entity_id: 'sensor.collier_soraya_batterie_ble',
+    device_id: 'd-c', device_name: 'Collier Soraya Batterie BLE', model: 'FnR', state: '100' },
+] };
+
+// Trente-quatre équipements sur quatre emplacements, dont une garantie
+// expirée, une absente, et une fiche avec trois consommables dont un en
+// rupture et une notice introuvable.
+const EQUIPEMENTS_TRENTE_QUATRE = { equipment: [
+  { id: 1, name: 'Purificateur d’air Xiaomi zhimi.airpurifier.mb4', location_name: 'Salon',
+    brand: 'Xiaomi', model: 'zhimi.airpurifier.mb4', serial: 'SN-000000042',
+    purchased_on: '2025-01-01', warranty_months: 24, warranty_ends_on: '2027-01-01',
+    days_left: 133, manual_url: null, manual_media_id: 'notices/purificateur.pdf',
+    note: null, consumable_count: 3, device_id: null },
+  { id: 2, name: 'Aspirateur Roborock S5', location_name: 'Cuisine', brand: 'Roborock',
+    model: 'S5', serial: null, purchased_on: '2020-01-01', warranty_months: 24,
+    warranty_ends_on: '2022-01-01', days_left: -1693, manual_url: null,
+    manual_media_id: null, note: null, consumable_count: 4, device_id: null },
+  { id: 3, name: 'Poêle 28 cm', location_name: null, brand: null, model: null,
+    serial: null, purchased_on: null, warranty_months: null, warranty_ends_on: null,
+    days_left: null, manual_url: null, manual_media_id: null, note: null,
+    consumable_count: 0, device_id: null },
+  ...Array.from({ length: 31 }, (unused, index) => ({
+    id: 4 + index, name: `Équipement ${index + 1}`,
+    location_name: ['Salon', 'Cuisine', 'Chambre', 'Salle de bain'][index % 4],
+    brand: null, model: null, serial: null, purchased_on: null, warranty_months: null,
+    warranty_ends_on: null, days_left: null, manual_url: null, manual_media_id: null,
+    note: null, consumable_count: 0, device_id: null })),
+] };
+
+const FICHE_PURIFICATEUR = { equipment: {
+  ...EQUIPEMENTS_TRENTE_QUATRE.equipment[0],
+  manual_introuvable: true,
+  consumables: [
+    { id: 10, equipment_id: 1, product_id: 5, role: 'filter', label: 'filtre HEPA',
+      unit: 'percent', low_value: 15, keep_value: 20,
+      product_name: 'Filtre HEPA MB4', in_stock: 0 },
+    { id: 11, equipment_id: 1, product_id: 6, role: 'brush', label: 'brosse latérale',
+      unit: null, low_value: null, keep_value: null,
+      product_name: 'Brosse latérale Roborock S5', in_stock: 2 },
+    { id: 12, equipment_id: 1, product_id: 7, role: 'other', label: null,
+      unit: 'minutes', low_value: 900, keep_value: 1350,
+      product_name: 'Charbon actif', in_stock: 1 },
+  ],
+  batteries: [
+    { id: 4, label: 'Télécommande du purificateur', verb: 'Pile à changer',
+      last_percent: 4 },
+  ],
+} };
+
 const SCENARIOS = [
   {
     nom: 'Scanner (écran par défaut)',
@@ -535,6 +635,57 @@ const SCENARIOS = [
     },
     actions: [{ type: 'click-nav', texte: 'Journal' }],
     ecranAttendu: 'home-stock-journal',
+  },
+  {
+    nom: 'Piles (quatorze suivies, trois à déclarer, une orpheline)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/batteries/list': PILES_QUATORZE,
+        'home_stock/batteries/discover': PILES_A_DECLARER,
+      },
+    },
+    actions: [{ type: 'click-nav', texte: 'Piles' }],
+    ecranAttendu: 'home-stock-piles',
+  },
+  {
+    nom: 'Piles (fiche ouverte, geste destructif armé)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/batteries/list': PILES_QUATORZE,
+        'home_stock/batteries/discover': { sensors: [] },
+        'home_stock/battery/events': { events: [
+          { id: 2, occurred_at: '2026-06-01T10:00:00', kind: 'replacement',
+            movement_id: 4, note: null },
+          { id: 1, occurred_at: '2026-01-01T10:00:00', kind: 'install',
+            movement_id: null, note: null },
+        ] },
+      },
+    },
+    actions: [
+      { type: 'click-nav', texte: 'Piles' },
+      { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.pile' },
+      { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.evenement' },
+    ],
+    ecranAttendu: 'home-stock-piles',
+    elementAttendu: { enfant: 'home-stock-piles', selector: '.evenement-passe' },
+  },
+  {
+    nom: 'Équipements (fiche chargée : garantie, notice, trois consommables)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/equipment/list': EQUIPEMENTS_TRENTE_QUATRE,
+        'home_stock/equipment/get': FICHE_PURIFICATEUR,
+      },
+    },
+    actions: [
+      { type: 'click-nav', texte: 'Équipements' },
+      { type: 'click-in-child', enfant: 'home-stock-equipements', selector: '.equipement' },
+    ],
+    ecranAttendu: 'home-stock-equipements',
+    elementAttendu: { enfant: 'home-stock-equipements', selector: '.delier' },
   },
 ];
 

@@ -146,7 +146,14 @@ export class EcranEquipements extends LitElement {
   }
 
   static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); }
+    :host { display: block; padding: 12px; color: var(--primary-text-color); box-sizing: border-box; }
+    * { box-sizing: border-box; max-width: 100%; }
+    /* Un entity_id est long et sans espace (sensor.browser_mod_606bfd06_
+       browser_battery) : sans coupure, il pousse la page au-delà des 412 px
+       de la dalle du téléphone, et le vérificateur de rendu le refuse — à
+       juste titre. Pas de backtick dans ce commentaire : il est DANS un
+       littéral de gabarit, et il le terminerait. */
+    .libelle, .detail, .verbe, .lien { overflow-wrap: anywhere; }
     h2 { font-size: 1rem; margin: 12px 0 8px; }
     .equipement {
       display: block; width: 100%; min-height: 62px; text-align: left;

@@ -182,7 +182,7 @@ CONSUMABLE_UNITS: Final = ("percent", "minutes")
 
 **Décision de plan — le numéro est `5`, et la contiguïté est un test.** La spec § 6.1 réservait `m005` au lot 4 et prenait `m006` par prudence. Le lot 4 n'est pas écrit ; laisser un trou serait sans conséquence pour `apply_migrations()` mais **un dépassement est fatal et silencieux** : une base passée en 6 ne verrait jamais `m004` ni `m005`. Le lot 5 prend donc **le premier numéro libre après le lot 3**, soit `5`, et le test ci-dessous transforme la règle en quelque chose que la suite fait respecter au lieu d'une chose dont il faut se souvenir. Le lot 3 écrit le même test dans sa propre tâche 1 : au merge, **garder une seule copie**.
 
-- [ ] **Step 1: Écrire les tests de la migration et de la contiguïté**
+- [x] **Step 1: Écrire les tests de la migration et de la contiguïté**
 
 Dans `tests/storage/test_migrations.py`, **en fin de fichier**. Lire d'abord le haut du fichier et **reprendre les helpers déjà présents** (`_migrated(tmp_path)`, `_migrated_to(tmp_path, version=…)`, `_open(tmp_path)`) plutôt que d'en écrire d'autres.
 
@@ -305,12 +305,12 @@ def test_m005_applies_on_a_copy_of_the_lot2_database(tmp_path):
     assert conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"] == 1
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: FAIL — `ModuleNotFoundError` / `AssertionError` sur la contiguïté, `sqlite3.OperationalError: no such table: battery`.
 
-- [ ] **Step 3: Écrire `m005_equipment.py`, les helpers de test et l'inscription**
+- [x] **Step 3: Écrire `m005_equipment.py`, les helpers de test et l'inscription**
 
 `m005_equipment.py` reprend **littéralement** le DDL de la spec § 6.2, commentaires compris (ils disent pourquoi `battery` est une place et non une cellule — c'est l'idée que tout le lot repose dessus). Puis `storage/migrations/__init__.py` :
 
@@ -324,12 +324,12 @@ MIGRATIONS = (m001_initial, m002_scan, m003_consumption, m005_equipment)
 
 Ajouter dans le fichier de test les deux helpers `_seed_one_battery_event(conn)` et `_seed_equipment_and_product(conn)`, sur le modèle de `_seed_one_movement` déjà présent.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: PASS
 
-- [ ] **Step 5: La suite entière**
+- [x] **Step 5: La suite entière**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS, ≥ 623 tests.
@@ -372,7 +372,7 @@ Expected: PASS, ≥ 623 tests.
 3. **Le seuil se compare sur le réel, la description s'affiche en entier.** `19.6 < 20` est vrai, et `int(19.6) | int` du macro l'est aussi : les deux surfaces produisent le même ensemble d'items. C'est vérifié par le test de neutralité de la tâche 14.
 4. **`last_reading_at` absent ⇒ aucune conclusion.** Une pile jamais relevée (déclaration fraîche) ne produit **ni** item de niveau **ni** « Pile HS ? ». Elle alimente `keep`, et rien d'autre.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/domain/test_maintenance.py` :
 
@@ -553,16 +553,16 @@ def test_keep_has_no_duplicates():
     assert battery_plan(piles, now=NOW)["keep"] == ["Pile à changer — Velux (CH)"]
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_maintenance.py -q`
 Expected: FAIL — `ModuleNotFoundError: custom_components.home_stock.domain.maintenance`
 
-- [ ] **Step 3: Écrire `domain/maintenance.py`**
+- [x] **Step 3: Écrire `domain/maintenance.py`**
 
 Un seul passage sur la liste, dans l'ordre : pile inactive ou `tracked` non vrai → rien ; ancre orpheline (`entity_id is None`) ou état non numérique → `keep` seul ; état `unavailable`/`unknown` **et** `last_reading_at` connu et plus vieux que `mute_hours` → item « Pile HS ? » + les **deux** résumés dans `keep` ; sinon comparaison de `last_percent` aux deux seuils. Les items sont triés par `last_percent` croissant, `keep` est dédupliqué en conservant l'ordre de première apparition. Le suffixe de rechange est ajouté **à la description seule**.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/domain/test_maintenance.py -q`
 Expected: PASS
@@ -585,7 +585,7 @@ Expected: PASS
 3. **L'enrichissement d'un item du macro se fait par `entity`**, jamais par le texte du résumé. C'est la leçon exacte du raccord Grocy actuel, qui cherche un `entity_id` dans une description en clair : ici, `spares` est indexé par `entity_id` et l'appariement est une clé de dictionnaire.
 4. **Un résumé en double entre les deux plans est fusionné, pas dupliqué** : c'est celui du macro qui gagne, sa description enrichie. `home_stock` n'a pas à écraser la mesure d'un aspirateur.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Ajouter à `tests/domain/test_maintenance.py` :
 
@@ -680,16 +680,16 @@ def test_extra_keep_that_is_not_a_list_of_strings_is_tolerated():
     assert "ok" in fusion["keep"]
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_maintenance.py -q`
 Expected: FAIL — `ImportError: cannot import name 'merge_plan'`
 
-- [ ] **Step 3: Écrire `merge_plan`**
+- [x] **Step 3: Écrire `merge_plan`**
 
 Dans `domain/maintenance.py`, à la suite de `battery_plan`. Un item du macro est « compris » si c'est un `dict` avec un `summary` non vide ; sinon il est recopié à l'identique et n'entre dans aucun appariement. `extra_keep` est filtré aux chaînes non vides, dédupliqué en conservant l'ordre.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/domain/test_maintenance.py -q`
 Expected: PASS
@@ -720,7 +720,7 @@ Expected: PASS
 
 **Décision de plan — pourquoi une fonction et pas deux schémas.** Le voluptuous d'un service et celui d'un websocket peuvent valider *un champ* de la même façon sans effort ; ils **divergent toujours** sur les règles qui lient deux champs, parce que ce sont les seules qu'on écrit à la main deux fois. `keep_percent >= low_percent` est exactement de celles-là, et un `keep` plus bas qu'un `low` fait clignoter la tâche à chaque synchronisation — le piège que CLAUDE.md documente, rendu ici **impossible à poser**. Les tâches 11 et 12 appellent toutes les deux `check_battery_fields`, et un test croisé (tâche 12) le prouve commande par commande.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_validators.py`, **en fin de fichier** :
 
@@ -802,12 +802,12 @@ def test_consuming_a_spare_that_does_not_exist_is_refused_before_writing():
                             consume_spare=True, product_id=None)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_validators.py -q`
 Expected: FAIL — `ImportError: cannot import name 'percent_threshold'`
 
-- [ ] **Step 3: Écrire les helpers et les phrases françaises**
+- [x] **Step 3: Écrire les helpers et les phrases françaises**
 
 Dans `validators.py`, en fin de fichier. Les messages restent **en anglais** (ce sont des exceptions de code) ; leur traduction va dans `messages.py`, **en fin** de `DOMAIN_ERROR_PATTERNS` :
 
@@ -830,7 +830,7 @@ Dans `validators.py`, en fin de fichier. Les messages restent **en anglais** (ce
  lambda m: f"Équipement {m.group(1)} inconnu."),
 ```
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_validators.py -q`
 Expected: PASS
@@ -861,7 +861,7 @@ Expected: PASS
 
 **Décision de plan — `spare_stock` ne recalcule rien.** Le stock restant d'un produit est déjà exprimé par `stock_rows` ; `spare_stock` en est un filtre sur des `product_id`, pas une seconde formule. Deux formules pour un même nombre se mettent à diverger le jour où l'une gagne une correction — et c'est ce nombre qui décide si la tâche dit « aucune en stock ».
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/storage/test_repositories_equipment.py`, sur le modèle de `tests/storage/test_repositories_journal.py` (reprendre son helper d'ouverture d'une base migrée plutôt que d'en écrire un autre) :
 
@@ -956,16 +956,16 @@ def test_a_consumable_link_carries_its_thresholds(conn):
     assert row["product_name"] == "Filtre HEPA MB4"
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_repositories_equipment.py -q`
 Expected: FAIL — `ImportError`
 
-- [ ] **Step 3: Écrire les dépôts**
+- [x] **Step 3: Écrire les dépôts**
 
 En fin de `repositories.py`. `warranty_ends_on` est calculé en Python (`date` + mois, en bornant au dernier jour du mois d'arrivée) : c'est la seule arithmétique du fichier qui ne soit pas du SQL, et son commentaire doit dire pourquoi elle n'est pas une colonne.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_repositories_equipment.py -q`
 Expected: PASS
@@ -992,7 +992,7 @@ Expected: PASS
 2. **`update_battery` refuse un champ inconnu**, comme `update_article_fields` le fait déjà. Une faute de frappe dans un nom de colonne doit être un refus, pas un silence.
 3. **`maintenance_plan` ne lève jamais** vers l'appelant : elle attrape, journalise, et rend `complete: False`. C'est le contrat de la tâche 15 : un plan incomplet a le droit d'ajouter et de rafraîchir, jamais de fermer.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_application_batteries.py`, sur le modèle de `tests/test_application.py` :
 
@@ -1073,16 +1073,16 @@ def test_maintenance_plan_reports_incomplete_instead_of_raising(manager, monkeyp
     assert plan["items"] == [] and plan["keep"] == []
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_batteries.py -q`
 Expected: FAIL — `AttributeError: 'StockManager' object has no attribute 'declare_battery'`
 
-- [ ] **Step 3: Écrire les méthodes**
+- [x] **Step 3: Écrire les méthodes**
 
 En fin de `StockManager`, chacune dans **un seul** `db.write()` ou `db.read()`, jamais imbriqués.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_batteries.py -q`
 Expected: PASS
@@ -1108,7 +1108,7 @@ Expected: PASS
 5. **Stock insuffisant : l'événement s'écrit quand même, et le refus est visible.** On ne perd pas l'information « la pile a été changée » parce que le placard n'était pas à jour. Le refus revient dans `spare_refused` (phrase française) et remonte jusqu'au panneau.
 6. **`installed_on` prend la date de l'événement, `last_percent` et `last_reading_at` repassent à `NULL`** après un `replacement` ou un `install` : on ne sait rien de la nouvelle pile tant que l'appareil n'a pas parlé. C'est aussi ce qui empêche un « Pile HS ? » immédiat.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Ajouter à `tests/test_application_batteries.py` :
 
@@ -1222,21 +1222,21 @@ def test_a_charge_on_an_unknown_battery_says_so(manager):
         manager.record_battery_event(999, kind="charge")
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_batteries.py -q`
 Expected: FAIL — `AttributeError: … 'record_battery_event'`
 
-- [ ] **Step 3: Écrire `record_battery_event`**
+- [x] **Step 3: Écrire `record_battery_event`**
 
 Une seule transaction. Ordre : relire la pile ; `check_battery_event` ; si la clé existe déjà, rendre l'événement existant sans rien écrire ; sinon écrire l'événement, puis tenter la consommation dans la **même** connexion, en attrapant l'erreur de stock pour la traduire en `spare_refused` et laisser l'événement en place.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_batteries.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Prouver l'absence d'interblocage**
+- [x] **Step 5: Prouver l'absence d'interblocage**
 
 Run: `./scripts/test.sh tests/test_application_batteries.py -q --timeout=60`
 Expected: PASS, sans expiration. Un `db.write()` imbriqué se manifeste ici par un test qui ne rend jamais la main — pas par une exception.
@@ -1265,7 +1265,7 @@ Expected: PASS, sans expiration. Un `db.write()` imbriqué se manifeste ici par 
 3. **`manual_media_id` est un chemin relatif sous `media/`, jamais absolu, jamais sous `www/`.** Un chemin qui remonte (`..`) est refusé à l'écriture. Un fichier absent n'est **pas** une erreur : le lien est signalé introuvable, et aucune entité ne devient indisponible pour autant.
 4. **Une échéance dépassée n'est plus une échéance à venir** : elle sort de `warranties()`, et donc du capteur. C'est cohérent avec « la garantie ne produit jamais de tâche » : ce qui est fini ne se regarde plus.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_application_equipment.py` :
 
@@ -1356,16 +1356,16 @@ def test_unlinking_leaves_the_product_alone(manager):
     assert _stock_of(manager, product_id) == 1.0
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_equipment.py -q`
 Expected: FAIL — `AttributeError: … 'create_equipment'`
 
-- [ ] **Step 3: Écrire les méthodes et le garde-fou de chemin**
+- [x] **Step 3: Écrire les méthodes et le garde-fou de chemin**
 
 Le contrôle de `manual_media_id`/`receipt_media_id` va dans `validators.py` (`media_path(value)`) pour être appelable par les deux surfaces : chemin relatif, sans `..`, sans préfixe `www/`, sans début par `/`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_equipment.py -q`
 Expected: PASS
@@ -1393,7 +1393,7 @@ Expected: PASS
 4. **`orphaned` n'est pas `tracked = 0`.** Une pile orpheline reste suivie : elle alimente `keep`, elle est comptée en attribut de `batteries_low`, et **sa tâche n'est jamais fermée**. Une migration d'intégration (ZHA → Z2M, le 2026-07-14) en frappe plusieurs d'un coup ; c'est le jour où fermer serait le plus faux.
 5. **Un capteur de pile inconnu ne crée aucune ligne.** Le coordinateur ne déclare rien tout seul : il compte. La déclaration est un geste, au panneau ou par l'import.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_coordinator_batteries.py`, sur le modèle de `tests/test_coordinator_foodday.py` :
 
@@ -1498,21 +1498,21 @@ async def test_a_refresh_without_any_battery_costs_no_write(hass, integration):
     ...
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_coordinator_batteries.py -q`
 Expected: FAIL — `ImportError: cannot import name 'resolve_battery_anchors'`
 
-- [ ] **Step 3: Écrire la résolution et les relevés**
+- [x] **Step 3: Écrire la résolution et les relevés**
 
 Insérer la lecture dans `_async_update_data` **sans réécrire** ce qui y est déjà (le lot 3 y insère `"meals"`). Un seul travail d'exécuteur pour l'écriture groupée des relevés.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_coordinator_batteries.py -q`
 Expected: PASS
 
-- [ ] **Step 5: La suite entière**
+- [x] **Step 5: La suite entière**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS. Aucun test du lot 2 (coordinateur, journée de 4 h) ne doit avoir bougé.
@@ -1539,7 +1539,7 @@ Expected: PASS. Aucun test du lot 2 (coordinateur, journée de 4 h) ne doit avoi
 2. **Aucune entité `event` nouvelle, aucun blueprint.** L'annonce existe déjà et fonctionne : la réconciliation horaire pousse les nouvelles tâches vers Bleuenn par `personas_home.send_event`. Un second canal annoncerait deux fois la même pile faible, et CLAUDE.md est explicite : « Bleuenn n'annonce que les nouvelles tâches. Ne pas rajouter de rappel périodique. »
 3. **Aucun `binary_sensor.home_stock_spares_missing`.** Une rechange sous son `min_quantity` est un produit sous son seuil : elle remonte dans `binary_sensor.home_stock_shortages` **sans une ligne de code**. Deux entités pour la même donnée, sur la même tablette, sous deux noms, c'est exactement la « donnée en double » que les contraintes du foyer interdisent. Un test le prouve.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_entities.py`, **en fin de fichier** :
 
@@ -1617,12 +1617,12 @@ async def test_the_three_sensors_are_named_in_french(hass, integration):
         assert hass.states.get(entity_id).attributes["friendly_name"].endswith(nom)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_entities.py -q`
 Expected: FAIL — les trois entités n'existent pas.
 
-- [ ] **Step 3: Écrire les trois capteurs et les traductions**
+- [x] **Step 3: Écrire les trois capteurs et les traductions**
 
 Classes en fin de `sensor.py`, instances **en fin** de la liste passée à `async_add_entities`. Dans `translations/fr.json`, à l'intérieur de `entity.sensor`, **après** les clés existantes :
 
@@ -1632,7 +1632,7 @@ Classes en fin de `sensor.py`, instances **en fin** de la liste passée à `asyn
 "warranty_next": { "name": "Prochaine fin de garantie" }
 ```
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_entities.py -q`
 Expected: PASS
@@ -1661,7 +1661,7 @@ Expected: PASS
 2. **`maintenance_plan` ne lève pas quand la base tousse** : elle rend `complete: false`. La seule chose qui la fait lever, c'est un argument de mauvaise **forme** — parce que ça, c'est le raccord qui est cassé, et le raccord doit alors désarmer la fermeture, ce que `continue_on_error: true` + `stock` non défini font déjà.
 3. **`record_battery_event` accepte une `idempotency_key`** comme toute écriture, et son `occurred_at` passe par `iso_date` sur la partie date.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_services_batteries.py`, sur le modèle de `tests/test_services.py` :
 
@@ -1726,16 +1726,16 @@ async def test_import_grocy_equipment_is_a_dry_run_by_default(hass, integration)
     assert integration.manager.list_batteries() == []
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_services_batteries.py -q`
 Expected: FAIL — `ServiceNotFound`
 
-- [ ] **Step 3: Écrire les services et leur description**
+- [x] **Step 3: Écrire les services et leur description**
 
 Handlers en closures **en fin** de `async_register_services`, `async_register` **en fin** du bloc, schémas module-level **après** `RESYNC_SCHEMA`. Blocs `services.yaml` **en fin de fichier**, en français, avec des `selector` — et pour `maintenance_plan`, une description qui dit à quoi il sert et **qui l'appelle** (l'automation `maintenance_sync_taches`), parce que c'est un service que personne n'appellera jamais à la main.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_services_batteries.py -q`
 Expected: PASS
@@ -1764,7 +1764,7 @@ Expected: PASS
 | `home_stock/equipment/list` · `get` · `create` · `update` | Fiche d'équipement |
 | `home_stock/equipment/consumable/link` · `unlink` | Rattache un produit à un équipement |
 
-- [ ] **Step 1: Écrire les tests, dont le test croisé des deux surfaces**
+- [x] **Step 1: Écrire les tests, dont le test croisé des deux surfaces**
 
 Créer `tests/test_websocket_batteries.py`, sur le modèle de `tests/test_websocket_write.py` :
 
@@ -1846,21 +1846,21 @@ async def test_commands_answer_not_loaded_when_the_entry_is_gone(hass, ws_client
 
 Puis, dans `tests/test_offline_queue_contract.py`, ajouter les sept types d'écriture **en fin** de `EXPECTED_QUEUED_COMMAND_TYPES`.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_websocket_batteries.py tests/test_offline_queue_contract.py -q`
 Expected: FAIL — `unknown_command`
 
-- [ ] **Step 3: Écrire `websocket_batteries.py`**
+- [x] **Step 3: Écrire `websocket_batteries.py`**
 
 Onze commandes, chacune décorée `@websocket_api.websocket_command` + `@websocket_api.async_response`, toutes les écritures passant par `check_battery_fields` / `check_battery_event`. Puis les **deux** lignes dans `websocket_api.py`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_websocket_batteries.py tests/test_offline_queue_contract.py -q`
 Expected: PASS
 
-- [ ] **Step 5: La suite entière**
+- [x] **Step 5: La suite entière**
 
 Run: `./scripts/test.sh -q`
 Expected: PASS.
@@ -1893,7 +1893,7 @@ Expected: PASS.
 
 **Décision de plan n°3 — le contrôle de sortie est obligatoire, et il en a un de plus que la spec.** L'import n'est réputé réussi que si le rapport contient : 0 pile sans libellé ; 0 pile `tracked = 1` sans `kind` ; 0 pile `built_in` avec un `product_id` ; 0 `entity_registry_id` en double ; 0 `keep_percent < low_percent` ; **0 écart entre les résumés que produirait le nouveau plan et ceux qu'aurait produits le bloc 3 sur le même état** ; et **0 pile importée dont l'ancre ne résout aucune entité** (une ancre morte le jour de l'import est une faute de saisie, pas un orphelin légitime).
 
-- [ ] **Step 1: Fabriquer la fixture, une fois**
+- [x] **Step 1: Fabriquer la fixture, une fois**
 
 Depuis une **copie** de `grocy.db` (jamais celle en production), extraire les tables `batteries` et `equipment` vers `tests/fixtures/grocy/equipment.sql`. Anonymiser ce qui n'a rien à faire dans un dépôt. Cette lecture se fait **une fois** ; les tests ne lisent plus jamais Grocy ensuite.
 
@@ -1903,7 +1903,7 @@ sqlite3 /tmp/grocy-copie.db ".dump batteries" ".dump equipment" \
   > tests/fixtures/grocy/equipment.sql
 ```
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 Créer `tests/test_import_grocy_equipment.py`, sur le modèle de `tests/test_import_grocy.py` :
 
@@ -2028,16 +2028,16 @@ def test_the_report_refuses_a_keep_below_a_low(manager, grocy):
     ...
 ```
 
-- [ ] **Step 3: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 3: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_import_grocy_equipment.py -q`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 4: Écrire l'import**
+- [x] **Step 4: Écrire l'import**
 
 Comme `import_grocy.py` : la simulation **parcourt tout et rapporte tout**, seules les écritures sont sautées. C'est le point d'un `apply: false` — prouver les mêmes anomalies qu'un vrai passage.
 
-- [ ] **Step 5: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 5: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_import_grocy_equipment.py -q`
 Expected: PASS
@@ -2062,11 +2062,11 @@ Expected: PASS
 
 **La méthode de test, et sa contrainte.** On teste un fichier qui vit dans `/opt/nivuus/HomeAssistant/config/` depuis un dépôt qui n'a le droit ni d'y écrire, ni de redémarrer quoi que ce soit. Le test **écrit la copie de référence dans `hass.config.path('custom_templates/')`** — un répertoire temporaire d'un Home Assistant de test, jamais celui de la maison — puis peuple `hass` depuis une fixture versionnée et rend le macro par `homeassistant.helpers.template.Template`.
 
-- [ ] **Step 1: Capturer les fixtures, une fois**
+- [x] **Step 1: Capturer les fixtures, une fois**
 
 Depuis `ha_sync/entities/sensor.json` (lecture seule), extraire les 28 capteurs de pile, les capteurs de filtre, les plantes et les entités `update`, vers `tests/fixtures/maintenance/etats.json` — `entity_id`, `state`, `attributes` utiles, `last_changed`. Copier l'actuel `config/custom_templates/maintenance.jinja` vers `tests/fixtures/maintenance/avant.jinja`, **sans le modifier**.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 Créer `tests/test_raccord_maintenance.py` :
 
@@ -2139,21 +2139,21 @@ async def test_the_render_is_valid_json_on_the_real_snapshot(hass):
     json.loads(await _rendre(hass, RACCORD))
 ```
 
-- [ ] **Step 3: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 3: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_raccord_maintenance.py -q`
 Expected: FAIL — `FileNotFoundError: docs/raccord/maintenance.jinja`
 
-- [ ] **Step 4: Écrire la copie de référence et son mode d'emploi**
+- [x] **Step 4: Écrire la copie de référence et son mode d'emploi**
 
 Copier `tests/fixtures/maintenance/avant.jinja` vers `docs/raccord/maintenance.jinja`, **retirer les lignes 57 à 110**, rien d'autre. Écrire `docs/raccord/README.md` : ce que sont ces fichiers, pourquoi ils ne sont pas installés, et la procédure à la main dans l'ordre (sauvegarder, poser, `homeassistant.reload_custom_templates`, rendre le macro dans Outils de développement → Modèle, comparer, puis seulement ensuite l'automation).
 
-- [ ] **Step 5: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 5: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_raccord_maintenance.py -q`
 Expected: PASS
 
-- [ ] **Step 6: Vérifier qu'aucune écriture n'a fui**
+- [x] **Step 6: Vérifier qu'aucune écriture n'a fui**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/config status --porcelain custom_templates/ automations.yaml
@@ -2201,11 +2201,11 @@ Expected: **vide**. Si ce n'est pas vide, la tâche a violé la contrainte la pl
 
 **Décision de plan — `peut_fermer` regarde `complete`, pas seulement la présence de la réponse.** La spec proposait `fusionne is not none`. C'est insuffisant : l'intégration peut être chargée et répondre alors que sa base est illisible (verrou WAL, disque plein). `maintenance_plan` rend alors `complete: false` (tâche 6), et le drapeau doit le voir. Le `get('complete', false)` par défaut **désarme** aussi le jour où une vieille version du service ne rend pas la clé — le défaut d'un garde-fou doit être « prudent », jamais « permissif ».
 
-- [ ] **Step 1: Capturer l'automation actuelle, une fois**
+- [x] **Step 1: Capturer l'automation actuelle, une fois**
 
 Extraire de `config/automations.yaml` (lecture seule) le bloc `- id: maintenance_sync_taches` en entier vers `tests/fixtures/maintenance/automation_avant.yaml`, **sans le modifier**.
 
-- [ ] **Step 2: Écrire les tests**
+- [x] **Step 2: Écrire les tests**
 
 Créer `tests/test_raccord_sync.py` :
 
@@ -2294,21 +2294,21 @@ async def test_the_full_chain_on_the_real_snapshot_is_neutral(hass, integration)
     assert apres["a_ajouter"] == [] and apres["a_fermer"] == []
 ```
 
-- [ ] **Step 3: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 3: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_raccord_sync.py -q`
 Expected: FAIL — `FileNotFoundError: docs/raccord/maintenance_sync.yaml`
 
-- [ ] **Step 4: Écrire la copie de référence de l'automation**
+- [x] **Step 4: Écrire la copie de référence de l'automation**
 
 Partir de `tests/fixtures/maintenance/automation_avant.yaml`, appliquer **exactement** le diff décrit plus haut, et compléter `docs/raccord/README.md` avec l'ordre d'application : le `.jinja` **d'abord** (le macro sans bloc 3 reste correct même avec l'ancienne automation — il produit juste moins de tâches), l'automation **ensuite**. L'inverse laisserait une fenêtre où l'automation appelle un service en doublon du bloc 3.
 
-- [ ] **Step 5: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 5: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_raccord_sync.py -q`
 Expected: PASS
 
-- [ ] **Step 6: Vérifier, encore, qu'aucune écriture n'a fui**
+- [x] **Step 6: Vérifier, encore, qu'aucune écriture n'a fui**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/config status --porcelain custom_templates/ automations.yaml
@@ -2340,7 +2340,7 @@ Expected: **vide**.
 3. **Aucune couleur ne porte seule l'information.** Un niveau bas se lit au chiffre et au mot, pas à la teinte : contraste ≥ 4,5:1 vérifié, et le vérificateur ne mesure pas la sémantique.
 4. **Le bloc « à déclarer » ne se remplit jamais tout seul.** Il liste ce que `home_stock/batteries/discover` rend, sans écrire ; c'est le bouton qui déclare.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `frontend/tests/piles.test.ts`, sur le modèle de `frontend/tests/journal.test.ts` :
 
@@ -2364,21 +2364,21 @@ it('affiche l’historique des événements de la fiche, plus récent d’abord'
 
 Le dernier test de la liste est celui qui compte le plus : il monte l'écran avec une `Connexion` dont `appeler` est un espion, et vérifie qu'**aucune** des sept commandes d'écriture n'y passe — elles doivent toutes traverser `FileAttente`, sinon une écriture faite dans un couloir sans Wi-Fi est perdue.
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- piles`
 Expected: FAIL — élément inconnu.
 
-- [ ] **Step 3: Écrire l'écran**
+- [x] **Step 3: Écrire l'écran**
 
 Identifiants et commentaires **en français**, comme le reste du front.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test -- piles`
 Expected: PASS
 
-- [ ] **Step 5: La suite front**
+- [x] **Step 5: La suite front**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS, ≥ 247 tests. **Pas de `npm run build`.**
@@ -2402,7 +2402,7 @@ Expected: PASS, ≥ 247 tests. **Pas de `npm run build`.**
 3. **Aucun bouton de téléversement**, nulle part. Déposer un fichier dans `media/` est une copie faite une ou deux fois par an ; le § 4.3 de la spec mesure que 0 des 34 équipements Grocy a une notice alors que la colonne existait.
 4. **`Ecran` gagne `'piles'` et `'equipements'` en fin d'union**, et le garde-fou du lot 1 (quitter le rangement avec des lignes en attente demande une confirmation) s'applique à ces cibles **comme aux autres** — c'est `demanderNavigation` qui le porte, donc c'est gratuit, et c'est un test qui le prouve plutôt qu'un raisonnement.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 `frontend/tests/equipements.test.ts` :
 
@@ -2428,16 +2428,16 @@ it('demande confirmation avant de quitter le rangement vers Équipements', async
 it('ne change pas de hauteur en passant sur les nouveaux écrans', async () => { ... });
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- equipements panneau`
 Expected: FAIL
 
-- [ ] **Step 3: Écrire l'écran et brancher la navigation**
+- [x] **Step 3: Écrire l'écran et brancher la navigation**
 
 Dans `panneau.ts` : `import './ecrans/piles'` et `import './ecrans/equipements'` **en fin** de la liste d'imports ; `'piles' | 'equipements'` **en fin** de l'union `Ecran` ; deux branches dans `rendreEcran()` **avant** le `return` du scanner ; deux boutons **en fin** de la barre de navigation.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS.
@@ -2453,7 +2453,7 @@ Expected: PASS.
 
 **C'est la seule tâche autorisée à construire.** `custom_components/home_stock/` est bind-monté dans le conteneur : `npm run build` **est** un déploiement. Toutes les tâches précédentes se sont arrêtées à `npm test` et au vérificateur en mémoire.
 
-- [ ] **Step 1: Ajouter les deux scénarios de rendu**
+- [x] **Step 1: Ajouter les deux scénarios de rendu**
 
 En fin du tableau `SCENARIOS` de `frontend/outils/verifier-rendu.mjs`, avec `ecranAttendu` renseigné — un scénario qui n'atteint jamais son écran passe au vert sans rien avoir mesuré, et le vérificateur sait déjà le dire :
 
@@ -2474,12 +2474,12 @@ En fin du tableau `SCENARIOS` de `frontend/outils/verifier-rendu.mjs`, avec `ecr
 
 Les fixtures doivent être **les pires cas réels** : un libellé long (« Interrupteur salle de bain »), un stock à zéro, une garantie expirée, une notice introuvable. Un écran qui ne déborde que sur les cas faciles n'a pas été vérifié.
 
-- [ ] **Step 2: Lancer le vérificateur, en mémoire**
+- [x] **Step 2: Lancer le vérificateur, en mémoire**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: tous les scénarios verts, aux **deux** formats (412 × 915 et 1280 × 800). Aucun débordement, aucune cible < 48 px, aucun contraste < 4,5:1, aucun texte tronqué, aucun écran manquant. **Ne jamais désactiver un contrôle pour faire passer un écran.**
 
-- [ ] **Step 3: Documenter dans `docs/exploitation.md`**
+- [x] **Step 3: Documenter dans `docs/exploitation.md`**
 
 Une section `## Lot 5 — équipements, piles et consommables`, **à la fin du fichier**, sans retoucher les précédentes. Elle doit contenir, dans cet ordre :
 
@@ -2489,7 +2489,7 @@ Une section `## Lot 5 — équipements, piles et consommables`, **à la fin du f
 4. **Ce que le lot 5 ne change pas côté tablettes** : `todo.maintenance` reste l'entité, son compte reste le compte, `tools/wallpanel-app/src/pieces.ts` **ne bouge pas**, aucun déploiement de `wallpanel-app` n'est nécessaire. C'était un objectif du raccord, pas un heureux hasard.
 5. **Les trois capteurs** et ce que portent leurs attributs, plus la carte `entities` à ajouter à `config/lovelace_garde_manger.yaml` — **livrée en texte dans la doc**, comme le reste : le lot 5 n'écrit pas dans `config/`.
 
-- [ ] **Step 4: Construire le bundle**
+- [x] **Step 4: Construire le bundle**
 
 Run (depuis `frontend/`) : `npm run build`
 
@@ -2501,12 +2501,12 @@ git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/
 
 Un seul fichier doit avoir changé.
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: mêmes scénarios verts, cette fois sur le bundle construit.
 
-- [ ] **Step 6: Les deux suites, une dernière fois**
+- [x] **Step 6: Les deux suites, une dernière fois**
 
 ```bash
 ./scripts/test.sh -q
@@ -2514,7 +2514,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: tout vert, Python ≥ 623 tests et front ≥ 247.
 
-- [ ] **Step 7: Vérifier une dernière fois que la maison n'a pas été touchée**
+- [x] **Step 7: Vérifier une dernière fois que la maison n'a pas été touchée**
 
 ```bash
 git -C /opt/nivuus/HomeAssistant/config status --porcelain
@@ -2522,7 +2522,7 @@ docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'homeassistant|grocy'
 ```
 Expected: aucune modification dans `config/` imputable à ce lot, et les conteneurs avec le **même uptime** qu'au début — aucun redémarrage.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs docs/exploitation.md \
@@ -2549,3 +2549,53 @@ Rappel, pour qu'aucune tâche n'aille les chercher :
 - **La reprise du stock alimentaire et l'arrêt de Grocy** — lot 7.
 - **Modifier les blocs 1, 2, 4 et 5 de `maintenance.jinja`** autrement que par l'enrichissement de leurs descriptions.
 - **Déployer.** Redémarrer Home Assistant, lancer l'import et appliquer le raccord restent le geste du propriétaire.
+
+
+---
+
+## Écarts au plan, constatés à l'exécution
+
+Le plan n'est pas sacré ; la suite de tests l'est. Ce qui suit a été corrigé
+au contact du code, et chaque correction est justifiée dans le message du
+commit qui la porte.
+
+1. **Tâche 1 — test de contiguïté relâché.** Le lot 3 prend `m004` dans un
+   worktree parallèle : ici les `VERSION` valent `[1, 2, 3, 5]` et la forme
+   stricte ne peut pas passer. Le test vérifie unicité, croissance stricte,
+   première version à 1 et `CURRENT_VERSION == max`, et porte en commentaire
+   la forme stricte à rétablir **au merge du lot 3**. `m005` n'a pas été
+   renuméroté.
+2. **Tâche 11 — `import_grocy_equipment` déplacé en tâche 13.** Le plan
+   enregistrait et testait ce service deux tâches avant que son module et sa
+   fixture Grocy n'existent.
+3. **Tâches 12, 16, 17 — `EXPECTED_QUEUED_COMMAND_TYPES` déplacé.** Le
+   contrat hors-ligne compare cet ensemble à ce que le scanner TROUVE dans
+   les sources TypeScript : l'inscrire à la tâche 12 rendait toute la suite
+   rouge jusqu'à la tâche 17. Les trois types rejoignent la liste avec les
+   écrans qui les appellent.
+4. **Tâche 14 — capture de l'automation avancée.** Le test de regex dupliquée
+   comparait le macro à un fichier que la tâche 15 crée. La copie témoin de
+   « Système - Mises à jour automatiques » (celle qui porte réellement la
+   regex, et non `maintenance_sync_taches`) est capturée en tâche 14.
+5. **Tâche 15 — `continue_on_error` ne suffisait pas.** Mesuré : Home
+   Assistant traite « service introuvable » comme une faute de configuration
+   et interrompt le script, `continue_on_error` ou non. La réconciliation
+   entière s'arrêtait donc dès que `home_stock` était déchargé — sans rien
+   fermer, mais sans plus rien ajouter ni rafraîchir. L'appel est gardé par
+   l'état de `sensor.home_stock_batteries_low`.
+6. **Tâche 16 — `FileAttente` gagne une promesse `reponse`.** La file ne
+   rendait que le sort de l'action et jetait la réponse du serveur, donc
+   `spare_refused` ne pouvait pas remonter au panneau. Ajout purement
+   additif.
+7. **Tâche 16 — une douzième commande websocket**, `home_stock/battery/events`
+   (lecture seule) : la fiche d'une pile montre son historique, et aucune des
+   onze ne savait le rendre.
+8. **Tâches 14, 15, 18 — contrôle « rien n'a fui ».** `/opt/nivuus/HomeAssistant/config`
+   n'est pas un dépôt git : le `git status` prévu par le plan n'imprimait
+   qu'une erreur fatale. Remplacé par une comparaison md5 contre une
+   empreinte prise avant la tâche 1.
+9. **Correctif hors périmètre, assumé** : `tests/conftest.py` ne drainait pas
+   le rafraîchissement débouncé de `setup_entry`, ce qui rendait
+   `tests/test_event_expiration.py` rouge environ une fois sur cinq, sur un
+   test différent à chaque fois. Sans ce correctif, aucune des dix-huit
+   portes « la suite complète est verte » n'était fiable.
