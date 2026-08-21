@@ -1,0 +1,88 @@
+{#-
+  Règles de maintenance de la maison — source unique de vérité.
+  Renvoie un JSON {"items": [...], "keep": [...]} :
+    items = ce qui doit exister comme tâche (seuil d'apparition franchi)
+    keep  = ce qui a le droit de rester (seuil de maintien, plus large → hystérésis)
+  Consommé par l'automation « Maintenance - Synchronisation liste de tâches ».
+  Debug : coller dans Outils de développement → Modèle
+    {% from 'maintenance.jinja' import maintenance_plan %}{{ maintenance_plan() }}
+-#}
+{%- macro maintenance_plan() -%}
+{%- set ns = namespace(items=[], keep=[]) -%}
+
+{#- ---------- 1. Consommables aspirateurs (minutes de vie restantes) ---------- -#}
+{%- set robots = [('cuisine', 'Aspi cuisine'), ('chambre', 'Aspi chambre')] -%}
+{%- set pieces = [
+     ('main_brush',      'brosse principale à remplacer', 1800, 2700),
+     ('right_brush',     'brosse latérale à remplacer',   1200, 1800),
+     ('main_filter',     'filtre à remplacer',             900, 1350),
+     ('sensor_cleaning', 'nettoyer les capteurs',          180,  270)] -%}
+{%- for suffix, robot in robots -%}
+  {%- for piece, txt, lo, hi in pieces -%}
+    {%- set e = 'sensor.aspirateur_' ~ suffix ~ '_' ~ piece -%}
+    {%- set summary = robot ~ ' — ' ~ txt -%}
+    {%- set v = states(e) | int(-1) -%}
+    {%- if v < 0 -%}
+      {#- Capteur muet (unavailable/unknown, MQTT coupé, HA qui démarre) : on ne crée rien,
+          mais on garde le summary dans keep pour ne JAMAIS fermer une tâche existante
+          sur une absence de mesure. -#}
+      {%- set ns.keep = ns.keep + [summary] -%}
+    {%- else -%}
+      {%- if v < lo -%}
+        {%- set ns.items = ns.items + [{'summary': summary, 'description': (v // 60) ~ ' h de vie restantes', 'entity': e}] -%}
+      {%- endif -%}
+      {%- if v < hi -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+
+{#- ---------- 2. Filtres air et eau (% restants) ---------- -#}
+{%- set filtres = [
+     ('sensor.purificateur_air_filter_life_remaining', 'Purificateur — filtre à remplacer',    'fan.purificateur_air'),
+     ('sensor.eversweet_3_pro_uvc_filtre',             'Fontaine Soraya — filtre à remplacer', '')] -%}
+{%- for e, summary, garde in filtres -%}
+  {%- set v = states(e) | int(-1) -%}
+  {%- set dispo = (garde == '') or has_value(garde) -%}
+  {%- if v < 0 or not dispo -%}
+    {#- Capteur ou appareil-garde muet : keep sans items (pas de fermeture sur silence). -#}
+    {%- set ns.keep = ns.keep + [summary] -%}
+  {%- else -%}
+    {%- if v < 15 -%}
+      {%- set ns.items = ns.items + [{'summary': summary, 'description': v ~ ' % restants', 'entity': e}] -%}
+    {%- endif -%}
+    {%- if v < 20 -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+
+{#- ---------- 4. Plantes (humidité du sol) ---------- -#}
+{%- set plantes = [
+     ('sensor.plante_television_humidite', 'Arroser Plante Télévision'),
+     ('sensor.plante_humidite',            'Arroser Plante Salle de bain')] -%}
+{%- for e, summary in plantes -%}
+  {%- set v = states(e) | int(-1) -%}
+  {%- if v <= 2 -%}
+    {#- Capteur muet ou débranché (≤ 2 % = sonde hors sol) : keep sans items. -#}
+    {%- set ns.keep = ns.keep + [summary] -%}
+  {%- else -%}
+    {%- if v < 20 -%}
+      {%- set ns.items = ns.items + [{'summary': summary, 'description': v ~ ' % d\'humidité du sol', 'entity': e}] -%}
+    {%- endif -%}
+    {%- if v < 25 -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ---------- 5. Mises à jour manuelles ----------
+     Uniquement celles que l'automation « Système - Mises à jour automatiques (dimanche 5h) »
+     refuse d'installer : firmwares, APT système, container HA. Les autres partent seules. -#}
+{%- set maj = states.update
+      | selectattr('state', 'eq', 'on')
+      | selectattr('entity_id', 'search', 'firmware|micrologiciel|system_apt|docker_homeassistant')
+      | map(attribute='name') | list -%}
+{%- if maj | count > 0 -%}
+  {%- set ns.items = ns.items + [{'summary': 'Mises à jour manuelles à installer', 'description': maj | join(', '), 'entity': ''}] -%}
+  {%- set ns.keep = ns.keep + ['Mises à jour manuelles à installer'] -%}
+{%- endif -%}
+
+{{- {'items': ns.items, 'keep': ns.keep} | to_json -}}
+{%- endmacro -%}

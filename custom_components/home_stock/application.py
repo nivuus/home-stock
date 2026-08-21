@@ -5,6 +5,7 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
@@ -16,6 +17,12 @@ import voluptuous as vol
 from zoneinfo import ZoneInfo
 
 from .const import (
+    BATTERY_EVENT_KINDS,
+    BATTERY_KINDS,
+    CONSUMABLE_ROLES,
+    CONSUMABLE_UNITS,
+    DEFAULT_KEEP_PERCENT,
+    DEFAULT_LOW_PERCENT,
     MACRO_COLUMNS,
     LEFTOVER_CATEGORY_NAME,
     LEFTOVER_NAME_PREFIX,
@@ -49,6 +56,7 @@ from .domain.recipes import (
     scale_factor,
 )
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
+from .domain.maintenance import battery_plan, merge_plan
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import convertible_amount, format_quantity, to_base_quantity
@@ -56,7 +64,14 @@ from .recipes.adapt import AdaptedRecipe
 from .recipes.mapping import SourceIngredient, SourceRecipe
 from .storage import repositories as repo
 from .storage.database import Database
-from .validators import finite_float, iso_date
+from .messages import french_message
+from .validators import (
+    check_battery_event,
+    check_battery_fields,
+    finite_float,
+    iso_date,
+    media_path,
+)
 
 
 # The keys a bucket and a day both carry. One definition, so a series and a
@@ -65,6 +80,9 @@ _TOTAL_KEYS: Final = ("kcal", *MACRO_COLUMNS, "cost", "waste_cost", "unvalued")
 
 # The two stages of an expiry announcement, in the only order they may occur.
 EXPIRY_STAGES: Final = ("approaching", "expired")
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _empty_totals() -> dict[str, float]:
@@ -1437,6 +1455,388 @@ class StockManager:
         repo.update_recipe_fields(conn, recipe["id"],
                                   {"leftover_product_id": product_id})
         return product_id, article_id
+
+
+    # --- lot 5 : piles, équipements et consommables -------------------------
+
+    def declare_battery(self, *, label: str, kind: str,
+                        entity_registry_id: str | None = None,
+                        device_id: str | None = None,
+                        equipment_id: int | None = None,
+                        product_id: int | None = None,
+                        cell_count: int = 1,
+                        tracked: bool | None = None,
+                        exclusion_reason: str | None = None,
+                        low_percent: float = DEFAULT_LOW_PERCENT,
+                        keep_percent: float = DEFAULT_KEEP_PERCENT,
+                        installed_on: str | None = None,
+                        expected_life_days: int | None = None,
+                        note: str | None = None,
+                        external_ref: str | None = None,
+                        idempotency_key: str | None = None) -> int:
+        """Declare a place where a battery lives. Returns its id.
+
+        Validates before writing, even though both surfaces already called
+        `check_battery_fields`: a third door exists — the import (task 13) —
+        and a rule only enforced at the surfaces is a rule an import that
+        writes fourteen rows in one go quietly walks around.
+        """
+        if kind not in BATTERY_KINDS:
+            raise vol.Invalid(f"unknown battery kind {kind!r}")
+        fields = {
+            "entity_registry_id": entity_registry_id, "device_id": device_id,
+            "equipment_id": equipment_id, "product_id": product_id,
+            "cell_count": cell_count, "tracked": tracked,
+            "exclusion_reason": exclusion_reason, "low_percent": low_percent,
+            "keep_percent": keep_percent, "installed_on": installed_on,
+            "expected_life_days": expected_life_days, "note": note,
+            "external_ref": external_ref,
+        }
+        check_battery_fields(fields, kind=kind)
+        # `battery` has no idempotency_key column (the DDL is the spec's, and
+        # no column is added to it), so the replay marker rides in
+        # `external_ref` — the same column the Grocy import uses for its own
+        # id. That is safe only because both sides are NAMESPACED: the queue
+        # writes "declare_battery:<uuid>", the import writes "grocy:battery:7"
+        # (task 13). Never store a bare id here, or lot 7's join between the
+        # two systems starts matching a queue token.
+        stored_key = _namespaced_key("declare_battery", idempotency_key)
+        # An explicit external_ref always wins: the import owns that column
+        # for the rows it creates, and its replayability depends on it.
+        marker = external_ref or stored_key
+        with self.db.write() as conn:
+            if stored_key:
+                existing = conn.execute(
+                    "SELECT id FROM battery WHERE external_ref = ?",
+                    (stored_key,)).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+            return repo.insert_battery(
+                conn, label=label, kind=kind, **{**fields, "external_ref": marker})
+
+    def update_battery(self, battery_id: int, fields: dict[str, Any]) -> None:
+        """Correct a declaration. Refuses an unknown column, like
+        `update_article_fields` already does: a typo in a column name must be
+        a refusal, never a silence."""
+        unknown = set(fields) - set(repo.BATTERY_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown battery fields: {sorted(unknown)}")
+        with self.db.write() as conn:
+            row = repo.get_battery(conn, battery_id)
+            if row is None:
+                raise ValueError(f"unknown battery {battery_id}")
+            # The invariants bind the SUBMITTED fields to the STORED ones: a
+            # `product_id` alone is still refused on a built_in battery whose
+            # kind is not in the same request, because the kind is in the row.
+            merged = {**dict(row), **fields}
+            # SQLite gives `tracked` back as 0/1, and `tracked_flag` refuses
+            # an int on purpose (0/1/"oui" must not stand in for the three
+            # meanings). Normalise the STORED value before merging, or every
+            # update of an already-declared battery is refused for a reason
+            # that has nothing to do with what the caller sent.
+            if "tracked" not in fields and merged.get("tracked") is not None:
+                merged["tracked"] = bool(merged["tracked"])
+            check_battery_fields(merged, kind=merged["kind"])
+            repo.update_battery_fields(conn, battery_id, fields)
+
+    def record_reading(self, battery_id: int, *, percent: float, at: str) -> None:
+        with self.db.write() as conn:
+            repo.set_battery_reading(conn, battery_id, percent=percent, at=at)
+
+    def list_batteries(self, *, include_untracked: bool = True) -> list[dict[str, Any]]:
+        """Every declared place, in the shape `domain/maintenance` expects —
+        minus `state` and `entity_id`, which only the coordinator can resolve.
+        """
+        conn = self.db.read()
+        rows = repo.list_batteries(conn)
+        stock = repo.spare_stock(
+            conn, {row["product_id"] for row in rows if row["product_id"]})
+        batteries = []
+        for row in rows:
+            if not include_untracked and not row["tracked"]:
+                continue
+            battery = dict(row)
+            battery["tracked"] = (None if row["tracked"] is None
+                                  else bool(row["tracked"]))
+            battery["spare"] = None if row["product_id"] is None else {
+                "label": row["spare_label"],
+                "cell_count": int(row["cell_count"]),
+                "in_stock": stock.get(row["product_id"], 0.0),
+            }
+            batteries.append(battery)
+        return batteries
+
+    def list_battery_events(self, battery_id: int, limit: int = 20) -> list[dict[str, Any]]:
+        return repo.list_battery_events(self.db.read(), battery_id, limit)
+
+    def maintenance_plan(self, *, now: datetime, readings: Mapping[int, Mapping[str, Any]],
+                         extra_items: Sequence[Any] | None = None,
+                         extra_keep: Sequence[Any] | None = None,
+                         spares: Mapping[str, Mapping[str, Any]] | None = None,
+                         ) -> dict[str, Any]:
+        """The plan `home_stock.maintenance_plan` answers with.
+
+        NEVER raises towards its caller: it catches, logs, and answers
+        `complete: False`. That is the whole contract of task 15 — an
+        incomplete plan may add and refresh, never close. A plan that raised
+        would take the battery items out of `items` AND out of `keep`, and one
+        single 5:05 sync would close all fourteen battery tasks of the house.
+        """
+        try:
+            rows = []
+            for battery in self.list_batteries():
+                reading = readings.get(battery["id"], {})
+                rows.append({**battery,
+                             "entity_id": reading.get("entity_id"),
+                             "state": reading.get("state")})
+            own = battery_plan(rows, now=now)
+            merged = merge_plan(own, extra_items=extra_items,
+                                extra_keep=extra_keep, spares=spares)
+            return {**merged, "complete": True}
+        except Exception:  # noqa: BLE001 - the refusal is data, not an exception
+            _LOGGER.exception(
+                "maintenance_plan could not be built; answering complete=False "
+                "so the reconciliation adds and refreshes but closes nothing")
+            own = battery_plan([], now=now)
+            merged = merge_plan(own, extra_items=extra_items, extra_keep=extra_keep)
+            return {**merged, "complete": False}
+
+    def record_battery_event(self, battery_id: int, *, kind: str,
+                             occurred_at: str | None = None,
+                             consume_spare: bool | None = None,
+                             note: str | None = None,
+                             idempotency_key: str | None = None) -> dict[str, Any]:
+        """Record a charge or a replacement, and take the spare out of the
+        cupboard when there is one to take.
+
+        ONE transaction, never two. The event and the movement are written on
+        the SAME connection: `Database._lock` is not reentrant, so calling
+        `self.consume(...)` from inside this `db.write()` block would freeze
+        the process forever, with no exception to see it by. That is why this
+        goes through `_consume_within`.
+
+        Idempotence crosses both tables: the movement's key is
+        `_namespaced_key('battery_event', key)`, so a replay from the offline
+        queue can neither write a second event nor decrement the cupboard
+        twice, and answers the SAME `event_id`.
+        """
+        if kind not in BATTERY_EVENT_KINDS:
+            raise vol.Invalid(f"unknown battery event kind {kind!r}")
+        moment = occurred_at or _now()
+        stored_key = _namespaced_key("battery_event", idempotency_key)
+        with self.db.write() as conn:
+            if stored_key:
+                existing = repo.battery_event_by_key(conn, stored_key)
+                if existing is not None:
+                    return {"event_id": int(existing["id"]),
+                            "movement_id": existing["movement_id"],
+                            "spare_refused": None}
+            battery = repo.get_battery(conn, battery_id)
+            if battery is None:
+                raise ValueError(f"unknown battery {battery_id}")
+
+            # `consume_spare` defaults by nature, and an explicit value always
+            # wins. A rechargeable cell consumes NOTHING by default: the four
+            # LADDA rotate between the drawer and three sensors, and counting
+            # each rotation would empty the stock in a year while all four
+            # cells are still in the house — a lying shortage, and a shopping
+            # line for batteries one already owns.
+            wants_spare = consume_spare
+            if wants_spare is None:
+                wants_spare = (battery["kind"] == "primary"
+                               and battery["product_id"] is not None)
+            check_battery_event(kind, battery_kind=battery["kind"],
+                                consume_spare=bool(wants_spare),
+                                product_id=battery["product_id"])
+
+            movement_id: int | None = None
+            spare_refused: str | None = None
+            # The spare comes out of the cupboard BEFORE the event is written,
+            # not after: `battery_event` is append-only (two triggers), so
+            # there is no second pass to fill `movement_id` in. The event is
+            # therefore written once, complete, whichever way this goes.
+            if wants_spare and battery["product_id"] is not None:
+                try:
+                    movement_ids = self._consume_within(
+                        conn, product_id=int(battery["product_id"]),
+                        quantity=float(battery["cell_count"]),
+                        reason=REASON_CONSUMPTION, moment=moment,
+                        key=stored_key)
+                except InsufficientStock as err:
+                    # The event still gets written. We do not lose "the
+                    # battery was changed" because the cupboard was out of
+                    # date; the refusal travels back as data, all the way to
+                    # the panel.
+                    spare_refused = french_message(err)
+                else:
+                    movement_id = movement_ids[0] if movement_ids else None
+
+            event_id = repo.insert_battery_event(
+                conn, battery_id=battery_id, occurred_at=moment, kind=kind,
+                movement_id=movement_id, note=note, idempotency_key=stored_key)
+
+            if kind in ("install", "replacement"):
+                # A new cell: we know nothing about it until the device
+                # speaks, so the old reading goes. It is also what stops a
+                # "Pile HS ?" from firing the minute after a replacement.
+                repo.update_battery_fields(conn, battery_id, {
+                    "installed_on": moment[:10],
+                    "last_percent": None, "last_reading_at": None,
+                })
+
+            return {"event_id": event_id, "movement_id": movement_id,
+                    "spare_refused": spare_refused}
+
+    # --- lot 5 : les équipements -------------------------------------------
+
+    _EQUIPMENT_DATE_FIELDS: Final = ("purchased_on",)
+    _EQUIPMENT_PATH_FIELDS: Final = ("manual_media_id", "receipt_media_id")
+
+    @staticmethod
+    def _checked_equipment_fields(fields: dict[str, Any]) -> dict[str, Any]:
+        """Guard the two kinds of field that can poison a later refresh: a
+        malformed date (which makes every coordinator pass raise, taking every
+        entity unavailable) and a path that escapes `media/`."""
+        checked = dict(fields)
+        for column in StockManager._EQUIPMENT_DATE_FIELDS:
+            if checked.get(column) is not None:
+                checked[column] = iso_date(checked[column])
+        for column in StockManager._EQUIPMENT_PATH_FIELDS:
+            if checked.get(column) is not None:
+                checked[column] = media_path(checked[column])
+        return checked
+
+    def create_equipment(self, *, name: str, device_id: str | None = None,
+                         location_id: int | None = None, brand: str | None = None,
+                         model: str | None = None, serial: str | None = None,
+                         purchased_on: str | None = None,
+                         purchase_price: float | None = None,
+                         warranty_months: int | None = None,
+                         manual_url: str | None = None,
+                         manual_media_id: str | None = None,
+                         receipt_media_id: str | None = None,
+                         note: str | None = None, external_ref: str | None = None,
+                         idempotency_key: str | None = None) -> int:
+        """Create an equipment sheet. Returns its id.
+
+        `purchase_price` writes NO movement. It is sheet data: a 900 € TV in a
+        journal whose `cost_today` feeds the day's food spending would make
+        that sensor useless forever — and the journal is append-only, so the
+        mistake would not be correctable.
+        """
+        fields = self._checked_equipment_fields({
+            "device_id": device_id, "location_id": location_id, "brand": brand,
+            "model": model, "serial": serial, "purchased_on": purchased_on,
+            "purchase_price": purchase_price, "warranty_months": warranty_months,
+            "manual_url": manual_url, "manual_media_id": manual_media_id,
+            "receipt_media_id": receipt_media_id, "note": note,
+        })
+        stored_key = _namespaced_key("create_equipment", idempotency_key)
+        marker = external_ref or stored_key
+        with self.db.write() as conn:
+            if stored_key:
+                existing = conn.execute(
+                    "SELECT id FROM equipment WHERE external_ref = ?",
+                    (stored_key,)).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+            return repo.insert_equipment(conn, name=name,
+                                         **{**fields, "external_ref": marker})
+
+    def update_equipment(self, equipment_id: int, fields: dict[str, Any]) -> None:
+        unknown = set(fields) - set(repo.EQUIPMENT_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown equipment fields: {sorted(unknown)}")
+        checked = self._checked_equipment_fields(fields)
+        with self.db.write() as conn:
+            if repo.get_equipment(conn, equipment_id) is None:
+                raise ValueError(f"unknown equipment {equipment_id}")
+            repo.update_equipment_fields(conn, equipment_id, checked)
+
+    def list_equipment(self, *, today: date | None = None) -> list[dict[str, Any]]:
+        """Every sheet, with the warranty end and the days left — signed.
+
+        An EXPIRED warranty keeps its date here, with a negative `days_left`:
+        the panel owes three distinct sentences (ahead, over, never recorded)
+        and cannot write the second one from a row that hides the date. Only
+        `warranties()` narrows to what is still ahead.
+        """
+        day = today or date.today()
+        conn = self.db.read()
+        ends = {row["id"]: row["warranty_ends_on"] for row in repo.warranty_rows(conn)}
+        rows = []
+        for row in repo.list_equipment(conn):
+            ends_on = ends.get(row["id"])
+            rows.append({
+                **row,
+                "warranty_ends_on": ends_on,
+                "days_left": None if ends_on is None
+                else (date.fromisoformat(ends_on) - day).days,
+            })
+        return rows
+
+    def get_equipment(self, equipment_id: int) -> dict[str, Any]:
+        conn = self.db.read()
+        row = repo.get_equipment(conn, equipment_id)
+        if row is None:
+            raise ValueError(f"unknown equipment {equipment_id}")
+        consumables = repo.list_consumables(conn, equipment_id)
+        stock = repo.spare_stock(conn, {c["product_id"] for c in consumables})
+        return {
+            **row,
+            "consumables": [{**c, "in_stock": stock.get(c["product_id"], 0.0)}
+                            for c in consumables],
+            "batteries": [b for b in self.list_batteries()
+                          if b["equipment_id"] == equipment_id],
+        }
+
+    def link_consumable(self, *, equipment_id: int, product_id: int, role: str,
+                        label: str | None = None,
+                        entity_registry_id: str | None = None,
+                        low_value: float | None = None,
+                        keep_value: float | None = None,
+                        unit: str | None = None,
+                        expected_life_days: int | None = None,
+                        installed_on: str | None = None) -> int:
+        if role not in CONSUMABLE_ROLES:
+            raise vol.Invalid(f"unknown consumable role {role!r}")
+        if unit is not None and unit not in CONSUMABLE_UNITS:
+            raise vol.Invalid(f"unknown consumable unit {unit!r}")
+        with self.db.write() as conn:
+            return repo.link_consumable(
+                conn, equipment_id=equipment_id, product_id=product_id, role=role,
+                label=label, entity_registry_id=entity_registry_id,
+                low_value=low_value, keep_value=keep_value, unit=unit,
+                expected_life_days=expected_life_days,
+                installed_on=iso_date(installed_on))
+
+    def unlink_consumable(self, consumable_id: int) -> None:
+        with self.db.write() as conn:
+            repo.unlink_consumable(conn, consumable_id)
+
+    def warranties(self, *, today: date) -> list[dict[str, Any]]:
+        """Only the deadlines still AHEAD, soonest first.
+
+        A warranty that has run out is no longer a deadline: it leaves this
+        list, and therefore the sensor. That is the coherent reading of "a
+        warranty never produces a task" — what is over is not watched any
+        more.
+        """
+        ahead = []
+        for row in repo.warranty_rows(self.db.read()):
+            days_left = (date.fromisoformat(row["warranty_ends_on"]) - today).days
+            if days_left >= 0:
+                ahead.append({**row, "days_left": days_left})
+        return ahead
+
+    def record_readings(self, readings) -> None:
+        """Write a whole refresh's worth of readings in one transaction."""
+        rows = list(readings)
+        if not rows:
+            return
+        with self.db.write() as conn:
+            repo.set_battery_readings(conn, rows)
+
 
 
 # =============================================================================

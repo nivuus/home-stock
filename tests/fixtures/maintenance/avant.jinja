@@ -1,0 +1,142 @@
+{#-
+  Règles de maintenance de la maison — source unique de vérité.
+  Renvoie un JSON {"items": [...], "keep": [...]} :
+    items = ce qui doit exister comme tâche (seuil d'apparition franchi)
+    keep  = ce qui a le droit de rester (seuil de maintien, plus large → hystérésis)
+  Consommé par l'automation « Maintenance - Synchronisation liste de tâches ».
+  Debug : coller dans Outils de développement → Modèle
+    {% from 'maintenance.jinja' import maintenance_plan %}{{ maintenance_plan() }}
+-#}
+{%- macro maintenance_plan() -%}
+{%- set ns = namespace(items=[], keep=[]) -%}
+
+{#- ---------- 1. Consommables aspirateurs (minutes de vie restantes) ---------- -#}
+{%- set robots = [('cuisine', 'Aspi cuisine'), ('chambre', 'Aspi chambre')] -%}
+{%- set pieces = [
+     ('main_brush',      'brosse principale à remplacer', 1800, 2700),
+     ('right_brush',     'brosse latérale à remplacer',   1200, 1800),
+     ('main_filter',     'filtre à remplacer',             900, 1350),
+     ('sensor_cleaning', 'nettoyer les capteurs',          180,  270)] -%}
+{%- for suffix, robot in robots -%}
+  {%- for piece, txt, lo, hi in pieces -%}
+    {%- set e = 'sensor.aspirateur_' ~ suffix ~ '_' ~ piece -%}
+    {%- set summary = robot ~ ' — ' ~ txt -%}
+    {%- set v = states(e) | int(-1) -%}
+    {%- if v < 0 -%}
+      {#- Capteur muet (unavailable/unknown, MQTT coupé, HA qui démarre) : on ne crée rien,
+          mais on garde le summary dans keep pour ne JAMAIS fermer une tâche existante
+          sur une absence de mesure. -#}
+      {%- set ns.keep = ns.keep + [summary] -%}
+    {%- else -%}
+      {%- if v < lo -%}
+        {%- set ns.items = ns.items + [{'summary': summary, 'description': (v // 60) ~ ' h de vie restantes', 'entity': e}] -%}
+      {%- endif -%}
+      {%- if v < hi -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+
+{#- ---------- 2. Filtres air et eau (% restants) ---------- -#}
+{%- set filtres = [
+     ('sensor.purificateur_air_filter_life_remaining', 'Purificateur — filtre à remplacer',    'fan.purificateur_air'),
+     ('sensor.eversweet_3_pro_uvc_filtre',             'Fontaine Soraya — filtre à remplacer', '')] -%}
+{%- for e, summary, garde in filtres -%}
+  {%- set v = states(e) | int(-1) -%}
+  {%- set dispo = (garde == '') or has_value(garde) -%}
+  {%- if v < 0 or not dispo -%}
+    {#- Capteur ou appareil-garde muet : keep sans items (pas de fermeture sur silence). -#}
+    {%- set ns.keep = ns.keep + [summary] -%}
+  {%- else -%}
+    {%- if v < 15 -%}
+      {%- set ns.items = ns.items + [{'summary': summary, 'description': v ~ ' % restants', 'entity': e}] -%}
+    {%- endif -%}
+    {%- if v < 20 -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ---------- 3. Piles ----------
+     device_class 'battery' ≠ pile à entretenir : on écarte les NiMH rechargeables
+     (faux positifs voltage), les batteries du véhicule, et les appareils dont la charge
+     ne se gère pas ici (téléphone, chromebook, tablettes, aspirateurs, browser_mod).
+     Les batteries e208 sont exclues par entity_id EXACT, jamais par motif : les tags BLE
+     du trousseau portent « peugeot_e208 » dans leur entity_id alors que ce sont des
+     CR2032 à changer (et leurs deux noms sont inversés dans le registre). -#}
+{%- set piles_exclues = ['sensor.capteur_humain_batterie', 'sensor.capteur_batterie', 'sensor.capteur_batterie_2',
+                         'sensor.peugeot_e208_batterie_de_service', 'sensor.peugeot_e208_batterie_niveau'] -%}
+{%- set motifs_exclus = 'browser|pixel|brya|tablette|aspirateur' -%}
+{%- for s in states.sensor
+      | selectattr('attributes.device_class', 'defined')
+      | selectattr('attributes.device_class', 'eq', 'battery')
+      | rejectattr('entity_id', 'in', piles_exclues)
+      | rejectattr('entity_id', 'search', motifs_exclus) -%}
+  {%- set nom = s.name | replace('Batterie ', '') | replace(' Batterie', '') | replace(' Battery level', '') | trim -%}
+  {#- « Recharger » pour les batteries rechargeables (rideaux Tuya en USB, serrure Aqara
+      U200 Lite = Li-ion 2000 mAh en USB-C) ; « Pile à changer » pour le reste. -#}
+  {%- set rechargeable = ('rideau' in s.name | lower) or ('lock' in s.name | lower) -%}
+  {%- set verbe = 'Recharger' if rechargeable else 'Pile à changer' -%}
+  {%- set summary_niveau = verbe ~ ' — ' ~ nom -%}
+  {%- if s.state in ['unavailable', 'unknown'] -%}
+    {%- set summary = 'Pile HS ? — ' ~ nom -%}
+    {#- Seuil volontairement court (1 h), et non « au moins une nuit » :
+        - `last_changed` d'une entité muette repart à l'heure du DERNIER DÉMARRAGE de HA,
+          pas au vrai début de la panne. Un seuil de 12 h exigeait donc 12 h de HA sans
+          redémarrage — le capteur de la porte d'entrée est resté muet 9 jours (2026-08-07
+          au 2026-08-16) sans jamais générer de tâche, faute d'un uptime assez long.
+        - Le délai réel est déjà pris en amont : Z2M ne publie `offline` pour un device
+          sur pile qu'après 25 h de silence (passive.timeout par défaut, availability
+          activée sans timeout explicite). `unavailable` est donc déjà une preuve solide.
+        L'heure restante ne sert plus qu'à écarter la fenêtre de démarrage de HA, où toutes
+        les entités sont muettes ~70 s. -#}
+    {%- set h = ((now() - s.last_changed).total_seconds() / 3600) | round(0) | int -%}
+    {%- if h >= 1 -%}
+      {%- set ns.items = ns.items + [{'summary': summary, 'description': 'capteur injoignable depuis au moins ' ~ h ~ ' h', 'entity': s.entity_id}] -%}
+    {%- endif -%}
+    {#- Deux summaries à protéger : « Pile HS ? — X » (celui d'ici) ET « Pile à changer — X »
+        qui a pu être créé pendant que le capteur parlait encore (ex. 8 % puis unavailable).
+        Une pile faible qui se tait ne prouve pas qu'elle a été changée → on garde les deux. -#}
+    {%- set ns.keep = ns.keep + [summary, summary_niveau] -%}
+  {%- else -%}
+    {%- set v = s.state | int(-1) -%}
+    {%- if v < 0 -%}
+      {#- État présent mais non numérique : aucune mesure exploitable → keep sans items. -#}
+      {%- set ns.keep = ns.keep + [summary_niveau] -%}
+    {%- else -%}
+      {%- if v < 20 -%}
+        {%- set ns.items = ns.items + [{'summary': summary_niveau, 'description': v ~ ' %', 'entity': s.entity_id}] -%}
+      {%- endif -%}
+      {%- if v < 25 -%}{%- set ns.keep = ns.keep + [summary_niveau] -%}{%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ---------- 4. Plantes (humidité du sol) ---------- -#}
+{%- set plantes = [
+     ('sensor.plante_television_humidite', 'Arroser Plante Télévision'),
+     ('sensor.plante_humidite',            'Arroser Plante Salle de bain')] -%}
+{%- for e, summary in plantes -%}
+  {%- set v = states(e) | int(-1) -%}
+  {%- if v <= 2 -%}
+    {#- Capteur muet ou débranché (≤ 2 % = sonde hors sol) : keep sans items. -#}
+    {%- set ns.keep = ns.keep + [summary] -%}
+  {%- else -%}
+    {%- if v < 20 -%}
+      {%- set ns.items = ns.items + [{'summary': summary, 'description': v ~ ' % d\'humidité du sol', 'entity': e}] -%}
+    {%- endif -%}
+    {%- if v < 25 -%}{%- set ns.keep = ns.keep + [summary] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ---------- 5. Mises à jour manuelles ----------
+     Uniquement celles que l'automation « Système - Mises à jour automatiques (dimanche 5h) »
+     refuse d'installer : firmwares, APT système, container HA. Les autres partent seules. -#}
+{%- set maj = states.update
+      | selectattr('state', 'eq', 'on')
+      | selectattr('entity_id', 'search', 'firmware|micrologiciel|system_apt|docker_homeassistant')
+      | map(attribute='name') | list -%}
+{%- if maj | count > 0 -%}
+  {%- set ns.items = ns.items + [{'summary': 'Mises à jour manuelles à installer', 'description': maj | join(', '), 'entity': ''}] -%}
+  {%- set ns.keep = ns.keep + ['Mises à jour manuelles à installer'] -%}
+{%- endif -%}
+
+{{- {'items': ns.items, 'keep': ns.keep} | to_json -}}
+{%- endmacro -%}

@@ -83,6 +83,15 @@
       },
       "missing_ingredients": {
         "name": "Missing ingredients"
+      },
+      "batteries_low": {
+        "name": "Low batteries"
+      },
+      "batteries_undeclared": {
+        "name": "Batteries to declare"
+      },
+      "warranty_next": {
+        "name": "Next warranty expiry"
       }
     },
     "binary_sensor": {

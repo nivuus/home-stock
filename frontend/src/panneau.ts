@@ -15,6 +15,8 @@ import './ecrans/recettes';
 import './ecrans/recette';
 import './ecrans/validation';
 import './ecrans/planning';
+import './ecrans/piles';
+import './ecrans/equipements';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
@@ -22,7 +24,8 @@ import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } fr
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
-  | 'recettes' | 'recette' | 'planning' | 'validation';
+  | 'recettes' | 'recette' | 'planning' | 'validation'
+  | 'piles' | 'equipements';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -387,6 +390,14 @@ export class PanneauGardeManger extends LitElement {
         ${this.ecran !== 'journal' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('journal')}>Journal</button>
         ` : nothing}
+        ${this.ecran !== 'piles' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('piles')}>Piles</button>
+        ` : nothing}
+        ${this.ecran !== 'equipements' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('equipements')}>
+            Équipements
+          </button>
+        ` : nothing}
         ${this.ecran !== 'reglages' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('recettes')}>Recettes</button>
           <button class="nav-bouton" @click=${() => this.demanderNavigation('planning')}>Planning</button>
@@ -515,6 +526,18 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-planning .connexion=${this.connexion} .file=${this.file}
           .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-planning>`;
+    }
+    if (this.ecran === 'piles') {
+      return html`
+        <home-stock-piles .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-piles>`;
+    }
+    if (this.ecran === 'equipements') {
+      return html`
+        <home-stock-equipements .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-equipements>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}

@@ -1251,3 +1251,99 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
       expect(element.navigationArmee).toBe(cible);
     });
 });
+
+describe('panneau : les deux écrans du lot 5', () => {
+  beforeEach(() => { window.localStorage.clear(); });
+  afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks(); });
+
+  async function monterPanneauLot5() {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/batteries/list') return Promise.resolve({ batteries: [] });
+      if (msg.type === 'home_stock/batteries/discover') return Promise.resolve({ sensors: [] });
+      if (msg.type === 'home_stock/equipment/list') return Promise.resolve({ equipment: [] });
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    return element;
+  }
+
+  const bouton = (element: HTMLElement, texte: string) =>
+    Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent?.includes(texte)) as HTMLButtonElement | undefined;
+
+  it('expose les deux nouveaux écrans dans la navigation', async () => {
+    const element = await monterPanneauLot5();
+    expect(bouton(element, 'Piles')).toBeDefined();
+    expect(bouton(element, 'Équipements')).toBeDefined();
+  });
+
+  it('ouvre l’écran Piles et l’écran Équipements', async () => {
+    const element = await monterPanneauLot5();
+    bouton(element, 'Piles')!.click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    expect(element.ecran).toBe('piles');
+    expect(element.shadowRoot!.querySelector('home-stock-piles')).not.toBeNull();
+
+    bouton(element, 'Équipements')!.click();
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    expect(element.ecran).toBe('equipements');
+    expect(element.shadowRoot!.querySelector('home-stock-equipements')).not.toBeNull();
+  });
+
+  it('demande confirmation avant de quitter le rangement vers Piles', async () => {
+    const element = await monterSurLeRangementLot5();
+    bouton(element, 'Piles')!.click();
+    await element.updateComplete;
+    // Le garde-fou du lot 1 s'applique à ces cibles comme aux autres : c'est
+    // `demanderNavigation` qui le porte, donc c'est gratuit — mais c'est un
+    // test qui le prouve, pas un raisonnement.
+    expect(element.ecran).toBe('rangement');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
+  });
+
+  it('demande confirmation avant de quitter le rangement vers Équipements', async () => {
+    const element = await monterSurLeRangementLot5();
+    bouton(element, 'Équipements')!.click();
+    await element.updateComplete;
+    expect(element.ecran).toBe('rangement');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
+  });
+
+  async function monterSurLeRangementLot5() {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    element.shadowRoot!.querySelector('home-stock-scanner')!.dispatchEvent(
+      new CustomEvent('code-lu', { detail: { code: '3229820129488' },
+                                   bubbles: true, composed: true }));
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    element.shadowRoot!.querySelector('home-stock-fiche')!.dispatchEvent(
+      new CustomEvent('article-pret', {
+        detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005,
+                  mode: 'rangement', offDroppedFields: [] },
+        bubbles: true, composed: true }));
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    expect(element.ecran).toBe('rangement');
+    return element;
+  }
+});

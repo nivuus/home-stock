@@ -273,3 +273,174 @@ async def test_the_daily_sensors_declare_a_last_reset(hass, setup_entry):
     expected_start = entry.runtime_data.coordinator.data["today"]["start"]
     expected = datetime.fromisoformat(expected_start).replace(tzinfo=UTC)
     assert last_reset == expected
+
+
+# --- lot 5 : piles faibles, piles à déclarer, prochaine fin de garantie ------
+
+from homeassistant.helpers import device_registry as lot5_dr
+from homeassistant.helpers import entity_registry as lot5_er
+
+import custom_components.home_stock as home_stock
+from custom_components.home_stock.storage import repositories as lot5_repo
+
+
+def _lot5_sensor(hass, entity_id: str, *, unique_id: str, state: str,
+                 device_id: str | None = None):
+    entry = lot5_er.async_get(hass).async_get_or_create(
+        "sensor", "mqtt", unique_id, suggested_object_id=entity_id.split(".", 1)[1],
+        original_device_class="battery", device_id=device_id)
+    hass.states.async_set(entry.entity_id, state, {"device_class": "battery"})
+    return entry
+
+
+async def _lot5_refresh(hass, integration):
+    await integration.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+
+def _lot5_seed_spare(integration, *, name: str, quantity: float,
+                     min_quantity: float | None = None) -> int:
+    manager = integration.runtime_data.manager
+    with manager.db.write() as conn:
+        product_id = lot5_repo.insert_product(conn, name=name, base_unit="piece",
+                                              edible=0, min_quantity=min_quantity)
+        article_id = lot5_repo.insert_article(conn, product_id=product_id, is_generic=1)
+        location_id = lot5_repo.insert_location(conn, name="Tiroir", kind="cupboard")
+    if quantity:
+        manager.add_stock(article_id=article_id, quantity=quantity,
+                          location_id=location_id, occurred_at="2026-08-01T10:00:00")
+    return product_id
+
+
+async def test_the_three_sensors_exist_and_are_enabled(hass, setup_entry):
+    await setup_entry()
+    for entity_id in ("sensor.home_stock_batteries_low",
+                      "sensor.home_stock_batteries_undeclared",
+                      "sensor.home_stock_warranty_next"):
+        assert hass.states.get(entity_id) is not None
+
+
+async def test_a_zero_is_a_state_not_an_unavailable(hass, setup_entry):
+    """Aucune pile faible se dit « 0 ». `unknown` ferait croire à une panne."""
+    await setup_entry()
+    assert hass.states.get("sensor.home_stock_batteries_low").state == "0"
+
+
+async def test_batteries_low_publishes_the_list_lowest_first(hass, setup_entry):
+    integration = await setup_entry()
+    manager = integration.runtime_data.manager
+    for label, unique_id, entity_id, percent in (
+            ("A", "ua", "sensor.a_batterie", "18"),
+            ("B", "ub", "sensor.b_batterie", "5")):
+        entry = _lot5_sensor(hass, entity_id, unique_id=unique_id, state=percent)
+        manager.declare_battery(label=label, kind="primary",
+                                entity_registry_id=entry.id, tracked=True)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_batteries_low")
+    assert state.state == "2"
+    assert [b["label"] for b in state.attributes["batteries"]] == ["B", "A"]
+    assert state.attributes["batteries"][0]["verb"] == "Pile à changer"
+
+
+async def test_batteries_low_says_whether_the_spare_is_there(hass, setup_entry):
+    """« 12 %, aucune en stock » est la phrase qui change ce qu'on fait le soir
+    même. Elle doit être une donnée, pas une reconstruction dans une carte."""
+    integration = await setup_entry()
+    product_id = _lot5_seed_spare(integration, name="CR2032", quantity=0)
+    entry = _lot5_sensor(hass, "sensor.velux_batterie", unique_id="u1", state="12")
+    integration.runtime_data.manager.declare_battery(
+        label="Velux (CH)", kind="primary", entity_registry_id=entry.id,
+        tracked=True, product_id=product_id)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_batteries_low")
+    assert state.attributes["batteries"][0]["spare_label"] == "CR2032"
+    assert state.attributes["batteries"][0]["spare_in_stock"] == 0.0
+
+
+async def test_batteries_low_counts_the_orphans_and_the_mutes_separately(hass, setup_entry):
+    """Une orpheline n'est pas une pile faible : elle n'a pas de niveau du
+    tout. La compter dans la valeur ferait mentir le chiffre ; ne pas la
+    compter du tout la rendrait invisible."""
+    integration = await setup_entry()
+    integration.runtime_data.manager.declare_battery(
+        label="Disparue", kind="primary", entity_registry_id="uuid-mort", tracked=True)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_batteries_low")
+    assert state.state == "0"
+    assert state.attributes["orphaned"] == 1
+    assert state.attributes["mute"] == 0
+
+
+async def test_undeclared_counts_a_brand_new_battery_sensor(hass, setup_entry):
+    integration = await setup_entry()
+    _lot5_sensor(hass, "sensor.nouveau_batterie", unique_id="u-neuf", state="12")
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_batteries_undeclared")
+    assert state.state == "1"
+    assert state.attributes["entities"] == ["sensor.nouveau_batterie"]
+
+
+async def test_undeclared_separates_never_seen_from_undecided(hass, setup_entry):
+    integration = await setup_entry()
+    _lot5_sensor(hass, "sensor.jamais_vu_batterie", unique_id="u-neuf", state="12")
+    entry = _lot5_sensor(hass, "sensor.indecis_batterie", unique_id="u-ind", state="40")
+    integration.runtime_data.manager.declare_battery(
+        label="Indécis", kind="primary", entity_registry_id=entry.id, tracked=None)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_batteries_undeclared")
+    assert state.state == "2"
+    assert state.attributes["never_declared"] == 1
+    assert state.attributes["undecided"] == 1
+
+
+async def test_warranty_next_is_none_when_there_is_nothing_to_watch(hass, setup_entry):
+    await setup_entry()
+    assert hass.states.get("sensor.home_stock_warranty_next").state in ("unknown", "None")
+
+
+async def test_warranty_next_counts_days_and_lists_the_deadlines(hass, setup_entry):
+    integration = await setup_entry()
+    integration.runtime_data.manager.create_equipment(
+        name="Purificateur", purchased_on="2025-01-01", warranty_months=240)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("sensor.home_stock_warranty_next")
+    assert int(state.state) > 0
+    assert state.attributes["warranties"][0]["name"] == "Purificateur"
+    assert state.attributes["warranties"][0]["warranty_ends_on"] == "2045-01-01"
+
+
+async def test_a_non_edible_spare_shows_up_in_shortages(hass, setup_entry):
+    """La rupture existe déjà : c'est pour ça qu'aucun capteur de rechange
+    manquante n'est créé. Ce test est ce qui rend cette absence défendable —
+    sans lui, « ça marche déjà » est une supposition."""
+    integration = await setup_entry()
+    _lot5_seed_spare(integration, name="CR2032", quantity=0, min_quantity=2)
+    await _lot5_refresh(hass, integration)
+    state = hass.states.get("binary_sensor.home_stock_shortages")
+    assert state.state == "on"
+    assert "CR2032" in state.attributes["products"]
+
+
+async def test_the_three_sensors_are_named_in_french(hass, setup_entry):
+    """Les noms affichés vivent dans `translations/fr.json`, jamais en dur
+    dans le code — c'est la règle de nommage du lot. Le test lit les deux
+    fichiers de traduction plutôt que `friendly_name`, parce qu'un Home
+    Assistant de test parle anglais : `friendly_name` y rendrait le libellé
+    de `en.json`, et une assertion française passerait ou échouerait selon la
+    langue du harnais, pas selon ce qui a été livré.
+    """
+    import json
+    from pathlib import Path as _Path
+
+    await setup_entry()
+    racine = _Path(home_stock.__file__).parent / "translations"
+    fr = json.loads((racine / "fr.json").read_text(encoding="utf-8"))
+    en = json.loads((racine / "en.json").read_text(encoding="utf-8"))
+    for cle, nom in (("batteries_low", "Piles faibles"),
+                     ("batteries_undeclared", "Piles à déclarer"),
+                     ("warranty_next", "Prochaine fin de garantie")):
+        assert fr["entity"]["sensor"][cle]["name"] == nom
+        # Les deux fichiers doivent couvrir les mêmes clés : une clé anglaise
+        # manquante fait retomber le nom sur l'`entity_id` brut.
+        assert en["entity"]["sensor"][cle]["name"]
+        assert hass.states.get(f"sensor.home_stock_{cle}") is not None

@@ -285,3 +285,32 @@ describe('file d’attente : le passage de relais par clé', () => {
     expect(file.taille()).toBe(0);
   });
 });
+
+describe('la réponse du serveur, action par action', () => {
+  it('rend la réponse de CETTE action à son appelant', async () => {
+    const envoyer = vi.fn(async () => ({ event_id: 7, spare_refused: 'Stock insuffisant.' }));
+    const file = new FileAttente(new StockageFactice(), envoyer);
+    const suivi = file.ajouter('home_stock/battery/event', { battery_id: 1, kind: 'replacement' });
+    await file.rejouer();
+    await expect(suivi.sort).resolves.toBe('envoyee');
+    await expect(suivi.reponse).resolves.toEqual({ event_id: 7, spare_refused: 'Stock insuffisant.' });
+  });
+
+  it('rend undefined quand le serveur refuse, sans laisser l’appelant en attente', async () => {
+    const envoyer = vi.fn(async () => { throw { code: 'invalid_value', message: 'non' }; });
+    const file = new FileAttente(new StockageFactice(), envoyer);
+    const suivi = file.ajouter('home_stock/battery/event', { battery_id: 1, kind: 'charge' });
+    await file.rejouer();
+    await expect(suivi.sort).resolves.toBe('refusee');
+    await expect(suivi.reponse).resolves.toBeUndefined();
+  });
+
+  it('rend undefined quand le réseau est coupé', async () => {
+    const envoyer = vi.fn(async () => { throw new Error('offline'); });
+    const file = new FileAttente(new StockageFactice(), envoyer);
+    const suivi = file.ajouter('home_stock/battery/event', { battery_id: 1, kind: 'charge' });
+    await file.rejouer();
+    await expect(suivi.sort).resolves.toBe('en-attente');
+    await expect(suivi.reponse).resolves.toBeUndefined();
+  });
+});

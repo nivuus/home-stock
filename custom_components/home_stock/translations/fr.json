@@ -83,6 +83,15 @@
       },
       "missing_ingredients": {
         "name": "Ingrédients manquants"
+      },
+      "batteries_low": {
+        "name": "Piles faibles"
+      },
+      "batteries_undeclared": {
+        "name": "Piles à déclarer"
+      },
+      "warranty_next": {
+        "name": "Prochaine fin de garantie"
       }
     },
     "binary_sensor": {

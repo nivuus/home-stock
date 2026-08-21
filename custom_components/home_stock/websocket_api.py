@@ -1244,3 +1244,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     # module's helpers, so a top-level import either way would be circular.
     from .websocket_recipes import async_register_recipe_commands
     async_register_recipe_commands(hass)
+    # Imported here, not at module level: `websocket_batteries` imports this
+    # module's shared helpers rather than copying them, so a top-level import
+    # in either direction is a cycle. Lot 5 touches exactly these two lines.
+    from .websocket_batteries import async_register_battery_commands
+    async_register_battery_commands(hass)

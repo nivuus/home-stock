@@ -176,6 +176,18 @@ def setup_entry(hass):
         # entity) do: refresh the coordinator after writing directly through
         # the manager, bypassing both of those paths.
         await entry.runtime_data.coordinator.async_request_refresh()
+        # ...and then let it actually land. `async_request_refresh` is
+        # DEBOUNCED: awaiting it only schedules the refresh, so without this
+        # every test built on this fixture started with a refresh still in
+        # flight, and the listener it eventually calls
+        # (ExpirationEventEntity._handle_coordinator_update, which spawns a
+        # claim task) ran at whatever await point the test reached first —
+        # usually right after its own add_stock. The batch was then already
+        # claimed when the test came to claim it, and the assertion read
+        # `count == 2` instead of 3, or `[] != ["approaching"]`. It tripped
+        # roughly one run in five, on a different test each time, which is
+        # what a shared un-drained task looks like from the outside.
+        await hass.async_block_till_done()
         return entry
 
     return _setup_entry

@@ -1,0 +1,33 @@
+# Copie EXACTE du bloc « Système - Mises à jour automatiques (dimanche 5h) »
+# de config/automations.yaml, prise le 2026-08-21. Lecture seule.
+#
+# Elle n'est ici que pour UNE raison : la regex
+# `firmware|micrologiciel|system_apt|docker_homeassistant` est dupliquée
+# entre ce bloc et le bloc 5 de `maintenance.jinja`. Les deux doivent rester
+# identiques, sinon une mise à jour est soit installée d'office, soit
+# réclamée à vie dans todo.maintenance. Dette ouverte depuis le 2026-07-31,
+# désormais verrouillée par un test.
+- id: '1765206277696'
+  alias: Système - Mises à jour automatiques (dimanche 5h)
+  description: 'Mise à jour automatique des entités update disponibles chaque dimanche matin à 5h00. Backup
+    activé avant chaque update (corrigé 2026-05-29). CORRIGÉ 2026-06-04 (audit) : exclusion des cibles
+    dangereuses — container HA (s''auto-tue en pleine boucle), firmwares Zigbee/SLZB (micrologiciel|firmware,
+    risque mesh et serrure), APT système (serveur = routeur). Ces mises à jour restent manuelles.'
+  triggers:
+  - trigger: time
+    at: 05:00:00
+  conditions:
+  - condition: time
+    weekday:
+    - sun
+  actions:
+  - repeat:
+      for_each: '{{ states.update | selectattr(''state'', ''eq'', ''on'') | map(attribute=''entity_id'')
+        | reject(''search'', ''firmware|micrologiciel|system_apt|docker_homeassistant'') | list }}'
+      sequence:
+      - action: update.install
+        target:
+          entity_id: '{{ repeat.item }}'
+        data:
+          backup: true
+  mode: single

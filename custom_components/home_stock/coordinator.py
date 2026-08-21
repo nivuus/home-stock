@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -43,6 +45,93 @@ async def async_resolve_time_zone(hass: HomeAssistant) -> ZoneInfo:
         )
         tz = ZoneInfo("UTC")
     return tz
+
+
+def _numeric_percent(state: str | None) -> float | None:
+    """A usable reading, or None for anything that is not one.
+
+    `unavailable`, `unknown`, an empty string, a word, NaN: none of them is a
+    measurement, and none of them may move `last_reading_at`.
+    """
+    if state is None:
+        return None
+    try:
+        percent = float(state)
+    except (TypeError, ValueError):
+        return None
+    return None if percent != percent else percent
+
+
+def resolve_battery_anchors(hass: HomeAssistant, rows) -> list[dict[str, Any]]:
+    """Attach the live entity_id, device name and model to each declared row.
+
+    The `entity_id` is NEVER stored: it is resolved from the registry id on
+    every refresh, so renaming an entity in two clicks breaks nothing — the
+    exact defect CLAUDE.md holds against today's Grocy wiring, which looks an
+    entity_id up inside a free-text description. The anchor is the registry
+    entry's `id`, a UUID the interface does not even show; `unique_id` is not
+    used as a key because it is only unique per platform.
+
+    `orphaned` is not `tracked = 0`. An orphaned battery is still tracked: it
+    feeds `keep`, it is counted, and its task is never closed. An integration
+    migration (ZHA to Z2M, on 2026-07-14) orphans several at once, and that is
+    precisely the day when closing would be most wrong.
+    """
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    resolved: list[dict[str, Any]] = []
+    for row in rows:
+        anchor = row.get("entity_registry_id")
+        # `registry.entities` is keyed by entity_id; `get_entry` is the
+        # lookup by registry id, which is what the anchor is.
+        entry = registry.entities.get_entry(anchor) if anchor else None
+        entity_id = entry.entity_id if entry is not None else None
+        device_id = (entry.device_id if entry is not None else None) or row.get("device_id")
+        device = devices.async_get(device_id) if device_id else None
+        state = hass.states.get(entity_id) if entity_id else None
+        resolved.append({
+            **row,
+            "entity_id": entity_id,
+            "state": state.state if state is not None else None,
+            "device_name": device.name_by_user or device.name if device else None,
+            "model": device.model if device else None,
+            # Declared with an anchor that resolves to nothing: the entry is
+            # gone. No anchor at all is not an orphan — it is a battery
+            # nobody has wired to an entity, which is perfectly ordinary.
+            "orphaned": bool(anchor) and entry is None,
+        })
+    return resolved
+
+
+def undeclared_battery_sensors(hass: HomeAssistant,
+                               known_registry_ids) -> list[dict[str, Any]]:
+    """Every `device_class: battery` sensor with no `battery` row behind it.
+
+    Counts, never creates: the coordinator declares nothing on its own. The
+    declaration is a gesture, made at the panel or by the import — otherwise
+    merely opening the Piles screen would seed the database with 28 rows.
+    """
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    found: list[dict[str, Any]] = []
+    for entry in registry.entities.values():
+        if entry.domain != "sensor" or entry.id in known_registry_ids:
+            continue
+        device_class = entry.device_class or entry.original_device_class
+        if device_class != "battery":
+            continue
+        device = devices.async_get(entry.device_id) if entry.device_id else None
+        state = hass.states.get(entry.entity_id)
+        found.append({
+            "entity_registry_id": entry.id,
+            "entity_id": entry.entity_id,
+            "device_id": entry.device_id,
+            "device_name": device.name_by_user or device.name if device else None,
+            "model": device.model if device else None,
+            "state": state.state if state is not None else None,
+        })
+    found.sort(key=lambda row: row["entity_id"])
+    return found
 
 
 class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -93,8 +182,76 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return data
 
         data = await self.hass.async_add_executor_job(_read)
+        data.update(await self._async_battery_data())
         self._schedule_food_day_rollover(tz)
         return data
+
+    async def _async_battery_data(self) -> dict[str, Any]:
+        """The two keys lot 5 adds: `batteries` and `warranties`, plus the
+        undeclared sensors the counter reads.
+
+        The registry and the state machine can only be read on the event loop,
+        the database only in the executor: hence one executor read, the
+        resolution here, one grouped executor write, and nothing else.
+        """
+        rows = await self.hass.async_add_executor_job(self.manager.list_batteries)
+        resolved = resolve_battery_anchors(self.hass, rows)
+
+        readings = []
+        moment = dt_util.utcnow().replace(tzinfo=None).isoformat(timespec="seconds")
+        for row in resolved:
+            percent = _numeric_percent(row["state"])
+            if percent is None:
+                # Nothing numeric to read. `last_reading_at` must mean "the
+                # device spoke", never "we looked": confusing the two empties
+                # the 26-hour threshold of all its meaning.
+                continue
+            # An unchanged value is NOT silence — the device did speak — so
+            # the moment moves even when the percent does not. Otherwise a
+            # battery sitting at 100 % would pass for mute after 26 hours.
+            readings.append((row["id"], percent, moment))
+            row["last_percent"] = percent
+            row["last_reading_at"] = moment
+
+        if readings:
+            await self.hass.async_add_executor_job(self.manager.record_readings, readings)
+
+        known = {row["entity_registry_id"] for row in rows if row["entity_registry_id"]}
+        never_declared = undeclared_battery_sensors(self.hass, known)
+        # A row with `tracked = NULL` means "discovered, not decided": silent
+        # in todo.maintenance, but still owed a decision, so it belongs in the
+        # same list as a sensor nobody has declared at all. The two counts stay
+        # separate as attributes; the list the panel reads is the union.
+        undecided = [row for row in resolved
+                     if row["tracked"] is None and row["entity_id"]]
+        undeclared = sorted(never_declared + undecided,
+                            key=lambda row: row["entity_id"] or "")
+        warranties = await self.hass.async_add_executor_job(
+            partial(self.manager.warranties, today=dt_util.now().date()))
+        return {
+            "batteries": resolved,
+            "undeclared_batteries": undeclared,
+            "never_declared_batteries": never_declared,
+            "undecided_batteries": undecided,
+            "warranties": warranties,
+        }
+
+    async def async_maintenance_plan(self, *, extra_items=None, extra_keep=None,
+                                     ) -> dict[str, Any]:
+        """The plan the `home_stock.maintenance_plan` service answers with.
+
+        Lives here rather than in the service because only the coordinator can
+        resolve an anchor: `application` knows neither `entity_id` nor
+        `state`.
+        """
+        rows = await self.hass.async_add_executor_job(self.manager.list_batteries)
+        resolved = resolve_battery_anchors(self.hass, rows)
+        readings = {row["id"]: {"entity_id": row["entity_id"], "state": row["state"]}
+                    for row in resolved}
+        return await self.hass.async_add_executor_job(partial(
+            self.manager.maintenance_plan,
+            now=dt_util.utcnow().replace(tzinfo=None), readings=readings,
+            extra_items=extra_items, extra_keep=extra_keep))
 
     @callback
     def _schedule_food_day_rollover(self, tz: ZoneInfo) -> None:
