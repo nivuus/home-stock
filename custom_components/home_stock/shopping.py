@@ -6,12 +6,16 @@ cart. The panel keeps only a replay queue of writes it could not send.
 """
 from __future__ import annotations
 
+import logging
 import statistics
 from datetime import UTC, datetime
 from typing import Any
 
 from .application import StockManager
 from .storage import repositories as repo
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ShoppingError(Exception):
@@ -165,10 +169,52 @@ class ShoppingService:
                     price_per_base_unit=unit_price, store=session["store"],
                     source=source,
                 )
+            self._check_list_line(conn, article_id=article_id,
+                                  session_id=session["id"], line_id=line_id)
             # Always hand back the row as the database holds it, whether or
             # not a key was supplied: a caller must not have to guess the
             # shape of the answer from what it sent.
             return repo.get_line(conn, line_id)
+
+    @staticmethod
+    def _check_list_line(conn, *, article_id: int, session_id: int,
+                         line_id: int) -> None:
+        """Le pointage au scan (§ 8), dans la MÊME transaction que la ligne.
+
+        Sur le PRODUIT, jamais sur l'article — même règle qu'au lot 3 pour
+        les ingrédients, et même raison : la liste dit « du lait », le rayon
+        propose une brique de telle marque.
+
+        Le pointage n'est JAMAIS une condition du scan. Liste vide, produit
+        absent, table verrouillée : la ligne de panier s'écrit quand même.
+        Règle générale du composant depuis le lot 1 — ce qui est accessoire
+        ne bloque jamais ce qui est essentiel.
+        """
+        try:
+            article = repo.get_article(conn, article_id)
+            if article is None:
+                return
+            item = repo.open_item_for_product(conn, article["product_id"])
+            if item is None:
+                return
+            repo.check_list_item(conn, int(item["id"]), at=_now(),
+                                 session_id=session_id, line_id=line_id)
+        except Exception:                       # noqa: BLE001 — voir ci-dessus
+            _LOGGER.debug("pointage de la liste ignoré pour l'article %s",
+                          article_id, exc_info=True)
+
+    @staticmethod
+    def _uncheck_list_line(conn, line_id: int) -> None:
+        """Retirer une ligne du panier, c'est reposer l'article sur l'étagère."""
+        try:
+            row = conn.execute(
+                "SELECT id FROM shopping_list_item WHERE line_id = ?",
+                (line_id,)).fetchone()
+            if row is not None:
+                repo.uncheck_list_item(conn, int(row["id"]))
+        except Exception:                       # noqa: BLE001
+            _LOGGER.debug("dépointage de la liste ignoré pour la ligne %s",
+                          line_id, exc_info=True)
 
     def update_line(self, line_id: int, *, quantity: float | None = None,
                     unit_price: float | None = None,
@@ -219,6 +265,7 @@ class ShoppingService:
                 raise ShoppingError(
                     "Cette ligne est déjà rangée : corrigez le lot, pas la liste."
                 )
+            self._uncheck_list_line(conn, line_id)
             repo.remove_line(conn, line_id)
 
     def store_line(self, line_id: int, *, location_id: int,

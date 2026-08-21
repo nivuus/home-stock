@@ -379,3 +379,29 @@ async def test_an_accepted_suggestion_is_recorded_as_a_suggestion(hass, hass_ws_
                        quantity=500, unit_price=0.002,
                        price_source="open_prices")
     assert line["result"]["price_source"] == "open_prices"
+
+
+async def test_scanning_from_the_panel_checks_the_shopping_list(hass, hass_ws_client,
+                                                                setup_entry):
+    """Le pointage vit dans le service, pas dans la commande : les deux
+    surfaces cochent la même liste, de la même façon."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+
+    def _seed() -> int:
+        with manager.db.write() as conn:
+            item_id = repo.insert_list_item(conn, added_at="2026-08-21T09:00:00",
+                                            product_id=1, quantity=500.0)
+            repo.set_claim(conn, item_id=item_id, origin="shortage", quantity=500.0,
+                           detail="sous le seuil", claimed_at="2026-08-21T09:00:00")
+            return item_id
+
+    item_id = await hass.async_add_executor_job(_seed)
+    client = await hass_ws_client(hass)
+    await _send(client, 1, "home_stock/session/start", store="Leclerc")
+    added = await _send(client, 2, "home_stock/session/add_line", article_id=1,
+                        quantity=500, idempotency_key="scan-1")
+
+    row = repo.get_list_item(manager.db.read(), item_id)
+    assert row["checked_at"] is not None
+    assert row["line_id"] == added["result"]["id"]

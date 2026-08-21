@@ -1,4 +1,6 @@
 """The shopping session, end to end, without Home Assistant."""
+import sqlite3
+
 import pytest
 
 from custom_components.home_stock import application as application_module
@@ -384,3 +386,164 @@ def test_merging_two_closed_stores_goes_through(service):
 
     assert result["keep_id"] == opened["store_id"]
     assert len(_stores(service)) == 1
+
+
+# --- § 8 : le pointage au scan ----------------------------------------------
+
+def _list_item(service, **fields):
+    from custom_components.home_stock.storage import repositories as repo
+    fields.setdefault("added_at", "2026-08-21T09:00:00")
+    with service.manager.db.write() as conn:
+        item_id = repo.insert_list_item(conn, **fields)
+        repo.set_claim(conn, item_id=item_id, origin="shortage", quantity=None,
+                       detail="sous le seuil", claimed_at="2026-08-21T09:00:00")
+    return item_id
+
+
+def _item(service, item_id):
+    from custom_components.home_stock.storage import repositories as repo
+    return repo.get_list_item(service.manager.db.read(), item_id)
+
+
+def test_scanning_a_listed_product_checks_its_line(service):
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+
+    service.add_line(article_id=10, quantity=500, unit_price=None,
+                     idempotency_key=None)
+
+    assert _item(service, item_id)["checked_at"] is not None
+
+
+def test_the_check_records_the_session_and_the_line(service):
+    item_id = _list_item(service, product_id=1)
+    session = service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+
+    row = _item(service, item_id)
+    assert row["session_id"] == session["id"]
+    assert row["line_id"] == line["id"]
+
+
+def test_scanning_an_article_of_another_brand_still_checks_the_product_line(service):
+    """Un article inconnu créé au scan et rattaché à « Pâtes » coche la ligne
+    « Pâtes » sans rien de plus : la liste dit « des pâtes », le rayon
+    propose un paquet de telle marque."""
+    from custom_components.home_stock.storage import repositories as repo
+    item_id = _list_item(service, product_id=1)
+    with service.manager.db.write() as conn:
+        other = repo.insert_article(conn, product_id=1, label="Barilla 500 g")
+    service.start(store="Leclerc")
+
+    service.add_line(article_id=other, quantity=500, unit_price=None,
+                     idempotency_key=None)
+
+    assert _item(service, item_id)["checked_at"] is not None
+
+
+def test_scanning_something_not_on_the_list_does_nothing_at_all(service):
+    """Acheter ce qu'on n'avait pas prévu est le comportement normal d'un
+    être humain dans un magasin, pas une anomalie à signaler."""
+    from custom_components.home_stock.storage import repositories as repo
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+    assert line["id"]
+    assert repo.list_items(service.manager.db.read()) == []
+
+
+def test_removing_a_line_unchecks_what_it_had_checked(service):
+    """Retirer une ligne du panier, c'est reposer l'article sur l'étagère."""
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+
+    service.remove_line(line["id"])
+
+    row = _item(service, item_id)
+    assert (row["checked_at"], row["session_id"], row["line_id"]) == (None, None, None)
+
+
+def test_update_line_touches_nothing(service):
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+    before = _item(service, item_id)["checked_at"]
+
+    service.update_line(line["id"], quantity=1000)
+
+    assert _item(service, item_id)["checked_at"] == before
+
+
+def test_a_stored_line_no_longer_unchecks(service):
+    """`remove_line` y est déjà refusé par le lot 1 (« corrigez le lot, pas
+    la liste ») ; l'item est purgé ou recréé par la réconciliation."""
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+    service.checkout()
+    service.store_line(line["id"], location_id=1, best_before=None)
+
+    with pytest.raises(ShoppingError, match="corrigez le lot"):
+        service.remove_line(line["id"])
+    assert _item(service, item_id)["checked_at"] is not None
+
+
+def test_a_replayed_add_line_does_not_check_twice(service):
+    """`add_line` rejoué avec la même clé rend la ligne DÉJÀ créée sans rien
+    réécrire, donc sans re-cocher."""
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+    service.add_line(article_id=10, quantity=500, unit_price=None,
+                     idempotency_key="scan-1")
+    first = _item(service, item_id)["checked_at"]
+    service.uncheck_line_items = None            # rien à désactiver : on rejoue
+    service.add_line(article_id=10, quantity=500, unit_price=None,
+                     idempotency_key="scan-1")
+
+    assert _item(service, item_id)["checked_at"] == first
+
+
+def test_a_remove_replayed_after_an_add_leaves_the_item_unchecked(service):
+    """La file hors ligne rejoue DANS L'ORDRE : décoche après avoir coché,
+    et l'état final est le bon."""
+    item_id = _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key="scan-1")
+    service.remove_line(line["id"])
+    service.add_line(article_id=10, quantity=500, unit_price=None,
+                     idempotency_key="scan-1")
+
+    assert _item(service, item_id)["checked_at"] is not None
+
+
+def test_a_failing_check_never_blocks_the_cart_line(service, monkeypatch):
+    """Le pointage n'est jamais une condition du scan : ce qui est accessoire
+    ne bloque jamais ce qui est essentiel."""
+    from custom_components.home_stock.storage import repositories as repo
+    _list_item(service, product_id=1)
+    service.start(store="Leclerc")
+
+    def _boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "check_list_item", _boom)
+    line = service.add_line(article_id=10, quantity=500, unit_price=None,
+                            idempotency_key=None)
+
+    assert line["id"]
+    assert service.current()["lines"][0]["id"] == line["id"]
+
+
+def test_checking_needs_no_open_session(service):
+    """On coche une liste chez soi aussi : c'est le websocket `list/check`
+    qui le permet, pas le scan."""
+    item_id = _list_item(service, product_id=1)
+    service.manager.check_list_item(item_id, at="2026-08-21T09:30:00")
+    assert _item(service, item_id)["checked_at"] == "2026-08-21T09:30:00"
+    assert _item(service, item_id)["session_id"] is None
