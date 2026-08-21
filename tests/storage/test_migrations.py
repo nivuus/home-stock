@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.home_stock.aisles import AISLES, CATEGORY_TO_AISLE
 from custom_components.home_stock.storage import migrations
+from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import (
     CURRENT_VERSION,
@@ -946,3 +947,67 @@ def test_m007_leaves_every_existing_product_undecided(tmp_path):
 def test_m007_is_replayable(tmp_path):
     conn = _migrated(tmp_path)
     assert apply_migrations(conn) == CURRENT_VERSION
+
+
+def _one_article(conn) -> tuple[int, int]:
+    """Un produit, son article, un emplacement : le minimum pour ouvrir un lot."""
+    conn.execute("INSERT INTO location (name, kind) VALUES ('Placard', 'cupboard')")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Riz', 'g')")
+    conn.execute("INSERT INTO article (product_id) VALUES (1)")
+    conn.commit()
+    location = conn.execute("SELECT id FROM location").fetchone()["id"]
+    article = conn.execute("SELECT id FROM article").fetchone()["id"]
+    return article, location
+
+
+def test_m008_adds_external_ref_to_batch(tmp_path):
+    conn = _migrated(tmp_path)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(batch)")}
+    assert "external_ref" in columns
+
+
+def test_m008_index_is_unique_but_partial(tmp_path):
+    """Deux lots créés au scan n'ont pas de référence externe, et cent lots
+    sans référence ne doivent pas se gêner — c'est exactement pourquoi
+    l'index est partiel, comme idx_recipe_source."""
+    conn = _migrated(tmp_path)
+    article, location = _one_article(conn)
+    for _ in range(3):
+        repo.insert_batch(conn, article_id=article, location_id=location,
+                          quantity=1.0, entered_at="2026-08-21T10:00:00")
+    # Trois lots sans référence : aucun conflit.
+    assert conn.execute("SELECT COUNT(*) AS n FROM batch").fetchone()["n"] == 3
+
+    first = repo.insert_batch(conn, article_id=article, location_id=location,
+                              quantity=1.0, entered_at="2026-08-21T10:00:00")
+    conn.execute("UPDATE batch SET external_ref = 'grocy:stock:419' WHERE id = ?",
+                 (first,))
+    second = repo.insert_batch(conn, article_id=article, location_id=location,
+                               quantity=1.0, entered_at="2026-08-21T10:00:00")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE batch SET external_ref = 'grocy:stock:419' WHERE id = ?",
+                     (second,))
+
+
+def test_m008_index_is_declared_partial(tmp_path):
+    """SQLite considère chaque NULL comme distinct : un index UNIQUE tout court
+    accepterait déjà cent lots sans référence, donc le test ci-dessus ne peut
+    PAS distinguer les deux formes. La partialité se prouve sur la déclaration,
+    et elle n'est pas cosmétique : sans elle, l'index porte une entrée par lot
+    créé au scan, pour rien."""
+    conn = _migrated(tmp_path)
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'idx_batch_external_ref'"
+    ).fetchone()["sql"]
+    assert "WHERE external_ref IS NOT NULL" in sql
+
+
+def test_m008_is_replayable(tmp_path):
+    """Deux passages d'apply_migrations ne doivent ni lever ni dupliquer."""
+    conn = _migrated(tmp_path)
+    assert migrations.apply_migrations(conn) == 8
+    assert migrations.apply_migrations(conn) == 8
+
+
+def test_current_version_is_eight():
+    assert migrations.CURRENT_VERSION == 8
