@@ -16,6 +16,12 @@ export type Hass = {
    *  service n'a pas d'équivalent websocket, un appel de service est le seul
    *  moyen de le déclencher depuis le panneau. */
   callService(domain: string, service: string, serviceData?: Record<string, unknown>): Promise<unknown>;
+  /** Le jeton de la session en cours, tel que Home Assistant le pose sur
+   *  `hass`. Le seul usage est le téléversement d'une photo de ticket, qui
+   *  passe par une vue HTTP (`/api/media_source/local_source/upload`) et pas
+   *  par le websocket : on ne lit aucun jeton stocké ailleurs, on n'ouvre
+   *  aucune seconde session. */
+  auth?: { data?: { access_token?: string } };
 };
 
 export class Connexion {
@@ -35,5 +41,28 @@ export class Connexion {
    *  forme (spec 13 : un service, pas une commande websocket). */
   appelerService(domaine: string, service: string, donnees: Record<string, unknown> = {}): Promise<unknown> {
     return this.hass.callService(domaine, service, donnees);
+  }
+
+  /** Téléverse une image dans un dossier de `media/` et rend le
+   *  `media_content_id` que Home Assistant lui donne.
+   *
+   *  Le composant n'écrit AUCUNE vue HTTP : celle-ci est fournie par Home
+   *  Assistant, plafonne à 20 Mo, refuse ce qui n'est pas une image, et
+   *  exige un compte administrateur. Un refus de sa part remonte tel quel —
+   *  l'écran le traduit en français.
+   */
+  async televerserMedia(fichier: File, dossier: string): Promise<string> {
+    const corps = new FormData();
+    corps.append('media_content_id', dossier);
+    corps.append('file', fichier);
+    const jeton = this.hass.auth?.data?.access_token;
+    const reponse = await fetch('/api/media_source/local_source/upload', {
+      method: 'POST',
+      body: corps,
+      headers: jeton ? { authorization: `Bearer ${jeton}` } : {},
+    });
+    if (!reponse.ok) throw new Error(String(reponse.status));
+    const rendu = (await reponse.json()) as { media_content_id: string };
+    return rendu.media_content_id;
   }
 }
