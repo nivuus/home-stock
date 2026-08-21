@@ -63,3 +63,36 @@ FOOD_DAY_START_HOUR: Final = 4
 # Twenty-four plates is already a party; past that it is a typo, and the
 # number ends up dividing someone's calories by a hundred.
 MAX_PARTS: Final = 24
+
+# --- lot 5 : équipements, piles et consommables -----------------------------
+BATTERY_KINDS: Final = ("primary", "rechargeable_cell", "built_in")
+BATTERY_EVENT_KINDS: Final = ("install", "charge", "replacement", "removal")
+
+# Le verbe affiché, par nature. C'est la SEULE source de la grammaire des
+# résumés : `«{verbe} — {libellé}»`. Un caractère de plus ici ferme toutes les
+# tâches ouvertes de cette nature et en rouvre autant, avec l'annonce vocale
+# qui va avec.
+BATTERY_VERBS: Final = {
+    "primary": "Pile à changer",
+    "rechargeable_cell": "Piles à recharger",
+    "built_in": "Recharger",
+}
+MUTE_SUMMARY_PREFIX: Final = "Pile HS ? — "
+
+# Zigbee2MQTT ne publie `offline` pour un appareil sur pile qu'après 25 h de
+# silence (passive.timeout par défaut). En dessous, un capteur muet est un
+# capteur qui n'a rien eu à dire. Ce seuil n'est plus contraint par l'uptime
+# de Home Assistant depuis que `battery.last_reading_at` vit en base : le
+# macro devait se contenter d'1 h parce que `last_changed` repartait à chaque
+# démarrage — et un seuil de 12 h avait laissé la porte d'entrée muette 9
+# jours (2026-08-07 → 08-16) sans jamais créer de tâche.
+BATTERY_MUTE_HOURS: Final = 26
+
+# Les seuils d'AUJOURD'HUI, repris tels quels pour que la bascule ne déplace
+# aucune tâche. Ils deviennent réglables par pile, ils ne changent pas de
+# valeur par défaut.
+DEFAULT_LOW_PERCENT: Final = 20.0
+DEFAULT_KEEP_PERCENT: Final = 25.0
+
+CONSUMABLE_ROLES: Final = ("filter", "bag", "brush", "cartridge", "other")
+CONSUMABLE_UNITS: Final = ("percent", "minutes")

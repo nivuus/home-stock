@@ -369,3 +369,134 @@ def test_m003_apply_never_overwrites_a_serving_already_set(tmp_path):
     m003_consumption.apply(conn)  # replayed by hand, bypassing the version lock
 
     assert conn.execute("SELECT serving_quantity FROM article").fetchone()[0] == 60.0
+
+
+def _seed_one_battery_event(conn) -> None:
+    conn.execute("INSERT INTO battery (label, kind) VALUES ('Pile porte', 'primary')")
+    conn.execute(
+        "INSERT INTO battery_event (battery_id, occurred_at, kind) "
+        "VALUES (1, '2026-08-20T10:00:00', 'install')")
+    conn.commit()
+
+
+def _seed_equipment_and_product(conn) -> None:
+    conn.execute("INSERT INTO equipment (name) VALUES ('Aspirateur')")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Sac aspirateur', 'piece')")
+    conn.commit()
+
+
+def test_migration_versions_are_contiguous_from_one():
+    """Le lot 3 (`m004_recipes`) s'implémente en parallèle dans un autre
+    worktree : tant que les deux n'ont pas fusionné, `MIGRATIONS` a un trou en
+    4 et ce test ne peut pas exiger la suite stricte 1..N. Il vérifie à la
+    place ce qui reste vrai des deux côtés du merge : les VERSION sont
+    uniques, strictement croissantes, la première vaut 1, et CURRENT_VERSION
+    est la dernière. Un DÉPASSEMENT, lui, reste fatal et muet dans tous les
+    cas : `apply_migrations()` n'applique que les migrations dont la VERSION
+    dépasse MAX(version), donc une base passée en 5 sans avoir vu m004 ne la
+    verrait plus jamais, et l'intégration démarrerait sur un schéma amputé,
+    sans une ligne de log."""
+    versions = [m.VERSION for m in MIGRATIONS]
+    assert len(set(versions)) == len(versions)
+    assert versions == sorted(versions)
+    assert versions[0] == 1
+    assert CURRENT_VERSION == versions[-1]
+    # À RESSERRER AU MERGE DU LOT 3 : une fois `m004_recipes` inséré dans
+    # MIGRATIONS, remplacer les quatre assertions ci-dessus par la forme
+    # stricte, qui est celle que ce test doit avoir en fin de compte :
+    #     assert versions == list(range(1, len(versions) + 1))
+    # Le trou 4 n'existe que le temps où les lots 3 et 5 vivent dans deux
+    # worktrees séparés. `apply_migrations()` n'applique que les migrations
+    # dont la VERSION dépasse MAX(version) : une base passée en 5 sans avoir
+    # vu m004 ne la verrait PLUS JAMAIS, sans une ligne de log.
+
+
+def test_migration_modules_are_named_after_their_version():
+    """m003_consumption.VERSION == 3. Un module renuméroté à moitié (VERSION
+    changée, fichier non renommé) est exactement le genre d'erreur que le
+    merge des lots 3 et 5 peut produire."""
+    for module in MIGRATIONS:
+        assert module.__name__.rsplit(".", 1)[-1].startswith(f"m{module.VERSION:03d}_")
+
+
+def test_m005_creates_the_four_tables(tmp_path):
+    conn = _migrated(tmp_path)
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"battery", "battery_event", "equipment", "equipment_consumable"} <= tables
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(battery)")}
+    assert {"entity_registry_id", "device_id", "kind", "product_id", "cell_count",
+            "tracked", "exclusion_reason", "low_percent", "keep_percent",
+            "last_percent", "last_reading_at", "external_ref"} <= columns
+
+
+def test_m005_adds_no_column_to_the_catalogue(tmp_path):
+    """Le critère qui prouve que la réutilisation du catalogue en est une : si
+    une pile avait eu besoin d'une colonne dans `product`, c'est que ce n'était
+    pas un produit."""
+    (tmp_path / "avant").mkdir()
+    (tmp_path / "apres").mkdir()
+    before = _migrated_to(tmp_path / "avant", version=4)
+    after = _migrated(tmp_path / "apres")
+    for table in ("product", "article", "batch"):
+        assert ({r["name"] for r in before.execute(f"PRAGMA table_info({table})")}
+                == {r["name"] for r in after.execute(f"PRAGMA table_info({table})")})
+
+
+def test_m005_battery_event_is_append_only(tmp_path):
+    conn = _migrated(tmp_path)
+    _seed_one_battery_event(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE battery_event SET note = 'x' WHERE id = 1")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM battery_event WHERE id = 1")
+
+
+def test_m005_refuses_an_unknown_kind(tmp_path):
+    conn = _migrated(tmp_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO battery (label, kind) VALUES ('X', 'nimh')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO battery (label, kind, cell_count) "
+                     "VALUES ('X', 'primary', 0)")
+
+
+def test_m005_refuses_two_batteries_on_the_same_anchor(tmp_path):
+    """L'ancre est unique — mais seulement quand elle existe : deux piles sans
+    ancre (une poêle à pile, une pile déclarée avant d'être branchée) doivent
+    coexister. C'est ce que l'index UNIQUE PARTIEL achète."""
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO battery (label, kind, entity_registry_id) "
+                 "VALUES ('A', 'primary', 'abc')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO battery (label, kind, entity_registry_id) "
+                     "VALUES ('B', 'primary', 'abc')")
+    conn.execute("INSERT INTO battery (label, kind) VALUES ('C', 'primary')")
+    conn.execute("INSERT INTO battery (label, kind) VALUES ('D', 'primary')")
+
+
+def test_m005_refuses_two_identical_consumable_links(tmp_path):
+    conn = _migrated(tmp_path)
+    _seed_equipment_and_product(conn)
+    conn.execute("INSERT INTO equipment_consumable (equipment_id, product_id, role) "
+                 "VALUES (1, 1, 'filter')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO equipment_consumable (equipment_id, product_id, role) "
+                     "VALUES (1, 1, 'filter')")
+
+
+def test_m005_is_replayable(tmp_path):
+    """Rejouer `apply_migrations` sur une base déjà en version 5 ne doit rien
+    changer et rien lever."""
+    conn = _migrated(tmp_path)
+    assert apply_migrations(conn) == 5
+    assert apply_migrations(conn) == 5
+
+
+def test_m005_applies_on_a_copy_of_the_lot2_database(tmp_path):
+    """Pas sur une base vide : sur une base qui a déjà des produits, des lots
+    et des mouvements — c'est celle-là qui existe dans la maison."""
+    conn = _migrated_to(tmp_path, version=4)
+    _seed_one_movement(conn)
+    assert apply_migrations(conn) == 5
+    assert conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"] == 1
