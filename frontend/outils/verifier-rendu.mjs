@@ -167,7 +167,74 @@ const RAYONS = [
 
 // Des enseignes réelles et de longueur variable : les pastilles doivent
 // passer à la ligne plutôt que déborder, sur les deux formats.
-const MAGASINS = ['Carrefour', 'Leclerc', 'Lidl', 'Grand Frais', 'Biocoop Les Quatre Chemins'];
+// Depuis le lot 4, un magasin est une LIGNE : le panneau envoie un
+// identifiant à la place d'une chaîne.
+const MAGASINS = ['Carrefour', 'Leclerc', 'Lidl', 'Grand Frais', 'Biocoop Les Quatre Chemins']
+  .map((name, index) => ({ id: index + 1, name, position: index, active: 1,
+                           observed_sessions: index, last_seen: null }));
+
+// --- lot 4 : la liste de courses et le ticket de caisse ---------------------
+//
+// Une liste réaliste : quatre rayons, les quatre origines, des lignes sans
+// quantité (« ce qu'il faut »), des libellés longs, et trois cochées repliées
+// en bas. C'est la forme qui déborde si elle doit déborder.
+const LIGNES_LISTE = [
+  ['Crémerie', 'Lait demi-écrémé', 'ml', 2000, [['shortage', 'sous le seuil']]],
+  ['Crémerie', 'Yaourt nature x16', 'piece', 16, [['meal_plan', 'dîner de jeudi']]],
+  ['Crémerie', 'Beurre demi-sel de baratte', 'g', null, [['manual', 'ajouté à la main']]],
+  ['Épicerie salée', 'Coquillettes', 'g', 1000,
+   [['shortage', 'seuil 500'], ['meal_plan', 'gratin de mardi']]],
+  ['Épicerie salée', 'Huile d’olive vierge extra première pression à froid', 'ml', 750,
+   [['recurring', 'tous les 60 j']]],
+  ['Entretien et maison', 'Sacs poubelle 30 L', 'piece', 20, [['recurring', 'tous les 30 j']]],
+  ['Entretien et maison', 'Pile CR2032', 'piece', 4, [['shortage', 'sous le seuil']]],
+  ['Fruits et légumes', 'Courgettes', 'g', 900, [['meal_plan', 'gratin de mardi']]],
+].map(([rayon, nom, unite, quantite, origines], index) => ({
+  id: index + 1, product_id: index + 1, free_text: null, quantity: quantite,
+  note: null, added_at: '2026-08-21T09:00:00', checked_at: null, removed_at: null,
+  session_id: null, line_id: null, product_name: nom, base_unit: unite,
+  aisle_id: index + 1, aisle_name: rayon, aisle_position: index,
+  claims: origines.map(([origin, detail]) => ({ origin, quantity: quantite, detail })),
+}));
+
+const LISTE_CHARGEE = {
+  items: [
+    ...LIGNES_LISTE,
+    ...[9, 10, 11].map((id) => ({
+      ...LIGNES_LISTE[0], id, product_name: `Déjà dans le chariot ${id}`,
+      checked_at: '2026-08-21T10:00:00',
+    })),
+  ],
+  store_id: 1,
+  store_name: 'Carrefour',
+  estimate: { amount: 62.4, confidence: 0.72, priced: 8, total: 11 },
+};
+
+const TICKET_LU = {
+  id: 1, session_id: 1,
+  media_content_id: 'media-source://media_source/local/home_stock/receipts/t.jpg',
+  captured_at: '2026-08-21T20:00:00', state: 'read', store_id: 1,
+  purchased_on: '2026-08-21', total: 61.4, agent_entity_id: 'ai_task.gemini',
+  read_at: '2026-08-21T20:00:12', attempts: 1, error: null, raw: '{}',
+  lines: [
+    ['LT DEMI ECR 1L X6', 6.54, 10], ['COQUILL PANZ 500G', 1.35, 11],
+    ['HUIL OLIV VIERG EXTRA 75CL', 8.9, null], ['SACS POUB 30L X20', 3.2, null],
+    ['CRG COURGETTE VRAC', 2.7, 12], ['PILE CR2032 X4', 5.4, 13],
+  ].map(([label, prix, ligne], index) => ({
+    id: index + 1, receipt_id: 1, position: index + 1, label,
+    quantity: 1, unit_price: prix, total_price: prix,
+    line_id: ligne, article_id: null,
+    match_state: ligne === null ? 'unmatched' : 'auto', applied_at: null,
+    candidates: ligne === null ? [] : [{ line_id: ligne, label: 'Ligne du panier', score: 0.9 }],
+  })),
+  cart_lines: [10, 11, 12, 13].map((id) => ({
+    id, article_label: `Article du panier ${id}`, product_name: `Produit ${id}`,
+    quantity: 1, unit_price: 1.2, base_unit: 'g', brand: null,
+    stored_at: '2026-08-21T21:00:00', movements: 2,
+  })),
+  lines_total: 28.09,
+  total_gap: 33.31,
+};
 
 const EMPLACEMENTS = [
   { id: 1, name: 'Placard cuisine', kind: 'cupboard', position: 0 },
@@ -827,6 +894,32 @@ const SCENARIOS = [
     ],
     ecranAttendu: 'home-stock-equipements',
     elementAttendu: { enfant: 'home-stock-equipements', selector: '.delier' },
+  },
+  {
+    nom: 'Liste (quatre rayons, deux origines, trois cochées repliées)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [{ type: 'click-nav', texte: 'Liste' }],
+    ecranAttendu: 'home-stock-liste',
+    elementAttendu: { enfant: 'home-stock-liste', selector: '.cochees' },
+  },
+  {
+    // Pas de `click-nav` : « Ticket » n'est pas une destination de la barre,
+    // on y entre depuis la session ou depuis un bandeau — d'où l'événement,
+    // comme la vue cuisine et la validation d'un repas.
+    nom: 'Ticket (lu, deux lignes non rapprochées, écart au total, application armée)',
+    fixture: { reponses: { 'home_stock/session/current': null } },
+    actions: [
+      { type: 'dispatch-evenement', nom: 'ticket-ouvert',
+        detail: { ticket: TICKET_LU, agent_configure: true } },
+      { type: 'click-in-child', enfant: 'home-stock-ticket', selector: '.appliquer' },
+    ],
+    ecranAttendu: 'home-stock-ticket',
+    elementAttendu: { enfant: 'home-stock-ticket', selector: '.avertissement' },
   },
 ];
 

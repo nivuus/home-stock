@@ -141,6 +141,12 @@ export class PanneauGardeManger extends LitElement {
     // `manger-produit` peut venir de la fiche comme du catalogue — deux
     // écrans différents, jamais montés ensemble — donc écouté ici, sur
     // l'hôte, plutôt que câblé à chaque enfant qui pourrait l'émettre.
+    // Écouté sur le panneau lui-même, comme `manger-produit` et
+    // `recette-ouverte` : « Ticket » n'est pas une destination de la barre,
+    // on y entre depuis la session ou depuis un bandeau, et l'émetteur n'est
+    // donc pas toujours un enfant rendu à ce moment-là.
+    this.addEventListener('ticket-ouvert', this.surTicketOuvert as EventListener);
+    this.addEventListener('aller-liste', this.surAllerListe);
     this.addEventListener('manger-produit', this.surMangerProduit as EventListener);
     this.addEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
@@ -320,6 +326,10 @@ export class PanneauGardeManger extends LitElement {
   @state() ticketOuvert: DonneesTicket | null = null;
   @state() agentTicketConfigure = true;
 
+  private surAllerListe = (): void => {
+    this.demanderNavigation('liste');
+  };
+
   private surTicketOuvert = (e: CustomEvent<{ ticket: DonneesTicket | null;
                                               agent_configure?: boolean }>): void => {
     this.ticketOuvert = e.detail.ticket;
@@ -498,8 +508,7 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-session .donnees=${this.session} .connexion=${this.connexion}
           .file=${this.file} .enAttente=${this.enAttente}
           @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}
-          @ticket-ouvert=${this.surTicketOuvert}
-          @aller-liste=${() => this.demanderNavigation('liste')}>
+          >
         </home-stock-session>`;
     }
     if (this.ecran === 'catalogue') {
