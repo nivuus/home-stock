@@ -309,14 +309,25 @@ export class PanneauGardeManger extends LitElement {
    *  Retenus ici parce que `recette` et `validation` n'ont pas de bouton de
    *  navigation : on y entre depuis une liste ou depuis le planning, comme
    *  `fiche` et `consommation` au lot 2. */
-  /** Vrai sur la dalle 1280 × 800, faux sur le 412 × 915. Le planning s'en
-   *  sert pour choisir entre la semaine et la journée : une grille de sept
-   *  colonnes réduite à 412 px produirait des cibles sous 48 px. Mesuré, pas
-   *  déduit d'un agent utilisateur. */
-  @state() large = typeof window !== 'undefined' && window.innerWidth >= 1000;
+  /** La largeur RÉELLEMENT mesurée : `window.innerWidth >= 1000`, relevée à
+   *  chaque `resize`. Mesurée, jamais déduite d'un agent utilisateur — c'est
+   *  aussi ce qui la rend vraie hors du panneau Home Assistant, dans le
+   *  harnais du vérificateur de rendu, qui ne fournit aucun `narrow`. */
+  @state() private largeMesuree = typeof window !== 'undefined' && window.innerWidth >= 1000;
+
+  /** Vrai au-delà de 1000 px de large — sauf si l'hôte affirme être étroit.
+   *
+   *  Home Assistant fournit `narrow` au panneau depuis toujours et ne s'en
+   *  était jamais servi : la barre latérale dépliée sur une tablette large
+   *  laisse au panneau bien moins que `innerWidth`, et une mise en page dense
+   *  écrasée dans 400 px est pire que la mise en page étroite qu'elle
+   *  remplace. L'hôte gagne donc contre la mesure, jamais l'inverse. */
+  get large(): boolean {
+    return this.largeMesuree && !this.narrow;
+  }
 
   private surRedimensionnement = () => {
-    this.large = window.innerWidth >= 1000;
+    this.largeMesuree = window.innerWidth >= 1000;
   };
 
   /** Le ticket ouvert, et si une entité de lecture est réglée. « Ticket » ne
@@ -514,13 +525,13 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'catalogue') {
       return html`
         <home-stock-catalogue .connexion=${this.connexion} .file=${this.file} .enAttente=${this.enAttente}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-catalogue>`;
     }
     if (this.ecran === 'reglages') {
       return html`
         <home-stock-reglages .connexion=${this.connexion} .file=${this.file} .enAttente=${this.enAttente}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-reglages>`;
     }
     if (this.ecran === 'consommation') {
@@ -532,7 +543,7 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'journal') {
       return html`
         <home-stock-journal .connexion=${this.connexion} .file=${this.file}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-journal>`;
     }
     if (this.ecran === 'recettes') {
@@ -563,26 +574,26 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'piles') {
       return html`
         <home-stock-piles .connexion=${this.connexion} .file=${this.file}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-piles>`;
     }
     if (this.ecran === 'equipements') {
       return html`
         <home-stock-equipements .connexion=${this.connexion} .file=${this.file}
-          @file-changee=${this.surFileChangee}>
+          .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-equipements>`;
     }
     if (this.ecran === 'liste') {
       return html`
         <home-stock-liste .connexion=${this.connexion} .file=${this.file}
-          .enAttente=${this.enAttente} @file-changee=${this.surFileChangee}>
+          .enAttente=${this.enAttente} .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-liste>`;
     }
     if (this.ecran === 'ticket') {
       return html`
         <home-stock-ticket .connexion=${this.connexion} .file=${this.file}
           .enAttente=${this.enAttente} .ticket=${this.ticketOuvert}
-          .agentConfigure=${this.agentTicketConfigure}
+          .agentConfigure=${this.agentTicketConfigure} .large=${this.large}
           @file-changee=${this.surFileChangee}>
         </home-stock-ticket>`;
     }

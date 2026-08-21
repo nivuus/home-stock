@@ -108,6 +108,11 @@ export const DOSSIER_TICKETS = 'media-source://media_source/local/home_stock/rec
 export class EcranTicket extends LitElement {
   @property({ attribute: false }) ticket: DonneesTicket | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   @property({ attribute: false }) file?: FileAttente;
   @property({ attribute: false }) enAttente = 0;
   /** Faux quand aucune entité `ai_task` n'est réglée : on n'affiche alors

@@ -97,6 +97,11 @@ export function deplacer<T>(liste: T[], index: number, sens: -1 | 1): T[] | null
 @customElement('home-stock-reglages')
 export class EcranReglages extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   /** La file hors-ligne : le réordonnancement des rayons est une écriture
    *  comme une autre (spec §14). */
   @property({ attribute: false }) file?: FileAttente;

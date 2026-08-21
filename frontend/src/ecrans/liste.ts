@@ -89,6 +89,11 @@ export function quantiteAffichee(ligne: LigneListe): string {
 export class EcranListe extends LitElement {
   @property({ attribute: false }) donnees: DonneesListe | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   /** Toute écriture passe par la file : cet écran se lit debout dans un
    *  rayon, l'endroit où le réseau lâche le plus souvent. */
   @property({ attribute: false }) file?: FileAttente;

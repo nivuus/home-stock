@@ -161,6 +161,11 @@ export function filtrerProduits(produits: Produit[], recherche: string, nomRayon
 @customElement('home-stock-catalogue')
 export class EcranCatalogue extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
+   *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
+   *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
+   *  référence, et c'est la large qui doit se justifier. */
+  @property({ type: Boolean }) large = false;
   /** La file hors-ligne : une correction depuis le catalogue est une
    *  écriture comme une autre (spec §14), même si le contexte — un bureau,
    *  pas un rayon — la rend rarement nécessaire en pratique. */
