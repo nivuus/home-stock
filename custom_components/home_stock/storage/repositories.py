@@ -10,10 +10,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..const import (
+    CONSUME_REASONS,
     MACRO_COLUMNS,
     REASON_CONSUMPTION,
-    REASON_EXPIRED,
-    REASON_WASTE,
 )
 
 PRODUCT_FIELDS = (
@@ -26,7 +25,7 @@ ARTICLE_FIELDS = (
     "carbohydrates", "sugars", "added_sugars", "fat", "saturated_fat", "fiber",
     "salt", "nutriscore", "nova", "ecoscore", "allergens", "traces", "additives",
     "off_labels", "off_source", "off_synced_at", "off_raw", "manual_fields",
-    "is_generic", "external_ref",
+    "is_generic", "external_ref", "serving_quantity",
 )
 
 # The kcal rate to price a movement with: the article's own kcal_per_base_unit,
@@ -413,7 +412,19 @@ _PERSONAL_SUMS = ", ".join(
        for column in MACRO_COLUMNS]
 )
 
-_WASTE_REASONS_SQL = f"('{REASON_WASTE}', '{REASON_EXPIRED}')"
+
+def _reasons_sql(reasons) -> str:
+    """An `IN (...)` literal for a handful of reason strings, quoted.
+
+    A function, not a constant computed once at import: journal_entries,
+    counted_movements and totals_between all call this AT QUERY TIME on
+    const.CONSUME_REASONS (or a filtered view of it), so a reason added to
+    that one tuple reaches all three queries by construction — there is no
+    second, independently-typed copy of the set anywhere in this file left
+    to forget. Baking the string once at import time would defeat the
+    point: a test (or a future caller) patching CONSUME_REASONS would then
+    silently keep seeing the stale set."""
+    return "(" + ", ".join(f"'{r}'" for r in reasons) + ")"
 
 
 def totals_between(conn, start: str | None = None,
@@ -432,7 +443,9 @@ def totals_between(conn, start: str | None = None,
         f"SELECT {_PERSONAL_SUMS},"
         f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' THEN cost END), 0)"
         "   AS cost,"
-        f" COALESCE(SUM(CASE WHEN reason IN {_WASTE_REASONS_SQL} THEN cost END), 0)"
+        f" COALESCE(SUM(CASE WHEN reason IN "
+        f'{_reasons_sql(r for r in CONSUME_REASONS if r != REASON_CONSUMPTION)}'
+        " THEN cost END), 0)"
         "   AS waste_cost,"
         f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' AND kcal IS NULL"
         "   THEN 1 END), 0) AS unvalued"
@@ -448,8 +461,7 @@ def journal_entries(conn, start: str, end: str) -> list[dict[str, Any]]:
         "SELECT m.id, m.occurred_at, m.quantity, m.reason, m.base_unit, m.kcal,"
         "       m.cost, m.parts_total, m.parts_mine, p.name AS product_name"
         " FROM movement m JOIN product p ON p.id = m.product_id"
-        f" WHERE m.reason IN ('{REASON_CONSUMPTION}', '{REASON_WASTE}',"
-        f"                    '{REASON_EXPIRED}')"
+        f" WHERE m.reason IN {_reasons_sql(CONSUME_REASONS)}"
         "   AND m.occurred_at >= ? AND m.occurred_at < ?"
         " ORDER BY m.occurred_at, m.id",
         (start, end),
@@ -469,8 +481,7 @@ def counted_movements(conn, since: str) -> list[dict[str, Any]]:
         "SELECT occurred_at, reason, kcal, cost, parts_total, parts_mine,"
         f"       {', '.join(MACRO_COLUMNS)}"
         " FROM movement"
-        f" WHERE reason IN ('{REASON_CONSUMPTION}', '{REASON_WASTE}',"
-        f"                  '{REASON_EXPIRED}')"
+        f" WHERE reason IN {_reasons_sql(CONSUME_REASONS)}"
         "   AND occurred_at >= ? ORDER BY occurred_at, id",
         (since,),
     ))

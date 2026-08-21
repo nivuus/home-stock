@@ -317,6 +317,27 @@ async def test_the_consume_service_refuses_a_parts_value_the_schema_rejects(
         }, blocking=True)
 
 
+async def test_the_consume_service_refuses_a_negative_quantity_on_a_batch(
+        hass, setup_entry):
+    """Same guard as the websocket surface (test_websocket_consume.py::
+    test_consume_batch_refuses_a_negative_quantity): the service's own
+    finite_float schema lets a negative quantity through, so the floor has
+    to live in StockManager.consume_batch itself."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    batch_id = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=200.0, location_id=1))
+
+    with pytest.raises(HomeAssistantError, match="positive"):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": -50.0, "batch_id": batch_id,
+        }, blocking=True)
+
+    row = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone())
+    assert row["remaining"] == 200.0
+
+
 async def test_the_consume_service_can_target_one_batch(hass, setup_entry):
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager

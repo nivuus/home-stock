@@ -163,6 +163,23 @@ describe('file d’attente hors ligne : refus du serveur contre panne réseau', 
       'Cette ligne est déjà rangée : corrigez le lot, pas la liste.',
     );
   });
+
+  it('montre le chiffre du stock insuffisant plutôt que le message générique '
+     + '(insufficient_stock existe côté serveur depuis le lot 0, mais aucune action mise en '
+     + 'file ne pouvait le produire avant le lot 2 — voir consommation.ts)', async () => {
+    const surRefus = vi.fn();
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'insufficient_stock', message: 'Stock insuffisant : 200 g demandé, 120 g disponible.' };
+    }, surRefus);
+    file.ajouter('home_stock/stock/consume', { product_id: 1, quantity: 200 });
+
+    await file.rejouer();
+
+    expect(surRefus).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'home_stock/stock/consume' }),
+      'Stock insuffisant : 200 g demandé, 120 g disponible.',
+    );
+  });
 });
 
 describe('file d’attente : un seul rejeu à la fois', () => {

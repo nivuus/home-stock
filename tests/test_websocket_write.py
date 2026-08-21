@@ -159,6 +159,33 @@ async def test_a_created_article_carries_its_nutrition_per_base_unit(
     assert await hass.async_add_executor_job(kcal) == pytest.approx(3.6)
 
 
+async def test_a_created_article_keeps_the_serving_off_gives_it(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    """build_article_values (off/ingest.py) computes serving_quantity, but
+    insert_article filters every keyword argument through ARTICLE_FIELDS —
+    a whitelist that used to omit serving_quantity, so the scan path (this
+    command) silently dropped it on the floor while services._write_resync
+    (which does not filter) wrote it correctly. Pins the scan path against
+    the same regression."""
+    entry = await setup_entry()
+    client = await hass_ws_client(hass)
+    off_product = dict(MUESLI.product, serving_quantity=40)
+
+    await client.send_json({
+        "id": 1, "type": "home_stock/article/create", "code": "3229820129488",
+        "new_product": {"name": "Muesli", "base_unit": "g"},
+        "off": off_product, "off_source": "food",
+    })
+    created = (await client.receive_json())["result"]
+
+    def serving() -> float:
+        return entry.runtime_data.database.read().execute(
+            "SELECT serving_quantity FROM article WHERE id = ?",
+            (created["article_id"],)).fetchone()[0]
+
+    assert await hass.async_add_executor_job(serving) == pytest.approx(40)
+
+
 async def test_the_raw_off_answer_is_kept_verbatim(hass: HomeAssistant, setup_entry,
                                                     hass_ws_client):
     entry = await setup_entry()

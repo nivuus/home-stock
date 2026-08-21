@@ -36,7 +36,7 @@ function estRefusServeur(erreur: unknown): erreur is ErreurServeur {
  *  reconnaît pas obtient le message générique, jamais son texte brut. */
 const CODES_DE_REFUS_EN_FRANCAIS: ReadonlySet<string> = new Set([
   'not_loaded', 'invalid_field', 'invalid_value', 'not_found',
-  'already_exists', 'conversion_refused', 'shopping_refused',
+  'already_exists', 'conversion_refused', 'shopping_refused', 'insufficient_stock',
 ]);
 
 const MESSAGE_REFUS_GENERIQUE = 'Une action a été refusée et n’a pas pu être envoyée.';

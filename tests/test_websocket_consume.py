@@ -127,6 +127,34 @@ async def test_consume_refuses_an_insufficient_stock_in_french(hass, hass_ws_cli
     assert not answer["error"]["message"].isascii() or "stock" in answer["error"]["message"]
 
 
+async def test_consume_batch_refuses_a_negative_quantity(hass, hass_ws_client,
+                                                          setup_entry):
+    """The batch-targeted branch of stock/consume used to have no lower
+    bound: a negative quantity passed the schema (_finite_float allows any
+    sign) and StockManager.consume_batch computed `remaining_after` above
+    the stock actually on hand, growing the batch instead of shrinking it.
+    Pins the same floor the FIFO branch already gets from domain.stock.allocate."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    batch_id = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=200.0, location_id=1))
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({
+        "type": "home_stock/stock/consume", "product_id": 1, "quantity": -50.0,
+        "batch_id": batch_id})
+    answer = await client.receive_json()
+
+    assert not answer["success"]
+    assert answer["error"]["code"] == "invalid_value"
+    row = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone())
+    assert row["remaining"] == 200.0
+    count = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT COUNT(*) AS n FROM movement WHERE reason = 'consumption'").fetchone())
+    assert count["n"] == 0
+
+
 async def test_journal_day_answers_the_current_food_day(hass, hass_ws_client,
                                                         setup_entry):
     await setup_entry()

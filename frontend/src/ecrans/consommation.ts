@@ -40,6 +40,16 @@ function afficherReste(quantite: number, unite: UniteBase): string {
   return `${formaterNombre(quantite)} ${unite}`;
 }
 
+/** Une DLC au format brut du serveur (`AAAA-MM-JJ`) dans un panneau français
+ *  — corrigé à la française (`JJ/MM/AAAA`) plutôt que montré tel quel. Une
+ *  regex plutôt que `Date`/`toLocaleDateString` : pas de fuseau à trancher
+ *  pour une date sans heure, et un format qui ne matche pas ressort intact
+ *  plutôt que de planter sur une valeur inattendue. */
+function afficherDlc(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+}
+
 @customElement('home-stock-consommation')
 export class EcranConsommation extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
@@ -129,9 +139,17 @@ export class EcranConsommation extends LitElement {
     this.enCours = true;
     this.enAttenteEnvoi = false;
     const charge: Record<string, unknown> = {
-      product_id: this.produit.id, batch_id: this.lot.id,
-      quantity: this.quantite, reason: this.motif,
+      product_id: this.produit.id, quantity: this.quantite, reason: this.motif,
     };
+    // Le lot visé n'est transmis QUE quand la quantité tient dedans : dès
+    // qu'un lot désigné existe côté serveur, `consume_batch` refuse tout ce
+    // qui dépasse son reste (spec 12.1) — sans lui, la sortie s'étale sur les
+    // lots suivants comme le fait déjà le pavé « Autre quantité » à
+    // l'affichage. Un paquet entamé de 120 g et un neuf de 1 kg : taper
+    // 200 g doit déborder sur le second, pas être refusé.
+    if (this.quantite <= this.lot.remaining) {
+      charge.batch_id = this.lot.id;
+    }
     if (partage) {
       charge.parts_total = this.partsTotal;
       charge.parts_mine = this.partsMoi;
@@ -144,9 +162,12 @@ export class EcranConsommation extends LitElement {
     if (sort === 'envoyee') {
       this.dispatchEvent(new CustomEvent('consommation-enregistree',
                                          { bubbles: true, composed: true }));
-    } else {
-      // Refusé (le panneau l'affiche en français) ou encore en file (hors
-      // ligne) : l'écran reste ouvert, rien n'est perdu.
+    } else if (sort === 'en-attente') {
+      // Panne réseau réelle : l'action reste en file, elle repartira. Un
+      // refus (« refusee ») n'a lui plus rien en file — la file l'a déjà
+      // retiré — donc rien ne « repartira » : le dire serait faux. Ce
+      // refus-là est déjà annoncé en français par la bannière du panneau
+      // (`surRefus`, voir panneau.ts) ; cet écran n'a rien de plus à montrer.
       this.enAttenteEnvoi = true;
     }
   }
@@ -217,7 +238,7 @@ export class EcranConsommation extends LitElement {
         <h2 class="nom">${this.produit.name}</h2>
         <p class="reste">
           Reste ${afficherReste(this.lot.remaining, this.produit.base_unit)} sur le lot visé
-          ${this.lot.best_before ? html` — DLC ${this.lot.best_before}` : nothing}
+          ${this.lot.best_before ? html` — DLC ${afficherDlc(this.lot.best_before)}` : nothing}
         </p>
       </section>
 

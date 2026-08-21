@@ -76,6 +76,33 @@ describe('<home-stock-consommation>', () => {
     expect(envoi.mock.calls[0][1]).not.toHaveProperty('parts_total');
   });
 
+  it('perd le lot visé quand la quantité déborde son reste, pour laisser le '
+     + 'serveur étaler sur les lots suivants (spec 12.1)', async () => {
+    const envoi = vi.fn();
+    // Reste 120 g sur le lot visé : un paquet entamé. Un neuf de 1 kg
+    // existe côté serveur mais n'apparaît pas ici — l'écran ne connaît que
+    // le lot FIFO — c'est justement pourquoi il ne peut pas se permettre de
+    // désigner ce lot pour une quantité qui le dépasse.
+    const element = monter({ ...PRODUIT_G, next_batch: { id: 7, remaining: 120, best_before: null } });
+    element.file = fileEspionne(envoi);
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 200;
+    await element.enregistrer();
+    expect(envoi.mock.calls[0][1]).not.toHaveProperty('batch_id');
+  });
+
+  it('garde le lot visé quand la quantité tient dedans', async () => {
+    const envoi = vi.fn();
+    const element = monter({ ...PRODUIT_G, next_batch: { id: 7, remaining: 120, best_before: null } });
+    element.file = fileEspionne(envoi);
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 100;
+    await element.enregistrer();
+    expect(envoi.mock.calls[0][1]).toMatchObject({ batch_id: 7 });
+  });
+
   it('envoie les deux parts quand on partage', async () => {
     const envoi = vi.fn();
     const element = monter(PRODUIT_G);
@@ -211,5 +238,47 @@ describe('<home-stock-consommation>', () => {
     await element.enregistrer();
     expect(element.enAttenteEnvoi).toBe(true);
     expect(fermeture).not.toHaveBeenCalled();
+  });
+
+  it('ne montre PAS « ça repartira » pour un refus — la file l’a déjà retiré, '
+     + 'rien ne repartira jamais (le refus lui-même est déjà annoncé par la '
+     + 'bannière du panneau, voir panneau.ts)', async () => {
+    const element = monter(PRODUIT_G);
+    element.file = {
+      ajouter: () => ({ cle: 'k', sort: Promise.resolve('refusee') }),
+      rejouer: async () => undefined,
+    };
+    const fermeture = vi.fn();
+    element.addEventListener('consommation-enregistree', fermeture);
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 80;
+    await element.enregistrer();
+    await element.updateComplete;
+    expect(fermeture).not.toHaveBeenCalled();
+    expect(element.enAttenteEnvoi).toBe(false);
+    expect(element.shadowRoot.textContent).not.toContain('repartira');
+  });
+
+  it('montre « ça repartira » seulement pour une vraie attente réseau', async () => {
+    const element = monter(PRODUIT_G);
+    element.file = {
+      ajouter: () => ({ cle: 'k', sort: Promise.resolve('en-attente') }),
+      rejouer: async () => undefined,
+    };
+    await element.updateComplete;
+    await element.updateComplete;
+    element.quantite = 80;
+    await element.enregistrer();
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('repartira');
+  });
+
+  it('affiche la DLC à la française plutôt qu’au format brut du serveur', async () => {
+    const element = monter({ ...PRODUIT_G, next_batch: { id: 7, remaining: 500, best_before: '2026-09-01' } });
+    await element.updateComplete;
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('01/09/2026');
+    expect(element.shadowRoot.textContent).not.toContain('2026-09-01');
   });
 });

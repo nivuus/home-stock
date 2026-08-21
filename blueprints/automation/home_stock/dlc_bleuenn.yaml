@@ -40,6 +40,9 @@ conditions:
     entity_id: !input capteur
     state: "on"
 
+variables:
+  nom_capteur: !input capteur
+
 actions:
   - action: conversation.process
     data:
@@ -50,5 +53,3 @@ actions:
         {{ 'article approche de sa date limite' if lots | count == 1
            else 'articles approchent de leur date limite' }} :
         {{ lots | map(attribute='product_name') | join(', ') }}.
-    variables:
-      nom_capteur: !input capteur

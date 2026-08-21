@@ -79,6 +79,29 @@ describe('<home-stock-journal>', () => {
     expect(element.shadowRoot.querySelector('.non-chiffre').textContent).toContain('3');
   });
 
+  it('parle de calories, pas de prix, pour les sorties non chiffrées '
+     + '(le compteur compte des kcal NULL, pas des coûts manquants)', async () => {
+    const element = monter();
+    await element.updateComplete; await element.updateComplete;
+    element.jour = { ...JOUR, totals: { ...JOUR.totals, unvalued: 3 } };
+    await element.updateComplete;
+    const texte = element.shadowRoot.querySelector('.non-chiffre').textContent;
+    expect(texte).toContain('calories');
+    expect(texte).not.toContain('prix');
+  });
+
+  it('affiche un tiret plutôt que « 0 kcal » quand les calories d’une '
+     + 'sortie sont inconnues (gel à NULL, l’invariant que la spec défend '
+     + 'le plus explicitement)', async () => {
+    const element = monter();
+    await element.updateComplete; await element.updateComplete;
+    element.jour = { ...JOUR, entries: [{ ...JOUR.entries[0], kcal: null }] };
+    await element.updateComplete;
+    const kcalAffichees = element.shadowRoot.querySelector('.entree-kcal').textContent?.trim();
+    expect(kcalAffichees).toBe('—');
+    expect(kcalAffichees).not.toContain('0 kcal');
+  });
+
   it('dessine une barre par seau, la plus haute à l’échelle', async () => {
     const element = monter();
     await element.updateComplete; await element.updateComplete;
@@ -106,12 +129,34 @@ describe('<home-stock-journal>', () => {
       'home_stock/journal/series', { granularity: 'month', count: 12 });
   });
 
-  it('ouvre le jour d’une barre quand on la touche', async () => {
+  it('ouvre le jour d’une barre quand on la touche, en vue « jour »', async () => {
     const element = monter();
     await element.updateComplete; await element.updateComplete;
-    await element.ouvrirSeau('2026-08-19');
+    await element.ouvrirSeau({ label: '2026-08-19', kcal: 2100, cost: 11.0, waste_cost: 1.2 });
     expect(element.connexion.appeler).toHaveBeenCalledWith(
       'home_stock/journal/day', { date: '2026-08-19' });
+  });
+
+  it('n’ouvre PAS le premier jour d’un seau « semaine » ou « mois » — affiche ses '
+     + 'propres totaux à la place (il n’existe aucune commande serveur qui rende '
+     + 'le détail d’un seau, et son premier jour ne représenterait qu’une '
+     + 'fraction du seau)', async () => {
+    const element = monter();
+    await element.updateComplete; await element.updateComplete;
+    element.granularite = 'week';
+    await element.updateComplete;
+    const appelsAvant = element.connexion.appeler.mock.calls.length;
+
+    await element.ouvrirSeau({ label: '2026-07-27', kcal: 55000, cost: 210.5, waste_cost: 12 });
+    await element.updateComplete;
+
+    // Aucun nouvel appel réseau : pas de home_stock/journal/day pour ce seau.
+    expect(element.connexion.appeler.mock.calls.length).toBe(appelsAvant);
+    expect(element.shadowRoot.textContent).toContain('55000');
+    expect(element.shadowRoot.textContent).not.toContain('2026-07-27T');
+    // La barre « mois » ne doit jamais montrer le total d'un seul jour :
+    // pas le total du jour resté en mémoire de la vue « jour » précédente.
+    expect(element.shadowRoot.textContent).not.toContain('348 kcal');
   });
 
   it('affiche une journée vide sans se plaindre', async () => {

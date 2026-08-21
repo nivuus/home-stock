@@ -198,7 +198,7 @@ async def test_a_batch_with_no_date_is_never_announced(hass, setup_entry):
     assert claimed == []
 
 
-def test_the_blueprint_is_valid_yaml_and_declares_its_inputs():
+async def test_the_blueprint_is_valid_yaml_and_declares_its_inputs(hass):
     # Plain yaml.safe_load chokes on the `!input` tag blueprints rely on
     # throughout (it has no constructor for it). Home Assistant's own loader
     # is what actually parses blueprint files in production
@@ -206,8 +206,20 @@ def test_the_blueprint_is_valid_yaml_and_declares_its_inputs():
     # test uses the same one: it both accepts `!input` and proves the file
     # parses the way Home Assistant itself would parse it, not just the way
     # a generic YAML reader would.
+    #
+    # Reading the raw keys back (as a previous version of this test did) is
+    # not enough: a step can carry every key it is "supposed" to and still
+    # be an invalid automation, the way `action:` next to `variables:` on
+    # the same step was (Home Assistant's step-type table looks at
+    # `variables` first and classifies the whole step as a variables step,
+    # then refuses `action` as an unknown extra key). Only Home Assistant's
+    # own automation config schema — `cv.SCRIPT_SCHEMA` for actions,
+    # `cv.CONDITION_SCHEMA` for a condition — can catch that, so this test
+    # feeds the parsed (and `!input`-substituted, the way a real import
+    # would) document straight through them.
     from pathlib import Path
 
+    from homeassistant.helpers import config_validation as cv
     from homeassistant.util import yaml as yaml_util
 
     path = Path(__file__).resolve().parent.parent / "blueprints" / "automation" \
@@ -217,17 +229,24 @@ def test_the_blueprint_is_valid_yaml_and_declares_its_inputs():
     assert set(document["blueprint"]["input"]) == {"heure", "agent", "capteur"}
     assert document["triggers"][0]["trigger"] == "time"
 
-    condition = document["conditions"][0]
-    assert condition["condition"] == "state"
-    assert condition["entity_id"] == yaml_util.Input("capteur")
-    assert condition["state"] == "on"
+    # Inputs substituted with their defaults, the same step
+    # `BlueprintInputs.async_substitute` performs before an automation built
+    # from the blueprint is validated — the product's validators reject a
+    # bare `Input` placeholder, so they must never see one.
+    defaults = {name: spec["default"]
+                for name, spec in document["blueprint"]["input"].items()}
+    substituted = yaml_util.substitute(document, defaults)
 
-    action = document["actions"][0]
+    validated_conditions = cv.CONDITION_SCHEMA(substituted["conditions"][0])
+    assert validated_conditions["condition"] == "state"
+
+    validated_actions = cv.SCRIPT_SCHEMA(substituted["actions"])
+    action = validated_actions[0]
     assert action["action"] == "conversation.process"
-    assert action["data"]["agent_id"] == yaml_util.Input("agent")
+
     # `!input capteur` cannot be interpolated straight into the Jinja
     # template below it: it must be handed in as a plain variable first
     # (`nom_capteur`), and the template must actually use that name, or the
     # text Bleuenn reads out would silently see no batches at all.
-    assert action["variables"] == {"nom_capteur": yaml_util.Input("capteur")}
-    assert "nom_capteur" in action["data"]["text"]
+    assert substituted["variables"] == {"nom_capteur": defaults["capteur"]}
+    assert "nom_capteur" in document["actions"][0]["data"]["text"]

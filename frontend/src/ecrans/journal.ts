@@ -27,7 +27,11 @@ export type EntreeJournal = {
   quantity: number;
   base_unit: string;
   reason: string;
-  kcal: number;
+  // Le serveur gèle NULL quand aucun taux de kcal n'était connu au moment
+  // du mouvement (spec : ce gel est l'invariant, pas un cas rare) — un type
+  // non nullable ici laisserait `Math.round(null)` afficher silencieusement
+  // « 0 kcal » là où la vraie réponse est « inconnu ».
+  kcal: number | null;
   parts_total: number | null;
   parts_mine: number | null;
 };
@@ -70,6 +74,13 @@ export class EcranJournal extends LitElement {
   @state() serie: SerieJournal | null = null;
   @state() granularite: Granularite = 'day';
   @state() enCours = false;
+  /** Le seau touché en vue « semaine » ou « mois ». Il n'existe aucune
+   *  commande serveur qui rende le détail d'un seau — seul `journal/day`
+   *  rend un détail, et seulement pour UN jour. Toucher une barre « mois »
+   *  ne doit donc jamais recharger `jour` sur son premier jour (qui ne
+   *  représenterait qu'une fraction du seau) : les totaux affichés sont
+   *  ceux du seau lui-même, déjà dans la réponse de `journal/series`. */
+  @state() seauSelectionne: SeauJournal | null = null;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -98,13 +109,25 @@ export class EcranJournal extends LitElement {
    *  qui va avec, jamais celui de la vue précédente. */
   async choisirGranularite(granularite: Granularite): Promise<void> {
     this.granularite = granularite;
+    this.seauSelectionne = null;
     await this.chargerSerie(granularite);
   }
 
-  /** Recharge le détail sur le jour d'un seau touché — pour `week` et
-   *  `month`, `label` est déjà le premier jour du seau (voir l'en-tête). */
-  async ouvrirSeau(label: string): Promise<void> {
-    await this.chargerJour(label);
+  /** Touché un seau. En vue « jour », le seau EST le jour : son `label` est
+   *  la date, `journal/day` la rend telle quelle. En vue « semaine » ou
+   *  « mois », le seau couvre plusieurs jours — `journal/day` ne rendrait
+   *  que le premier d'entre eux, un jour qui ne pèse qu'une fraction du
+   *  seau affiché. Faute d'une commande serveur qui rende le détail d'un
+   *  seau, on affiche donc les totaux du seau lui-même plutôt que de
+   *  mentir avec le détail d'un seul jour. */
+  async ouvrirSeau(seau: SeauJournal): Promise<void> {
+    if (this.granularite === 'day') {
+      this.seauSelectionne = null;
+      await this.chargerJour(seau.label);
+    } else {
+      this.jour = null;
+      this.seauSelectionne = seau;
+    }
   }
 
   /** La hauteur relative d'une barre.
@@ -136,7 +159,7 @@ export class EcranJournal extends LitElement {
             <button class="barre" data-part=${part}
                     style=${`--part: ${Math.round(part * 100)}%`}
                     title=${`${seau.label} — ${Math.round(seau.kcal)} kcal`}
-                    @click=${() => this.ouvrirSeau(seau.label)}>
+                    @click=${() => this.ouvrirSeau(seau)}>
               <span class="barre-remplissage"></span>
             </button>`;
         })}
@@ -165,7 +188,7 @@ export class EcranJournal extends LitElement {
           ${formaterNombre(Math.abs(entree.quantity))} ${entree.base_unit}
         </span>
         ${partagee ? html`<span class="entree-parts">${entree.parts_mine ?? 0}/${entree.parts_total}</span>` : nothing}
-        <span class="entree-kcal">${Math.round(entree.kcal)} kcal</span>
+        <span class="entree-kcal">${entree.kcal === null ? '—' : `${Math.round(entree.kcal)} kcal`}</span>
       </li>
     `;
   }
@@ -189,8 +212,27 @@ export class EcranJournal extends LitElement {
           ${jour.totals.waste_cost > 0 ? html` — dont ${formaterEuros(jour.totals.waste_cost)} jeté` : nothing}
         </p>
         ${jour.totals.unvalued > 0 ? html`
-          <p class="non-chiffre">${jour.totals.unvalued} sortie(s) sans prix connu.</p>
+          <p class="non-chiffre">${jour.totals.unvalued} sortie(s) sans calories connues.</p>
         ` : nothing}
+      </section>
+    `;
+  }
+
+  /** Le seau touché en vue « semaine » ou « mois » : ses propres totaux,
+   *  pas le détail d'un jour qui ne le représenterait qu'en partie. Un
+   *  seau n'a ni liste d'entrées ni compteur `unvalued` (voir SeauJournal) —
+   *  seuls kcal et coût s'affichent, à l'identique du bloc totaux du jour. */
+  private rendreSeauTotaux() {
+    const seau = this.seauSelectionne;
+    if (!seau) return nothing;
+    return html`
+      <section class="jour">
+        <h2 class="titre-jour">${seau.label}</h2>
+        <p class="total-kcal">${Math.round(seau.kcal)} kcal</p>
+        <p class="total-cout">
+          ${formaterEuros(seau.cost)}
+          ${seau.waste_cost > 0 ? html` — dont ${formaterEuros(seau.waste_cost)} jeté` : nothing}
+        </p>
       </section>
     `;
   }
@@ -200,7 +242,7 @@ export class EcranJournal extends LitElement {
       <h1 class="titre">Journal</h1>
       ${this.rendreGranularites()}
       ${this.rendreBarres()}
-      ${this.rendreJour()}
+      ${this.granularite === 'day' ? this.rendreJour() : this.rendreSeauTotaux()}
     `;
   }
 

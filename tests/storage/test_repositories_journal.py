@@ -171,3 +171,29 @@ def test_counted_movements_reports_the_raw_rows_for_a_series(journal_conn):
     assert len(rows) == 2
     assert rows[0]["occurred_at"] == "2026-08-19T10:00:00"
     assert rows[1]["parts_total"] == 2
+
+
+def test_a_reason_added_to_the_shared_outgoing_set_reaches_every_query(journal_conn,
+                                                                        monkeypatch):
+    """Mineur 9: journal_entries, counted_movements and totals_between's own
+    waste split used to spell out the outgoing-movement set (consumed,
+    thrown away, expired) by hand, in four different places including
+    const.CONSUME_REASONS itself — a reason added to the lot's next release
+    would need all four updated, and a miss would under-count silently
+    (no error, just a smaller total). repo._reasons_sql now reads
+    CONSUME_REASONS at query time, so patching the shared constant here
+    reaches all three queries by construction: this is a fictitious reason
+    ("given_away") that no application code writes today, proving the
+    plumbing rather than any real feature."""
+    monkeypatch.setattr(repo, "CONSUME_REASONS",
+                        (*repo.CONSUME_REASONS, "given_away"))
+    _movement(journal_conn, reason="given_away", kcal=50.0, cost=1.0)
+
+    assert [e["reason"] for e in repo.journal_entries(journal_conn, *DAY)] == ["given_away"]
+    assert [r["reason"] for r in repo.counted_movements(journal_conn, "2026-08-19T02:00:00")
+           ] == ["given_away"]
+    # Not a consumption: totals_between must still track it apart from what
+    # was actually eaten — the split within the set survives the fix.
+    totals = repo.totals_between(journal_conn, *DAY)
+    assert totals["kcal"] == 0.0
+    assert totals["waste_cost"] == pytest.approx(1.0)

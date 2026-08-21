@@ -309,6 +309,8 @@ class StockManager:
                 raise ValueError(
                     f"batch {batch_id} does not belong to product {product_id}")
             taken = row["remaining"] if quantity is None else float(quantity)
+            if taken <= 0:
+                raise ValueError(f"quantity must be positive, got {taken}")
             if taken > row["remaining"] + QUANTITY_EPSILON:
                 raise InsufficientStock(requested=taken, available=row["remaining"])
             remaining_after = row["remaining"] - taken
