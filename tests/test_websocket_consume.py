@@ -241,3 +241,102 @@ async def test_the_learned_portion_beats_the_open_food_facts_one(hass, hass_ws_c
     result = (await client.receive_json())["result"]
     assert result["suggested_portion"] == 80.0
     assert result["portion_source"] == "learned"
+
+
+# --- Lot 2bis : la portion manuelle prime, et le bac de l'emballage ----------
+
+async def _seed_500g(hass, entry):
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=500.0, location_id=1))
+    return manager
+
+
+async def _write(hass, manager, sql, *params):
+    def _work():
+        with manager.db.write() as conn:
+            conn.execute(sql, params)
+    await hass.async_add_executor_job(_work)
+
+
+async def test_a_manual_portion_beats_the_learned_and_the_declared_one(
+        hass, hass_ws_client, setup_entry):
+    """Une valeur SAISIE par une personne l'emporte toujours sur une valeur
+    déduite, sinon la saisie n'a servi à rien — même règle que
+    `article.manual_fields` face à une resynchronisation."""
+    entry = await setup_entry(with_article=True)
+    manager = await _seed_500g(hass, entry)
+    await _write(hass, manager, "UPDATE article SET serving_quantity = 200 WHERE id = 1")
+    for quantity in (70.0, 80.0, 90.0):
+        await hass.async_add_executor_job(
+            lambda quantity=quantity: manager.consume(product_id=1, quantity=quantity))
+    await _write(hass, manager, "UPDATE product SET manual_portion = 45 WHERE id = 1")
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
+    result = (await client.receive_json())["result"]
+
+    assert result["suggested_portion"] == 45.0
+    assert result["portion_source"] == "manual"
+    assert result["product"]["manual_portion"] == 45.0
+
+
+async def test_clearing_the_manual_portion_gives_the_learned_one_back(
+        hass, hass_ws_client, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = await _seed_500g(hass, entry)
+    for quantity in (70.0, 80.0, 90.0):
+        await hass.async_add_executor_job(
+            lambda quantity=quantity: manager.consume(product_id=1, quantity=quantity))
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({
+        "type": "home_stock/product/update", "product_id": 1,
+        "fields": {"manual_portion": 45}})
+    assert (await client.receive_json())["success"]
+    await client.send_json_auto_id({
+        "type": "home_stock/product/update", "product_id": 1,
+        "fields": {"manual_portion": None}})
+    assert (await client.receive_json())["success"]
+
+    await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
+    result = (await client.receive_json())["result"]
+    assert result["portion_source"] == "learned"
+    assert result["product"]["manual_portion"] is None
+
+
+async def test_the_packaging_comes_from_the_fifo_batch_article(
+        hass, hass_ws_client, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = await _seed_500g(hass, entry)
+    await _write(hass, manager,
+                 "UPDATE article SET off_raw = ? WHERE id = 1",
+                 '{"packagings": [{"material": "en:glass"},'
+                 ' {"material": "en:metal"}]}')
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
+    result = (await client.receive_json())["result"]
+
+    assert result["packaging"] == {"bins": ["yellow", "glass"],
+                                   "materials": ["en:glass", "en:metal"]}
+
+
+async def test_no_batch_or_no_packaging_answers_null_without_an_error(
+        hass, hass_ws_client, setup_entry):
+    """Rien de connu → rien d'affiché : c'est un confort d'affichage, jamais
+    une donnée dont dépend le stock."""
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    # Aucun lot ouvert.
+    await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
+    assert (await client.receive_json())["result"]["packaging"] is None
+
+    # Un lot, mais une fiche sans emballage.
+    manager = await _seed_500g(hass, entry)
+    await _write(hass, manager,
+                 "UPDATE article SET off_raw = ? WHERE id = 1",
+                 '{"product_name": "Riz"}')
+    await client.send_json_auto_id({"type": "home_stock/product/get", "product_id": 1})
+    assert (await client.receive_json())["result"]["packaging"] is None

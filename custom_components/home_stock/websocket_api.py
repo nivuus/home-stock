@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date
 from functools import partial
@@ -16,7 +17,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .application import PartsError, as_batch_view
-from .const import BASE_UNITS, CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
+from .const import (
+    BASE_UNITS,
+    CONF_GOALS,
+    CONSUME_REASONS,
+    DOMAIN,
+    REASON_CONSUMPTION,
+)
 from .coordinator import async_resolve_time_zone
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.foodday import GRANULARITIES
@@ -27,9 +34,11 @@ from .domain.units import UnitError
 from .messages import french_error
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
 from .off.mapping import map_article
+from .off.packaging import bins_from_raw
 from .off.open_prices import latest_price
 from .shopping import ShoppingError
 from .storage import repositories as repo
+from . import validators
 from .validators import (
     MAX_TEXT_LENGTH, bounded_int, bounded_text, finite_float, iso_date,
     non_negative_float, parts_count, preview,
@@ -58,6 +67,12 @@ _non_negative_float = non_negative_float
 _bounded_int = bounded_int
 _bounded_text = bounded_text
 _iso_date = iso_date
+
+
+def _optional_number(value: Any) -> float | None:
+    """A number, or `None` meaning "clear it". The bounds come later, in the
+    command that knows the product's unit and its largest pack."""
+    return None if value is None else finite_float(value)
 _preview = preview
 _PARTS: Final = parts_count
 
@@ -146,6 +161,12 @@ PRODUCT_EDITABLE: Final[dict[str, Callable[[Any], Any]]] = {
     "default_shelf_life_days": _NON_NEGATIVE_INT,
     "reference_kcal": _NON_NEGATIVE_FLOAT,
     "active": _strict_boolean,
+    # Lot 2bis. Seule la LECTURE du nombre se fait ici : les deux bornes
+    # contextuelles (l'unité du produit, le plus gros paquet connu) ne sont
+    # pas disponibles dans un schéma voluptuous, et la vérification complète
+    # se fait dans product_update via validators.check_manual_portion — une
+    # seule copie de la règle, pour les deux surfaces.
+    "manual_portion": _optional_number,
 }
 # The schema a brand-new product must satisfy: everything PRODUCT_EDITABLE
 # already validates, plus base_unit — which an *edit* deliberately excludes
@@ -162,6 +183,12 @@ NEW_PRODUCT_REQUIRED: Final = ("name", "base_unit")
 def _runtime(hass: HomeAssistant):
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
     return entries[0].runtime_data if entries else None
+
+
+def _options(hass: HomeAssistant) -> Mapping[str, Any]:
+    """The single entry's options, or nothing when no entry is loaded."""
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    return entries[0].options if entries else {}
 
 
 def _send_not_loaded(connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
@@ -354,14 +381,30 @@ async def product_get(hass, connection, msg) -> None:
     if next_batch is not None:
         serving = next(row["serving_quantity"] for row in batches
                        if row["id"] == next_batch.id)
-    suggested, source = ((learned, "learned") if learned is not None
+    # Une valeur SAISIE par une personne l'emporte toujours sur une valeur
+    # déduite, sinon la saisie n'a servi à rien — même règle que
+    # `article.manual_fields` face à une resynchronisation Open Food Facts.
+    # C'est le seul endroit du dépôt qui décide d'une portion.
+    manual = product["manual_portion"]
+    suggested, source = ((manual, "manual") if manual is not None
+                         else (learned, "learned") if learned is not None
                          else (serving, "serving") if serving is not None
                          else (None, None))
+    # L'emballage se lit à la volée sur l'article du lot FIFO, celui que
+    # `list_batches_for_product` a déjà nommé : une lecture ciblée de plus,
+    # jamais une colonne (spec § 9.4).
+    packaging = None
+    if next_batch is not None:
+        article_id = next(row["article_id"] for row in batches
+                          if row["id"] == next_batch.id)
+        raw = await _read(hass, partial(repo.article_off_raw, conn, article_id))
+        packaging = bins_from_raw(raw)
     connection.send_result(msg["id"], {
         "product": product,
         "suggested_portion": suggested,
         "portion_source": source,
         "serving_quantity": serving,
+        "packaging": packaging,
         "next_batch": None if next_batch is None else {
             "id": next_batch.id, "remaining": next_batch.remaining,
             "best_before": next_batch.best_before.isoformat()
@@ -672,10 +715,20 @@ async def product_update(hass, connection, msg) -> None:
             product = repo.get_product(conn, msg["product_id"])
             if product is None:
                 raise LookupError(f"no product {msg['product_id']}")
+            if "manual_portion" in fields:
+                # Dans la transaction déjà ouverte : `Database._lock` n'est
+                # pas réentrant, et une seconde écriture imbriquée figerait
+                # le processus sans lever.
+                fields["manual_portion"] = validators.check_manual_portion(
+                    fields["manual_portion"], base_unit=product["base_unit"],
+                    max_net_quantity=repo.max_net_quantity(conn, msg["product_id"]))
             repo.update_product_fields(conn, msg["product_id"], fields)
 
     try:
         await hass.async_add_executor_job(work)
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
     except (LookupError, OverflowError) as err:
         # OverflowError is a backstop: _bounded_int already bounds
         # product_id/category_id/aisle_id/etc. at the schema level, so this
@@ -865,6 +918,9 @@ async def journal_day(hass, connection, msg) -> None:
     day = date.fromisoformat(msg["date"]) if msg.get("date") else None
     tz = await async_resolve_time_zone(hass)
     result = await _read(hass, partial(runtime.manager.journal_day, day, tz=tz))
+    # Les plafonds vivent dans les options de l'entrée : le gestionnaire ne
+    # connaît pas l'entrée de configuration, et n'a pas à la connaître.
+    result["goals"] = _options(hass).get(CONF_GOALS, {}) or {}
     connection.send_result(msg["id"], result)
 
 

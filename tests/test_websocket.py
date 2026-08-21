@@ -146,3 +146,29 @@ async def test_a_command_reports_not_loaded_once_the_entry_is_unloaded(hass, see
     message = await client.receive_json()
     assert message["success"] is False
     assert message["error"]["code"] == "not_loaded"
+
+
+# --- Lot 2bis : le journal porte les plafonds réglés -------------------------
+
+async def test_journal_day_carries_the_goals_from_the_entry_options(
+        hass, seeded, hass_ws_client):
+    """Les objectifs viennent des options de l'entrée, sans que
+    `application.journal_day` en entende parler : le gestionnaire ne connaît
+    pas l'entrée de configuration."""
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "home_stock/journal/day"})
+    assert (await client.receive_json())["result"]["goals"] == {}
+
+    hass.config_entries.async_update_entry(
+        seeded, options={"nutrition_goals": {"salt": 6.0, "kcal": 2000.0}})
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "home_stock/journal/day"})
+    result = (await client.receive_json())["result"]
+    assert result["goals"] == {"salt": 6.0, "kcal": 2000.0}
+    # Le gestionnaire n'a rien renvoyé de tel : la clé est ajoutée au bord.
+    day = await hass.async_add_executor_job(
+        lambda: seeded.runtime_data.manager.journal_day(
+            None, tz=__import__("zoneinfo").ZoneInfo("UTC")))
+    assert "goals" not in day

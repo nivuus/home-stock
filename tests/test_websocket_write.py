@@ -1355,3 +1355,95 @@ async def test_the_shops_already_used_can_be_read_without_an_open_session(
     result = (await client.receive_json())["result"]
 
     assert result["stores"] == ["Leclerc", "Lidl"]
+
+
+# --- Lot 2bis : la portion manuelle, refusée par le validateur partagé ------
+
+async def _portion(client, valeur, product_id=1):
+    await client.send_json_auto_id({
+        "type": "home_stock/product/update", "product_id": product_id,
+        "fields": {"manual_portion": valeur}})
+    return await client.receive_json()
+
+
+async def _lire_portion(hass, entry, product_id=1):
+    return await hass.async_add_executor_job(
+        lambda: repo.get_product(entry.runtime_data.manager.db.read(),
+                                 product_id)["manual_portion"])
+
+
+async def test_a_manual_portion_is_written_and_cleared(hass, setup_entry,
+                                                       hass_ws_client):
+    entry = await setup_entry(with_article=True)
+    client = await hass_ws_client(hass)
+
+    assert (await _portion(client, 45))["success"]
+    assert await _lire_portion(hass, entry) == 45.0
+    assert (await _portion(client, None))["success"]
+    assert await _lire_portion(hass, entry) is None
+
+
+async def test_a_manual_portion_is_refused_on_a_piece_product(hass, setup_entry,
+                                                              hass_ws_client):
+    """Message français, et rien d'écrit : à la pièce une portion vaut une
+    pièce."""
+    entry = await setup_entry(with_piece_product=True)
+    client = await hass_ws_client(hass)
+
+    answer = await _portion(client, 45)
+    assert answer["success"] is False
+    assert "pièce" in answer["error"]["message"]
+    assert await _lire_portion(hass, entry) is None
+
+
+async def test_a_manual_portion_is_bounded_by_five_thousand_and_by_the_pack(
+        hass, setup_entry, hass_ws_client):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    client = await hass_ws_client(hass)
+
+    trop_grande = await _portion(client, 6000)
+    assert trop_grande["success"] is False
+    assert "5000" in trop_grande["error"]["message"]
+
+    # Aucun poids de paquet connu : la seule borne est celle du lot 2.
+    assert (await _portion(client, 3000))["success"]
+
+    def _set_net_quantity():
+        with manager.db.write() as conn:
+            conn.execute("UPDATE article SET net_quantity = 1000 WHERE id = 1")
+    await hass.async_add_executor_job(_set_net_quantity)
+
+    au_dessus_du_paquet = await _portion(client, 1200)
+    assert au_dessus_du_paquet["success"] is False
+    assert "1000" in au_dessus_du_paquet["error"]["message"]
+    assert await _lire_portion(hass, entry) == 3000.0
+    assert (await _portion(client, 1000))["success"]
+
+
+async def test_the_manual_portion_goes_through_the_shared_validator(
+        hass, setup_entry, hass_ws_client, monkeypatch):
+    """La règle vit dans `validators.py`, jamais recopiée ici : si une
+    deuxième copie apparaissait dans `websocket_api.py`, ce test passerait
+    toujours alors que le service `home_stock.*` de demain serait plus
+    faible."""
+    from custom_components.home_stock import websocket_api
+
+    appels = []
+
+    def _espion(value, *, base_unit, max_net_quantity):
+        appels.append((value, base_unit, max_net_quantity))
+        return 45.0
+
+    monkeypatch.setattr(websocket_api.validators, "check_manual_portion", _espion)
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+
+    def _set_net_quantity():
+        with manager.db.write() as conn:
+            conn.execute("UPDATE article SET net_quantity = 900 WHERE id = 1")
+    await hass.async_add_executor_job(_set_net_quantity)
+    client = await hass_ws_client(hass)
+
+    assert (await _portion(client, 45))["success"]
+    assert appels == [(45.0, "g", 900.0)]
