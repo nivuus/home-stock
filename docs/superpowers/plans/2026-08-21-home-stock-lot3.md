@@ -477,7 +477,7 @@ git commit -m "feat: a batch may carry its own nutrition, and the cascade reads 
 
 **Pourquoi ici et pas un second chemin.** `add_stock` est le seul chemin d'entrée en stock du composant. En ouvrir un second pour les plats cuisinés reviendrait à entretenir deux comportements d'entrée — exactement la dette que le lot 0 a refusée sur la sortie. Les deux nouveaux arguments ont des défauts qui laissent **tous** les appelants existants strictement inchangés.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/test_application.py` :
 
@@ -525,21 +525,21 @@ def test_add_stock_stays_idempotent_with_the_new_arguments(manager):
     assert _count(manager, "SELECT COUNT(*) c FROM movement") == 1
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/test_application.py -q`
 Expected: FAIL — `add_stock() got an unexpected keyword argument 'reason'`.
 
-- [ ] **Step 3: Étendre `add_stock`**
+- [x] **Step 3: Étendre `add_stock`**
 
 Deux arguments nommés en fin de signature ; `nutrition` filtré sur `NUTRITION_COLUMNS` et passé à `repo.insert_batch` ; les valeurs du mouvement d'entrée calculées depuis la nutrition figée quand elle existe, sinon depuis `repo.resolve_kcal_rate` / `repo.macro_rates(article)` comme aujourd'hui. Documenter dans la docstring que `reason` par défaut vaut `purchase` **et pourquoi** on n'a pas ouvert un second chemin.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/test_application.py -q && ./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/application.py tests/test_application.py

@@ -5,6 +5,7 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
@@ -19,6 +20,7 @@ from .const import (
     REASON_INVENTORY,
     REASON_PURCHASE,
     REASON_TRANSFER,
+    REASONS,
 )
 from .domain.conversion import ConversionError, plan_conversion
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
@@ -161,18 +163,45 @@ class StockManager:
                   packaging_base_quantity: float | None = None,
                   occurred_at: str | None = None,
                   idempotency_key: str | None = None,
-                  record_price_observation: bool = True) -> int:
-        """Create a batch and its purchase movement. Returns the batch id.
+                  record_price_observation: bool = True,
+                  reason: str = REASON_PURCHASE,
+                  nutrition: Mapping[str, float | None] | None = None) -> int:
+        """Create a batch and its entry movement. Returns the batch id.
 
         `record_price_observation` defaults to True for every existing
         caller. The one caller that must pass False is the shopping session
         (shopping.store_line): a price observed in the aisle is recorded at
         the moment of the scan, with the shop it was seen in — put-away time
         is not a second observation, so add_stock must not write it again.
+
+        `reason` and `nutrition` are lot 3 (amendment A3), and both default to
+        exactly what every existing caller already did. A cooked dish enters
+        the stock through THIS method, with `reason="cooked"` and the
+        nutrition computed from the ingredients it consumed — rather than
+        through a second entry path. `add_stock` is the only way into the
+        stock, and opening a second one would mean maintaining two entry
+        behaviours forever: the same debt lot 0 refused on the way out.
+
+        `nutrition` freezes on the batch. It is a per-column freeze, not a
+        per-row one: what the dish knows about itself wins, and what it does
+        not know still falls through to the article (see the cascade in
+        `repositories`). A dish that knows its calories but not its fibre
+        must not lose the article's fibre.
         """
+        if reason not in REASONS:
+            raise ValueError(f"unknown reason {reason!r}; expected one of {REASONS}")
         moment = occurred_at or _now()
         amount = to_base_quantity(quantity, packaging_base_quantity)
         stored_key = _namespaced_key("add_stock", idempotency_key)
+        # A full nine-column row, not the caller's partial dict: the two
+        # cascade helpers below index every column rather than probing for it,
+        # so an absent key must arrive as an explicit None. Filtering on
+        # NUTRITION_COLUMNS also stops an invented key from reaching the
+        # INSERT — `nutrition` is computed from a recipe, not typed in a form,
+        # but a stray "remaining" would overwrite the quantity.
+        frozen = None if nutrition is None else {
+            column: nutrition.get(column) for column in NUTRITION_COLUMNS
+        }
         with self.db.write() as conn:
             if stored_key and repo.movement_exists(conn, stored_key):
                 row = conn.execute(
@@ -186,16 +215,19 @@ class StockManager:
             batch_id = repo.insert_batch(
                 conn, article_id=article_id, location_id=location_id, quantity=amount,
                 entered_at=moment, best_before=best_before,
-                price_per_base_unit=price_per_base_unit,
+                price_per_base_unit=price_per_base_unit, nutrition=frozen,
             )
-            kcal_rate = repo.resolve_kcal_rate(conn, article)
+            # The entry movement is valued with the SAME cascade a later
+            # consumption will read off this batch, so entering a dish and
+            # eating it cannot disagree about what it was worth.
+            kcal_rate = repo.resolve_kcal_rate(conn, article, batch=frozen)
             values = movement_values(amount, kcal_rate, price_per_base_unit,
-                                     macro_rates=repo.macro_rates(article))
+                                     macro_rates=repo.batch_macro_rates(frozen, article))
             base_unit = repo.product_base_unit(conn, article["product_id"])
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
-                reason=REASON_PURCHASE, base_unit=base_unit,
+                reason=reason, base_unit=base_unit,
                 kcal=values.kcal, cost=values.cost, macros=values.macros,
                 idempotency_key=stored_key,
             )

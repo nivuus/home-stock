@@ -832,3 +832,83 @@ def test_consume_batch_still_reads_the_article_when_the_batch_is_silent(manager,
     row = manager.db.read().execute(
         "SELECT kcal FROM movement WHERE batch_id = ?", (batch_id,)).fetchone()
     assert row["kcal"] == pytest.approx(350.0)      # 100 g x 3,5
+
+
+# --- lot 3 (amendement A3) : add_stock reste le seul chemin d'entrée ---------
+
+def _one(manager, sql, params=()):
+    return manager.db.read().execute(sql, params).fetchone()
+
+
+def test_add_stock_still_writes_purchase_by_default(manager):
+    article_id, _ = _seed_article(manager)
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+    assert _one(manager, "SELECT reason FROM movement")["reason"] == "purchase"
+
+
+def test_add_stock_can_write_another_reason(manager):
+    article_id, _ = _seed_article(manager)
+    manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                      reason="cooked")
+    assert _one(manager, "SELECT reason FROM movement")["reason"] == "cooked"
+
+
+def test_add_stock_freezes_the_nutrition_on_the_batch(manager):
+    article_id, _ = _seed_article(manager)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0, "proteins": 9.0})
+    row = _one(manager, "SELECT * FROM batch WHERE id = ?", (batch_id,))
+    assert (row["kcal_per_base_unit"], row["proteins"]) == (180.0, 9.0)
+    assert row["fiber"] is None          # non dit reste inconnu, pas zéro
+
+
+def test_the_entry_movement_uses_the_frozen_nutrition_not_the_article(manager):
+    """Le mouvement d'entrée du plat vaut ce que le plat vaut, pas ce que
+    l'article générique dirait."""
+    article_id, _ = _seed_article(manager, kcal_per_base_unit=3.5)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0})
+    assert _one(manager, "SELECT kcal FROM movement WHERE batch_id = ?",
+                (batch_id,))["kcal"] == pytest.approx(540.0)
+
+
+def test_a_frozen_null_macro_still_reads_the_article(manager):
+    """La cascade de la tâche 2 vaut aussi à l'entrée : le plat sait ses
+    calories, il ne sait pas ses protéines, l'article les connaît."""
+    article_id, _ = _seed_article(manager, kcal_per_base_unit=3.5, proteins=0.09)
+    batch_id = manager.add_stock(
+        article_id=article_id, quantity=3.0, location_id=1, reason="cooked",
+        nutrition={"kcal_per_base_unit": 180.0})
+    row = _one(manager, "SELECT kcal, proteins FROM movement WHERE batch_id = ?",
+               (batch_id,))
+    assert row["kcal"] == pytest.approx(540.0)
+    assert row["proteins"] == pytest.approx(0.27)      # 3 x 0,09, pris sur l'article
+
+
+def test_cooked_is_a_reason_but_never_a_counted_one():
+    from custom_components.home_stock.const import CONSUME_REASONS, REASONS
+    assert "cooked" in REASONS
+    assert "cooked" not in CONSUME_REASONS
+
+
+def test_add_stock_stays_idempotent_with_the_new_arguments(manager):
+    article_id, _ = _seed_article(manager)
+    first = manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                              reason="cooked", idempotency_key="k",
+                              nutrition={"kcal_per_base_unit": 180.0})
+    second = manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                               reason="cooked", idempotency_key="k",
+                               nutrition={"kcal_per_base_unit": 180.0})
+    assert first == second
+    assert _one(manager, "SELECT COUNT(*) c FROM movement")["c"] == 1
+
+
+def test_add_stock_refuses_a_reason_it_does_not_know(manager):
+    """Un motif inconnu atteindrait `movement.reason`, que le CHECK du schéma
+    refuse — autant le dire ici, avec le nom du motif fautif."""
+    article_id, _ = _seed_article(manager)
+    with pytest.raises(ValueError, match="grignotage"):
+        manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
+                          reason="grignotage")
