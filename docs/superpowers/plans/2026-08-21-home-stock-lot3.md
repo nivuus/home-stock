@@ -2240,7 +2240,7 @@ git commit -m "feat: French fractions, a pure timer, and the recipe list screen"
 4. **`navigator.wakeLock`, quand l'API existe**, est demandé à l'ouverture et relâché à la sortie. Son absence n'est jamais une erreur : `jsdom` ne l'a pas, la WebView Fire non plus.
 5. **Aucun appel réseau.** La recette vient de `recipe/get`, une fois. Hors ligne, une recette déjà chargée reste lisible — le Wi-Fi de la cuisine n'est pas meilleur que celui d'un rayon de supermarché.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 const RECETTE = { recipe: {...}, steps: [ /* 3 étapes, dont une avec 2 puces et un minuteur */ ],
@@ -2274,11 +2274,11 @@ it('propose « J’ai cuisiné » seulement quand un mealId est fourni', ...);
 it('émet « valider-repas » avec le meal_id depuis la dernière étape', ...);
 ```
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 Run (depuis `frontend/`) : `npm test -- tests/recette.test.ts` → FAIL puis PASS, puis `npm test` complet.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add frontend/src/ecrans/recette.ts frontend/tests/recette.test.ts
 git commit -m "feat: the kitchen view — one page per step, buttons only, no gestures"
