@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from typing import Any, Final
@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 
 from .const import (
     MACRO_COLUMNS,
+    LEFTOVER_NAME_PREFIX,
+    LEFTOVER_SHELF_LIFE_DAYS,
     MATCH_STATES,
     MEAL_HORIZON_DAYS,
     MEAL_SLOT_KEYS,
@@ -34,7 +36,15 @@ from .const import (
 )
 from .domain.conversion import ConversionError, plan_conversion
 from .domain.matching import Candidate, candidates, normalise, preselect
-from .domain.recipes import IngredientLine, Measure, display_amount
+from .domain.recipes import (
+    IngredientLine,
+    IngredientNeed,
+    Measure,
+    display_amount,
+    per_part_values,
+    plan_decrement,
+    scale_factor,
+)
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
@@ -1085,6 +1095,90 @@ class StockManager:
                 (today + timedelta(days=horizon_days)).isoformat()),
         }
 
+    def preview_meal(self, meal_id: int, *, servings: float | None = None,
+                     skip_ingredient_ids: Collection[int] = (),
+                     portions_eaten: float | None = None,
+                     parts_total: int | None = None,
+                     parts_mine: int | None = None,
+                     today: str | None = None) -> dict[str, Any]:
+        """What validating this meal WOULD do. Writes absolutely nothing.
+
+        Runs on a read connection and goes through `domain.recipes.plan_decrement`,
+        which goes through `domain.stock.allocate` — the very function the real
+        consumption uses. A simulation that does not share its code with the
+        execution is a simulation that lies eventually, so there is no second
+        FIFO anywhere in this lot.
+
+        It does not create the leftover product either: the dish summary names
+        the FUTURE product without writing it.
+        """
+        conn = self.db.read()
+        meal = repo.get_meal(conn, meal_id)
+        if meal is None:
+            raise LookupError(f"unknown meal {meal_id}")
+        if meal["state"] == "done":
+            raise ValueError(f"meal {meal_id} is already done")
+
+        wanted = _checked_servings(servings if servings is not None else meal["servings"])
+        skipped = set(skip_ingredient_ids)
+        preview: dict[str, Any] = {
+            "meal_id": meal_id, "day": meal["day"], "slot_key": meal["slot_key"],
+            "recipe": None, "servings": wanted, "factor": 1.0,
+            "lines": [], "by_hand": [], "dish": None, "blocking": [],
+        }
+
+        recipe = (repo.get_recipe(conn, meal["recipe_id"])
+                  if meal["recipe_id"] is not None else None)
+        if recipe is None:
+            # A note meal ("restaurant") decrements nothing and produces no
+            # dish. A product meal is one line, planned like any other.
+            if meal["product_id"] is not None:
+                preview["lines"], preview["by_hand"], preview["blocking"] = (
+                    _plan_product_meal(conn, meal, wanted))
+            return preview
+
+        preview["recipe"] = {"id": recipe["id"], "name": recipe["name"],
+                             "servings": recipe["servings"]}
+        factor = scale_factor(wanted, recipe["servings"])
+        preview["factor"] = factor
+
+        rows = repo.list_ingredients(conn, recipe["id"])
+        lines = [_ingredient_line(row) for row in rows]
+        batches_by_product = {
+            product_id: [as_batch_view(batch)
+                         for batch in repo.list_batches_for_product(conn, product_id)]
+            for product_id in {line.product_id for line in lines
+                               if line.product_id is not None}
+        }
+        needs = plan_decrement(lines, batches_by_product, factor=factor,
+                               skipped_ids=skipped)
+
+        frozen: list[dict[str, float | None]] = []
+        for need, row in zip(needs, rows, strict=True):
+            entry = _need_entry(need, row)
+            if need.status == "ignored":
+                # Salt, pepper, water. Ignored means silent: without this
+                # state the same judgement call would come back at every
+                # recipe, which is the work the alias table exists to shrink.
+                continue
+            if need.status in ("unmatched", "unquantified"):
+                preview["by_hand"].append(entry)
+                continue
+            preview["lines"].append(entry)
+            if need.status == "short":
+                preview["blocking"].append("short")
+            for allocation in need.allocations:
+                values = movement_values(allocation.quantity,
+                                         allocation.kcal_per_base_unit,
+                                         allocation.price_per_base_unit,
+                                         macro_rates=allocation.macros)
+                frozen.append({"kcal": values.kcal, "cost": values.cost,
+                               **values.macros})
+
+        preview["blocking"] = sorted(set(preview["blocking"]))
+        preview["dish"] = _dish_summary(conn, recipe, wanted, frozen, today)
+        return preview
+
 
 # =============================================================================
 # Lot 3 — matching a recipe ingredient onto a catalogue product.
@@ -1358,3 +1452,71 @@ def _checked_slot(slot_key: Any) -> str:
         raise ValueError(
             f"unknown slot {slot_key!r}; expected one of {', '.join(MEAL_SLOT_KEYS)}")
     return slot_key
+
+
+def _need_entry(need: IngredientNeed, row: Mapping[str, Any]) -> dict[str, Any]:
+    """One planned line as the validation screen shows it."""
+    return {
+        "ingredient_id": need.line.id,
+        "label": display_amount(need.line),
+        "product_id": need.line.product_id,
+        "product_name": row["product_name"],
+        "base_unit": need.line.product_base_unit,
+        "status": need.status,
+        "needed": need.needed,
+        "available": need.available,
+        "raw_text": row["raw_text"],
+        "batches": [
+            {"batch_id": allocation.batch_id, "quantity": allocation.quantity}
+            for allocation in need.allocations
+        ],
+    }
+
+
+def _plan_product_meal(conn, meal: Mapping[str, Any],
+                       servings: float) -> tuple[list, list, list]:
+    """A meal that is just a product ("a yoghurt"): one line, no dish."""
+    product = repo.get_product(conn, meal["product_id"])
+    if product is None:
+        return [], [], []
+    line = IngredientLine(
+        id=0, position=1, product_id=product["id"],
+        product_base_unit=product["base_unit"], amount=meal["amount"],
+        packaging_base_quantity=None, packaging_name=None, measure=None,
+        raw_text=product["name"], match_state="confirmed", optional=False)
+    batches = [as_batch_view(batch)
+               for batch in repo.list_batches_for_product(conn, product["id"])]
+    [need] = plan_decrement([line], {product["id"]: batches}, factor=servings)
+    entry = _need_entry(need, {"product_name": product["name"],
+                               "raw_text": product["name"]})
+    if need.status in ("unmatched", "unquantified"):
+        return [], [entry], []
+    return [entry], [], ["short"] if need.status == "short" else []
+
+
+def _dish_summary(conn, recipe: Mapping[str, Any], parts: float,
+                  frozen: Sequence[Mapping[str, float | None]],
+                  today: str | None) -> dict[str, Any]:
+    """What the cooked dish will be worth, per part.
+
+    The rates are the ones the batches the FIFO is aiming at actually carry —
+    the same frozen values the write will record. A number shown before the
+    write must be the number that gets written, or showing it is worse than
+    showing nothing.
+    """
+    shelf_life = recipe["leftover_shelf_life_days"] or LEFTOVER_SHELF_LIFE_DAYS
+    day = date.fromisoformat(today) if today else datetime.now(UTC).date()
+    per_part = per_part_values(frozen, parts)
+    costs = [row["cost"] for row in frozen]
+    return {
+        "product_name": f"{LEFTOVER_NAME_PREFIX}{recipe['name']}",
+        "parts": parts,
+        "best_before": (day + timedelta(days=shelf_life)).isoformat(),
+        "cost": None if not costs or any(c is None for c in costs)
+                else sum(costs) / parts,
+        # How many decrements carried no value at all. `kcal_today` already
+        # counts these in its `unvalued_movements` attribute; the dish says
+        # the same thing at the moment the choice is still reversible.
+        "unvalued": sum(1 for row in frozen if row["kcal"] is None),
+        **per_part,
+    }

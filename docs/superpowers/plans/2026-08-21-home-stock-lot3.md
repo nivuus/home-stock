@@ -1535,7 +1535,7 @@ Ce qu'elle rend :
 - `blocking` porte les raisons pour lesquelles `validate_meal` refuserait aujourd'hui. **Une ligne `short` bloque** tant qu'elle n'a pas été soit acceptée (le panneau renvoie la quantité réduite), soit retirée (`skip_ingredient_ids`) : servir 200 g quand on en demande 500 sans le dire écrit un chiffre faux.
 - **Une ligne `unmatched`, `unquantified` ou `ignored` ne bloque jamais rien.** Refuser un dîner entier parce qu'une gousse d'ail n'est pas appariée serait une leçon de morale, pas un outil.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_preview_writes_absolutely_nothing(manager):
@@ -1573,13 +1573,13 @@ def test_the_preview_uses_the_same_allocation_function_as_the_write(manager, mon
     assert calls, "la simulation doit passer par domain.stock.allocate"
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meal_preview.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_meal_preview.py -q`
 
-- [ ] **Step 3: Écrire `preview_meal`**
+- [x] **Step 3: Écrire `preview_meal`**
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_meal_preview.py -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_meal_preview.py -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meal_preview.py
 git commit -m "feat: simulate a meal without writing, on the very same FIFO"
