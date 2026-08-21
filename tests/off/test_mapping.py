@@ -397,3 +397,46 @@ def test_map_article_survives_a_malformed_categories_tags():
 
     assert mapped.aisle == "Fromages"
     assert mapped.label == "Emmental râpé"
+
+
+from custom_components.home_stock.off.mapping import plausible_serving, serving_from_raw
+
+
+def test_plausible_serving_accepts_a_number_and_a_numeric_string():
+    assert plausible_serving(30, base_unit="g", net_quantity=500) == 30.0
+    assert plausible_serving("30", base_unit="g", net_quantity=500) == 30.0
+    assert plausible_serving("12,5", base_unit="ml", net_quantity=1000) == 12.5
+
+
+def test_plausible_serving_refuses_a_piece_product():
+    # A serving of a product tracked by the piece is one piece: the column
+    # has nothing to say, and a number in grams would be a trap there.
+    assert plausible_serving(30, base_unit="piece", net_quantity=None) is None
+
+
+def test_plausible_serving_refuses_zero_and_the_absurd():
+    assert plausible_serving(0, base_unit="g", net_quantity=500) is None
+    assert plausible_serving(-5, base_unit="g", net_quantity=500) is None
+    assert plausible_serving(5000.1, base_unit="g", net_quantity=None) is None
+    assert plausible_serving(5000, base_unit="g", net_quantity=None) == 5000.0
+
+
+def test_plausible_serving_refuses_a_serving_bigger_than_the_pack():
+    assert plausible_serving(300, base_unit="g", net_quantity=250) is None
+    # Exactly the pack size stays plausible: a single-serving tin.
+    assert plausible_serving(250, base_unit="g", net_quantity=250) == 250.0
+
+
+def test_plausible_serving_refuses_malformed_text():
+    for value in ("", "1,", "trente", None, True, [30]):
+        assert plausible_serving(value, base_unit="g", net_quantity=None) is None
+
+
+def test_serving_from_raw_reads_the_stored_record():
+    raw = '{"serving_quantity": "30", "product_name": "Yaourt"}'
+    assert serving_from_raw(raw, base_unit="g", net_quantity=125) == 30.0
+
+
+def test_serving_from_raw_survives_anything_unusable():
+    for raw in (None, "", "{tronqu", "[1, 2]", '"une chaine"', "{}"):
+        assert serving_from_raw(raw, base_unit="g", net_quantity=None) is None

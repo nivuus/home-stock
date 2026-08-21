@@ -13,6 +13,8 @@ from typing import Any, Final
 
 import voluptuous as vol
 
+from .const import MAX_PARTS
+
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
 
@@ -99,6 +101,21 @@ def bounded_int(value: Any) -> int:
     if not _SQLITE_INT_MIN <= number <= _SQLITE_INT_MAX:
         raise vol.Invalid(f"out of range for a 64-bit integer: {value!r}")
     return number
+
+
+def parts_count(value: Any) -> int:
+    """A number of plates: a real integer between 0 and MAX_PARTS.
+
+    Stricter than `bounded_int` on purpose. A float would silently truncate
+    (2.9 plates becoming 2 changes the divisor of someone's calories), and a
+    bool is an integer in Python — `parts_mine: true` must not be read as one
+    plate.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid(f"expected a whole number of parts, got {preview(value)}")
+    if not 0 <= value <= MAX_PARTS:
+        raise vol.Invalid(f"parts must be between 0 and {MAX_PARTS}, got {value}")
+    return value
 
 
 def preview(value: Any, limit: int = 80) -> str:

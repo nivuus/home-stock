@@ -106,3 +106,26 @@ def test_an_oversized_allergens_list_is_dropped_and_reported():
     assert "allergens" in ingest.dropped_fields
     # The rest of the record is unaffected by one oversized tag list.
     assert ingest.values["brand"] == "Bjorg"
+
+
+def test_build_article_values_reads_the_serving():
+    ingest = build_article_values(
+        {"product_name": "Yaourt", "product_quantity": "125",
+         "product_quantity_unit": "g", "serving_quantity": "100"},
+        "food", "g", synced_at="2026-08-20T10:00:00")
+    assert ingest.values["serving_quantity"] == 100.0
+
+
+def test_build_article_values_drops_an_implausible_serving():
+    ingest = build_article_values(
+        {"product_name": "Yaourt", "product_quantity": "125",
+         "product_quantity_unit": "g", "serving_quantity": "500"},
+        "food", "g", synced_at="2026-08-20T10:00:00")
+    assert "serving_quantity" not in ingest.values
+
+
+def test_a_piece_product_never_gets_a_serving():
+    ingest = build_article_values(
+        {"product_name": "Pomme", "serving_quantity": "150"},
+        "food", "piece", synced_at="2026-08-20T10:00:00")
+    assert "serving_quantity" not in ingest.values

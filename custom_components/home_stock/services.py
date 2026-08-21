@@ -12,7 +12,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, REASON_CONSUMPTION, REASON_EXPIRED, REASON_WASTE
+from .application import PartsError
+from .const import CONSUME_REASONS, DOMAIN, REASON_CONSUMPTION
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
 from .import_grocy import import_catalog
@@ -21,18 +22,10 @@ from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
 from .validators import (
-    bounded_int, bounded_text, finite_float, iso_date, non_negative_float,
+    bounded_int, bounded_text, finite_float, iso_date, non_negative_float, parts_count,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Reasons a "consume" call may legitimately carry — the same three the
-# services.yaml selector offers. The other three reasons (purchase, inventory,
-# transfer) are written exclusively by add_stock/adjust_inventory/transfer_batch;
-# letting them through here would tag a negative-quantity movement with a
-# reason that COUNTED_REASONS does not track, silently under-counting the
-# kcal/cost totals for stock that really did leave the pantry.
-CONSUME_REASONS = (REASON_CONSUMPTION, REASON_WASTE, REASON_EXPIRED)
 
 # Home Assistant's own cv.positive_int is vol.All(vol.Coerce(int),
 # vol.Range(min=0)): it truncates a float silently, accepts a bare JSON
@@ -63,6 +56,12 @@ CONSUME_SCHEMA = vol.Schema({
     vol.Required("product_id"): _id,
     vol.Required("quantity"): finite_float,
     vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
+    vol.Optional("batch_id"): _id,
+    # parts_count, not `_id`: a number of plates is neither an identifier nor
+    # a float that may truncate, and the websocket surface refuses exactly the
+    # same values. Neither surface may be the weaker one.
+    vol.Optional("parts_total"): parts_count,
+    vol.Optional("parts_mine"): parts_count,
     vol.Optional("idempotency_key"): bounded_text,
 })
 BATCH_SCHEMA = vol.Schema({vol.Required("batch_id"): _id})
@@ -118,14 +117,21 @@ async def _run(hass: HomeAssistant, work) -> Any:
     depending on whether the panel or a script asked. Re-raising `str(error)`
     here used to leak the English original ("unknown article 5") into a
     notification and a voice answer.
+
+    `LookupError` is caught alongside the `ValueError` family for the same
+    reason: `repo.product_base_unit` raises it for an unknown product id
+    (StockManager.consume's FIFO path calls it directly with the caller's
+    own `product_id`, before any existence check), and the websocket surface
+    already catches it (`websocket_api._send_domain_error`'s callers list it
+    explicitly). Missing it here meant a well-formed but nonexistent
+    `product_id` — a deleted product an automation still references — raised
+    a bare Python `LookupError` straight into the Home Assistant log instead
+    of a French refusal: the exact weaker-surface asymmetry this lot's rule
+    forbids.
     """
     try:
         return await hass.async_add_executor_job(work)
-    except InsufficientStock as error:
-        raise HomeAssistantError(
-            f"Stock insuffisant : {error.requested} demandé, {error.available} disponible."
-        ) from error
-    except (UnitError, ValueError) as error:
+    except (InsufficientStock, LookupError, PartsError, UnitError, ValueError) as error:
         raise HomeAssistantError(french_message(error)) from error
     except OverflowError as error:
         # Backstop, not the primary defence: ADD_STOCK_SCHEMA/CONSUME_SCHEMA/
@@ -239,13 +245,32 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def consume(call: ServiceCall) -> None:
         entry = _entry(hass)
-        await _run(hass, partial(
-            entry.runtime_data.manager.consume,
-            product_id=call.data["product_id"],
-            quantity=call.data["quantity"],
-            reason=call.data["reason"],
-            idempotency_key=call.data.get("idempotency_key"),
-        ))
+        manager = entry.runtime_data.manager
+        parts_total = call.data.get("parts_total")
+        parts_mine = call.data.get("parts_mine")
+        batch_id = call.data.get("batch_id")
+        if batch_id is not None:
+            # product_id is still passed for the consistency check: a batch
+            # belonging to the wrong product must be refused, not silently
+            # consumed — the same guard the websocket surface relies on.
+            work = partial(
+                manager.consume_batch, batch_id,
+                product_id=call.data["product_id"],
+                quantity=call.data["quantity"],
+                reason=call.data["reason"],
+                parts_total=parts_total, parts_mine=parts_mine,
+                idempotency_key=call.data.get("idempotency_key"),
+            )
+        else:
+            work = partial(
+                manager.consume,
+                product_id=call.data["product_id"],
+                quantity=call.data["quantity"],
+                reason=call.data["reason"],
+                parts_total=parts_total, parts_mine=parts_mine,
+                idempotency_key=call.data.get("idempotency_key"),
+            )
+        await _run(hass, work)
         await entry.runtime_data.coordinator.async_request_refresh()
 
     async def open_batch(call: ServiceCall) -> None:

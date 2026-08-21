@@ -69,6 +69,13 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     # aisles — so both schemas have to accept the key the queue stamps.
     "home_stock/session/start",
     "home_stock/session/close",
+    # Lot 2, task 14: the "manger" screen declares what was eaten, thrown
+    # away, or found expired. It's stood in the kitchen, not a shop aisle,
+    # but the network there is no more reliable — this is the first command
+    # this screen queues, and the exact gap that stalled a whole cart behind
+    # one refused button in lot 1's round 1 (see this file's module
+    # docstring) if its schema didn't accept the queue's idempotency key.
+    "home_stock/stock/consume",
 }
 
 
@@ -138,6 +145,16 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert added_stock["success"] is True, added_stock.get("error")
     tested.add("home_stock/stock/add")
+
+    # No batch_id: the "manger" screen always targets one, but the schema
+    # doesn't require it (a caller can let FIFO pick) — the 200 g just
+    # added above is what gets walked.
+    consumed = await _send(
+        client, _id(), "home_stock/stock/consume", product_id=1, quantity=50,
+        reason="consumption", idempotency_key="contract-stock-consume",
+    )
+    assert consumed["success"] is True, consumed.get("error")
+    tested.add("home_stock/stock/consume")
 
     updated_product = await _send(
         client, _id(), "home_stock/product/update", product_id=1,

@@ -16,7 +16,7 @@ describe('file d’attente hors ligne', () => {
     const file = new FileAttente(new StockageFactice(), async () => {});
     const a = file.ajouter('home_stock/session/add_line', { article_id: 1 });
     const b = file.ajouter('home_stock/session/add_line', { article_id: 1 });
-    expect(a).not.toBe(b);
+    expect(a.cle).not.toBe(b.cle);
   });
 
   it('survit à un rechargement de la page', () => {
@@ -70,7 +70,7 @@ describe('file d’attente hors ligne', () => {
 
   it('n’écrase pas une clé fournie par l’appelant', () => {
     const file = new FileAttente(new StockageFactice(), async () => {});
-    const cle = file.ajouter('t', { idempotency_key: 'imposée' });
+    const { cle } = file.ajouter('t', { idempotency_key: 'imposée' });
     expect(cle).toBe('imposée');
   });
 
@@ -163,40 +163,22 @@ describe('file d’attente hors ligne : refus du serveur contre panne réseau', 
       'Cette ligne est déjà rangée : corrigez le lot, pas la liste.',
     );
   });
-});
 
-describe('file d’attente hors ligne : le sort d’une action ne s’accumule pas indéfiniment', () => {
-  it('retire une entrée dès qu’elle est lue : un deuxième appel ne retrouve plus rien', async () => {
-    const file = new FileAttente(new StockageFactice(), async () => {});
-    const cle = file.ajouter('t', { n: 1 });
-
-    await file.rejouer();
-
-    expect(file.resultatDe(cle)).toBe('envoyee');
-    expect(file.resultatDe(cle)).toBeUndefined();
-  });
-
-  it('purge les sorts jamais réclamés (viderResultats) — le rejeu générique du panneau, au démarrage '
-     + 'ou au retour réseau, ne connaît aucune clé précise à réclamer lui-même', async () => {
-    const file = new FileAttente(new StockageFactice(), async () => {});
-    const cle = file.ajouter('t', { n: 1 });
-    await file.rejouer(); // personne ne lit `cle` — exactement ce que fait un rejeu générique
-
-    file.viderResultats();
-
-    expect(file.resultatDe(cle)).toBeUndefined();
-  });
-
-  it('un refus jamais réclamé est purgé de la même façon qu’un envoi réussi', async () => {
+  it('montre le chiffre du stock insuffisant plutôt que le message générique '
+     + '(insufficient_stock existe côté serveur depuis le lot 0, mais aucune action mise en '
+     + 'file ne pouvait le produire avant le lot 2 — voir consommation.ts)', async () => {
+    const surRefus = vi.fn();
     const file = new FileAttente(new StockageFactice(), async () => {
-      throw { code: 'invalid_field', message: 'Écriture refusée : donnée invalide.' };
-    });
-    const cle = file.ajouter('t', { n: 1 });
+      throw { code: 'insufficient_stock', message: 'Stock insuffisant : 200 g demandé, 120 g disponible.' };
+    }, surRefus);
+    file.ajouter('home_stock/stock/consume', { product_id: 1, quantity: 200 });
+
     await file.rejouer();
 
-    file.viderResultats();
-
-    expect(file.resultatDe(cle)).toBeUndefined();
+    expect(surRefus).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'home_stock/stock/consume' }),
+      'Stock insuffisant : 200 g demandé, 120 g disponible.',
+    );
   });
 });
 
@@ -245,12 +227,61 @@ describe('file d’attente : un seul rejeu à la fois', () => {
     const premier = file.rejouer();
     await Promise.resolve();
 
-    const cle = file.ajouter('t', {});
-    const second = file.rejouer().then(() => file.resultatDe(cle));
+    const suivi = file.ajouter('t', {});
+    const second = file.rejouer();
 
     debloquer();
-    await premier;
+    await Promise.all([premier, second]);
 
-    expect(await second).toBe('envoyee');
+    expect(await suivi.sort).toBe('envoyee');
+  });
+});
+
+describe('file d’attente : le passage de relais par clé', () => {
+  it('rend un sort par action, sans table partagée', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => undefined);
+    const premier = file.ajouter('home_stock/stock/consume', { product_id: 1 });
+    const second = file.ajouter('home_stock/stock/consume', { product_id: 2 });
+    await file.rejouer();
+    expect(await premier.sort).toBe('envoyee');
+    expect(await second.sort).toBe('envoyee');
+  });
+
+  it('un rejeu générique concurrent n’emporte plus le sort d’un écran', async () => {
+    // La course exacte que le lot 1 avait laissée ouverte : le rejeu du panneau
+    // démarre avant l'écriture d'un écran, et son `.then` effaçait la table
+    // partagée avant que l'écran n'ait lu SON résultat.
+    const file = new FileAttente(new StockageFactice(), async () => undefined);
+    const generique = file.rejouer();
+    const suivi = file.ajouter('home_stock/stock/consume', { product_id: 1 });
+    await Promise.all([generique, file.rejouer()]);
+    expect(await suivi.sort).toBe('envoyee');
+  });
+
+  it('résout « en-attente » quand le transport est tombé, sans vider la file', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => { throw new Error('hors ligne'); });
+    const suivi = file.ajouter('home_stock/stock/consume', { product_id: 1 });
+    await file.rejouer();
+    expect(await suivi.sort).toBe('en-attente');
+    expect(file.taille()).toBe(1);
+  });
+
+  it('résout « refusee » sur un refus du serveur et retire l’action', async () => {
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'invalid_field', message: 'Les parts sont incohérentes.' };
+    });
+    const suivi = file.ajouter('home_stock/stock/consume', { product_id: 1 });
+    await file.rejouer();
+    expect(await suivi.sort).toBe('refusee');
+    expect(file.taille()).toBe(0);
+  });
+
+  it('une action restaurée du stockage local n’attend personne', async () => {
+    const stockage = new StockageFactice();
+    stockage.setItem('home_stock.file', JSON.stringify(
+      [{ type: 'home_stock/stock/add', charge: { idempotency_key: 'x' } }]));
+    const file = new FileAttente(stockage, async () => undefined);
+    await expect(file.rejouer()).resolves.toBeUndefined();
+    expect(file.taille()).toBe(0);
   });
 });

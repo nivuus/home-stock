@@ -1,6 +1,8 @@
+from zoneinfo import ZoneInfo
+
 import pytest
 
-from custom_components.home_stock.application import StockManager
+from custom_components.home_stock.application import PartsError, StockManager
 from custom_components.home_stock.domain.stock import InsufficientStock
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
@@ -30,8 +32,10 @@ def pasta(manager):
     return {"location_id": location_id, "product_id": product_id, "article_id": article_id}
 
 
-def _seed_article(manager, *, base_unit: str = "g") -> int:
-    """Seed one location, one product and one article. Returns the article id.
+def _seed_article(manager, *, base_unit: str = "g",
+                  kcal_per_base_unit: float | None = None,
+                  proteins: float | None = None) -> tuple[int, int]:
+    """Seed one location, one product and one article. Returns (article_id, product_id).
 
     In a fresh test database this lands location, product and article all on
     id 1, which is what callers hardcoding product_id=1/location_id=1 rely on.
@@ -39,7 +43,11 @@ def _seed_article(manager, *, base_unit: str = "g") -> int:
     with manager.db.write() as conn:
         repo.insert_location(conn, name="Placard", kind="pantry")
         product_id = repo.insert_product(conn, name="Article", base_unit=base_unit)
-        return repo.insert_article(conn, product_id=product_id)
+        article_id = repo.insert_article(
+            conn, product_id=product_id,
+            kcal_per_base_unit=kcal_per_base_unit, proteins=proteins,
+        )
+        return article_id, product_id
 
 
 def test_add_stock_creates_a_batch_and_a_purchase_movement(manager, pasta):
@@ -290,7 +298,7 @@ def test_summary_reports_value_expirations_and_shortages(manager, pasta):
     manager.add_stock(article_id=pasta["article_id"], quantity=100,
                       location_id=pasta["location_id"], best_before="2026-08-19",
                       price_per_base_unit=0.004, occurred_at="2026-08-18T10:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.4)
     assert summary["batch_count"] == 1
     assert len(summary["expiring"]) == 1
@@ -310,7 +318,7 @@ def test_summary_breaks_the_stock_value_down_per_location(manager, pasta):
     manager.add_stock(article_id=pasta["article_id"], quantity=50,
                       location_id=freezer_id, price_per_base_unit=0.004,
                       occurred_at="2026-08-18T11:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.6)
     assert summary["stock_value_by_location"] == {
         "Placard": pytest.approx(0.4), "Congélateur": pytest.approx(0.2),
@@ -348,7 +356,7 @@ def test_summary_reports_a_shortage_when_stock_reaches_zero(manager, pasta):
                       location_id=pasta["location_id"], occurred_at="2026-08-18T10:00:00")
     manager.consume(product_id=pasta["product_id"], quantity=100,
                     occurred_at="2026-08-18T19:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-19")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-19")
     assert summary["batch_count"] == 0
     assert [s["product_name"] for s in summary["shortages"]] == ["Pâtes"]
 
@@ -429,7 +437,7 @@ def test_summary_excludes_unpriced_batches_from_stock_value(manager, pasta):
                       occurred_at="2026-08-18T10:00:00")
     manager.add_stock(article_id=pasta["article_id"], quantity=50,
                       location_id=pasta["location_id"], occurred_at="2026-08-18T11:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
     assert summary["stock_value"] == pytest.approx(0.4)   # only the priced batch
     assert summary["batch_count"] == 2
     assert summary["unpriced_batches"] == 1
@@ -520,10 +528,33 @@ def test_consume_batch_refuses_an_unknown_batch(manager):
         manager.consume_batch(999999, occurred_at="2026-08-18T19:00:00")
 
 
-def test_summary_totals_also_count_waste_and_expired(manager, pasta):
-    """Only consumption was exercised so far — waste and expired feed the same
-    cumulative totals (spec 7.5), which is the whole basis of the lot 2
-    per-day breakdown."""
+def test_consume_batch_refuses_a_batch_of_another_product(manager, pasta):
+    """product_id, when given, is checked against the batch's own article —
+    the pair is refused rather than trusting either side of it (lot 2: the
+    panel always sends both, targeting the batch FIFO would pick)."""
+    batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=200,
+                                 location_id=pasta["location_id"],
+                                 occurred_at="2026-08-18T10:00:00")
+    with manager.db.write() as conn:
+        other_product_id = repo.insert_product(conn, name="Riz", base_unit="g")
+
+    with pytest.raises(ValueError, match="does not belong to product"):
+        manager.consume_batch(batch_id, product_id=other_product_id,
+                              occurred_at="2026-08-18T19:00:00")
+
+    # Refused before any write: the batch is untouched and no movement exists.
+    with manager.db.write() as conn:
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        movement = conn.execute(
+            "SELECT * FROM movement WHERE reason = 'consumption'").fetchone()
+    assert batch["remaining"] == 200
+    assert movement is None
+
+
+def test_summary_totals_keep_waste_and_expired_out_of_kcal_and_cost(manager, pasta):
+    """Lot 2, amendment A2: kcal_total and cost_total now count consumption
+    only, and cost_waste_total picks up waste and expiry instead, so that
+    cost_total + cost_waste_total gives back the former, single total."""
     batch_id = manager.add_stock(article_id=pasta["article_id"], quantity=500,
                                  location_id=pasta["location_id"], price_per_base_unit=0.004,
                                  occurred_at="2026-08-01T10:00:00")
@@ -531,18 +562,21 @@ def test_summary_totals_also_count_waste_and_expired(manager, pasta):
                     occurred_at="2026-08-02T10:00:00")
     manager.consume_batch(batch_id, quantity=50, reason="expired",
                           occurred_at="2026-08-03T10:00:00")
-    summary = manager.summary(expiration_alert_days=3, today="2026-08-18")
-    # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each.
-    assert summary["kcal_total"] == pytest.approx(150 * 3.5, rel=1e-3)
-    assert summary["cost_total"] == pytest.approx(150 * 0.004, rel=1e-3)
+    summary = manager.summary(expiration_alert_days=3, tz=ZoneInfo("UTC"), today="2026-08-18")
+    # 100 g waste + 50 g expired, at 3.5 kcal/g and 0.004 EUR/g each — none of
+    # it eaten, so kcal_total stays at zero and the money moves to
+    # cost_waste_total instead of cost_total.
+    assert summary["kcal_total"] == 0.0
+    assert summary["cost_total"] == 0.0
+    assert summary["cost_waste_total"] == pytest.approx(150 * 0.004, rel=1e-3)
 
 
 def test_every_movement_written_carries_its_unit(manager):
     """A quantity without its unit is unreadable the day the product converts."""
-    article_id = _seed_article(manager, base_unit="g")
+    article_id, product_id = _seed_article(manager, base_unit="g")
 
     manager.add_stock(article_id=article_id, quantity=500, location_id=1)
-    manager.consume(product_id=1, quantity=200, reason="consumption")
+    manager.consume(product_id=product_id, quantity=200, reason="consumption")
 
     with manager.db.write() as conn:
         rows = conn.execute("SELECT reason, base_unit FROM movement ORDER BY id").fetchall()
@@ -551,10 +585,211 @@ def test_every_movement_written_carries_its_unit(manager):
 
 
 def test_the_unit_written_is_the_product_s_own(manager):
-    article_id = _seed_article(manager, base_unit="ml")
+    article_id, _product_id = _seed_article(manager, base_unit="ml")
 
     manager.add_stock(article_id=article_id, quantity=750, location_id=1)
 
     with manager.db.write() as conn:
         row = conn.execute("SELECT base_unit FROM movement ORDER BY id DESC LIMIT 1").fetchone()
     assert row["base_unit"] == "ml"
+
+
+def test_add_stock_freezes_the_macros_of_the_moment(manager):
+    """The purchase movement must freeze macros too: add_stock is the third of
+    the three call sites this lot wires (add_stock, consume, consume_batch),
+    and only this one had no test reading `movement.proteins` back."""
+    article_id, _product_id = _seed_article(manager, base_unit="g",
+                                            kcal_per_base_unit=1.2, proteins=0.05)
+
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    with manager.db.write() as conn:
+        conn.execute("UPDATE article SET proteins = 99.0 WHERE id = ?", (article_id,))
+
+    row = manager.db.read().execute(
+        "SELECT proteins FROM movement WHERE reason = 'purchase'").fetchone()
+    assert row["proteins"] == pytest.approx(25.0)
+
+
+def test_add_stock_of_an_article_without_macros_writes_nulls(manager):
+    article_id, _product_id = _seed_article(manager, base_unit="g",
+                                            kcal_per_base_unit=None, proteins=None)
+
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    row = manager.db.read().execute(
+        "SELECT proteins FROM movement WHERE reason = 'purchase'").fetchone()
+    assert row["proteins"] is None
+
+
+def test_consuming_freezes_the_macros_of_the_moment(manager):
+    """The test that actually matters: resyncing the article AFTER the fact
+    must not change the movement already written. That is the whole point
+    of these columns, not an implementation detail."""
+    article_id, product_id = _seed_article(manager, base_unit="g",
+                                           kcal_per_base_unit=1.2, proteins=0.05)
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=200.0)
+
+    with manager.db.write() as conn:
+        conn.execute("UPDATE article SET proteins = 99.0 WHERE id = ?", (article_id,))
+
+    row = manager.db.read().execute(
+        "SELECT proteins, kcal FROM movement WHERE reason = 'consumption'").fetchone()
+    assert row["proteins"] == pytest.approx(10.0)
+    assert row["kcal"] == pytest.approx(240.0)
+
+
+def test_consuming_an_article_without_macros_writes_nulls(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g",
+                                           kcal_per_base_unit=None, proteins=None)
+    manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=200.0)
+
+    row = manager.db.read().execute(
+        "SELECT kcal, proteins FROM movement WHERE reason = 'consumption'").fetchone()
+    assert row["kcal"] is None
+    assert row["proteins"] is None
+
+
+def test_consume_batch_freezes_the_macros_too(manager):
+    article_id, _product_id = _seed_article(manager, base_unit="g",
+                                            kcal_per_base_unit=1.2, proteins=0.05)
+    batch_id = manager.add_stock(article_id=article_id, quantity=500.0, location_id=1)
+
+    manager.consume_batch(batch_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT proteins FROM movement WHERE reason = 'consumption'").fetchone()
+    assert row["proteins"] == pytest.approx(5.0)
+
+
+def test_parts_are_written_on_a_consumption(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g", kcal_per_base_unit=1.2)
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=400.0, parts_total=4, parts_mine=1)
+
+    row = manager.db.read().execute(
+        "SELECT parts_total, parts_mine, kcal FROM movement"
+        " WHERE reason = 'consumption'").fetchone()
+    assert (row["parts_total"], row["parts_mine"]) == (4, 1)
+    # The FROZEN kcal stays that of everything taken out of stock: the
+    # division by the parts happens at read time, never at write time —
+    # otherwise the quantity and the kcal of the same movement would no
+    # longer agree with each other.
+    assert row["kcal"] == pytest.approx(480.0)
+
+
+def test_parts_default_to_nothing_at_all(manager):
+    """Without parts, the columns stay NULL — and NULL means 1/1 at read
+    time. Writing 1/1 in stone would taint the whole history predating lot 2
+    with data that was never actually entered."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=100.0)
+
+    row = manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchone()
+    assert row["parts_total"] is None and row["parts_mine"] is None
+
+
+def test_parts_mine_may_be_zero(manager):
+    """"I served my guests, I didn't eat any of it": the stock leaves, the
+    food journal carries none of it."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=400.0, parts_total=4, parts_mine=0)
+
+    row = manager.db.read().execute(
+        "SELECT parts_mine FROM movement WHERE reason = 'consumption'").fetchone()
+    assert row["parts_mine"] == 0
+
+
+def test_more_parts_eaten_than_served_is_refused(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=2, parts_mine=3)
+
+    assert manager.db.read().execute("SELECT COUNT(*) FROM movement"
+                                     " WHERE reason = 'consumption'").fetchone()[0] == 0
+
+
+def test_zero_parts_served_is_refused(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=0, parts_mine=0)
+
+
+def test_too_many_parts_served_is_refused(manager):
+    """The symmetric case of test_zero_parts_served_is_refused: past
+    MAX_PARTS, `parts_total` is not a shared meal any more, it is a typo."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0,
+                        parts_total=25, parts_mine=1)
+
+    assert manager.db.read().execute("SELECT COUNT(*) FROM movement"
+                                     " WHERE reason = 'consumption'").fetchone()[0] == 0
+
+
+def test_parts_on_waste_are_refused(manager):
+    """Nobody shares a bin: accepting parts here would write data that makes
+    no sense, and that the day's totals ignore anyway."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, reason="waste",
+                        parts_total=2, parts_mine=1)
+
+
+def test_only_one_part_given_is_refused(manager):
+    """Giving one without the other is an incomplete entry, not a default."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, parts_total=4)
+    with pytest.raises(PartsError):
+        manager.consume(product_id=product_id, quantity=100.0, parts_mine=1)
+
+
+def test_parts_spread_over_several_batches_land_on_every_movement(manager):
+    """A consumption spanning two batches writes two movements: both carry
+    the same parts, otherwise half the meal would be counted for the whole
+    household."""
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    manager.add_stock(article_id=article_id, quantity=100.0, location_id=1)
+    manager.add_stock(article_id=article_id, quantity=100.0, location_id=1)
+
+    manager.consume(product_id=product_id, quantity=150.0, parts_total=3, parts_mine=1)
+
+    rows = manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchall()
+    assert len(rows) == 2
+    assert all((r["parts_total"], r["parts_mine"]) == (3, 1) for r in rows)
+
+
+def test_consume_batch_accepts_parts_and_an_idempotency_key(manager):
+    article_id, product_id = _seed_article(manager, base_unit="g")
+    batch_id = manager.add_stock(article_id=article_id, quantity=800.0, location_id=1)
+
+    first = manager.consume_batch(batch_id, quantity=100.0, parts_total=2,
+                                  parts_mine=1, idempotency_key="abc")
+    second = manager.consume_batch(batch_id, quantity=100.0, parts_total=2,
+                                   parts_mine=1, idempotency_key="abc")
+
+    assert first == second
+    assert manager.db.read().execute(
+        "SELECT COUNT(*) FROM movement WHERE reason = 'consumption'").fetchone()[0] == 1

@@ -7,8 +7,11 @@ from __future__ import annotations
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from .const import (
+    MACRO_COLUMNS,
+    MAX_PARTS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
     REASON_CONVERSION,
@@ -17,6 +20,7 @@ from .const import (
     REASON_TRANSFER,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
@@ -29,6 +33,43 @@ NUTRITION_COLUMNS: Final = (
     "kcal_per_base_unit", "proteins", "carbohydrates", "sugars", "added_sugars",
     "fat", "saturated_fat", "fiber", "salt",
 )
+
+# The keys a bucket and a day both carry. One definition, so a series and a
+# day can never disagree about what "kcal" means.
+_TOTAL_KEYS: Final = ("kcal", *MACRO_COLUMNS, "cost", "waste_cost", "unvalued")
+
+# The two stages of an expiry announcement, in the only order they may occur.
+EXPIRY_STAGES: Final = ("approaching", "expired")
+
+
+def _empty_totals() -> dict[str, float]:
+    return {key: 0.0 for key in _TOTAL_KEYS}
+
+
+def _accumulate(totals: dict[str, float], row: dict[str, Any]) -> None:
+    """Add one movement to a bucket, splitting it the way repo.totals_between's
+    SQL does: personal share on the nutrients, never on the money.
+
+    This function does not itself filter by reason — every row that is not a
+    consumption is booked as waste, whatever its reason. It relies on its only
+    caller, repo.counted_movements, to have already excluded purchase,
+    inventory, transfer and conversion rows; fed anything else, it would
+    mislabel it as waste.
+    """
+    reason = row["reason"]
+    if reason == REASON_CONSUMPTION:
+        share = ((row["parts_mine"] if row["parts_mine"] is not None else 1)
+                 / (row["parts_total"] if row["parts_total"] is not None else 1))
+        for key in ("kcal", *MACRO_COLUMNS):
+            value = row[key]
+            if value is not None:
+                totals[key] += value * share
+        if row["kcal"] is None:
+            totals["unvalued"] += 1
+        if row["cost"] is not None:
+            totals["cost"] += row["cost"]
+    elif row["cost"] is not None:
+        totals["waste_cost"] += row["cost"]
 
 
 def _now() -> str:
@@ -74,7 +115,31 @@ def _namespaced_key(operation: str, key: str | None) -> str | None:
     return f"{operation}:{key}" if key else None
 
 
-def _as_batch_view(row: dict[str, Any]) -> BatchView:
+class PartsError(ValueError):
+    """Parts that cannot be true, or parts on a movement that cannot have any."""
+
+
+def _checked_parts(reason: str, parts_total: int | None,
+                   parts_mine: int | None) -> tuple[int | None, int | None]:
+    """Validate the pair, or refuse the whole call.
+
+    Both or neither: given one alone, the caller believes it recorded a share
+    it did not, and the movement would read as 1/1 forever after.
+    """
+    if parts_total is None and parts_mine is None:
+        return None, None
+    if parts_total is None or parts_mine is None:
+        raise PartsError("parts_total and parts_mine go together")
+    if reason != REASON_CONSUMPTION:
+        raise PartsError(f"a {reason} movement cannot be shared")
+    if not 1 <= parts_total <= MAX_PARTS:
+        raise PartsError(f"parts_total must be between 1 and {MAX_PARTS}")
+    if not 0 <= parts_mine <= parts_total:
+        raise PartsError("parts_mine must be between 0 and parts_total")
+    return parts_total, parts_mine
+
+
+def as_batch_view(row: dict[str, Any]) -> BatchView:
     return BatchView(
         id=row["id"],
         remaining=row["remaining"],
@@ -83,6 +148,7 @@ def _as_batch_view(row: dict[str, Any]) -> BatchView:
         opened_at=datetime.fromisoformat(row["opened_at"]) if row["opened_at"] else None,
         price_per_base_unit=row["price_per_base_unit"],
         kcal_per_base_unit=row["kcal_per_base_unit"],
+        macros=repo.macro_rates(row),
     )
 
 
@@ -128,13 +194,14 @@ class StockManager:
                 price_per_base_unit=price_per_base_unit,
             )
             kcal_rate = repo.resolve_kcal_rate(conn, article)
-            values = movement_values(amount, kcal_rate, price_per_base_unit)
+            values = movement_values(amount, kcal_rate, price_per_base_unit,
+                                     macro_rates=repo.macro_rates(article))
             base_unit = repo.product_base_unit(conn, article["product_id"])
             repo.insert_movement(
                 conn, occurred_at=moment, product_id=article["product_id"],
                 article_id=article_id, batch_id=batch_id, quantity=amount,
                 reason=REASON_PURCHASE, base_unit=base_unit,
-                kcal=values.kcal, cost=values.cost,
+                kcal=values.kcal, cost=values.cost, macros=values.macros,
                 idempotency_key=stored_key,
             )
             if price_per_base_unit is not None and record_price_observation:
@@ -146,10 +213,14 @@ class StockManager:
 
     def consume(self, *, product_id: int, quantity: float,
                 reason: str = REASON_CONSUMPTION, occurred_at: str | None = None,
-                idempotency_key: str | None = None) -> list[int]:
+                idempotency_key: str | None = None,
+                parts_total: int | None = None, parts_mine: int | None = None) -> list[int]:
         """Take a quantity out of stock, across as many batches as needed."""
         moment = occurred_at or _now()
         stored_key = _namespaced_key("consume", idempotency_key)
+        # Validated before the write transaction opens: an inconsistent
+        # entry must not take the write lock just to be refused inside it.
+        parts_total, parts_mine = _checked_parts(reason, parts_total, parts_mine)
         with self.db.write() as conn:
             if stored_key and repo.movement_exists(conn, stored_key):
                 # Replayed call: return the movements the first call wrote.
@@ -164,7 +235,7 @@ class StockManager:
             # Every batch of one product necessarily shares that product's unit:
             # read it once here rather than once per batch in the loop below.
             base_unit = repo.product_base_unit(conn, product_id)
-            batches = [_as_batch_view(row)
+            batches = [as_batch_view(row)
                        for row in repo.list_batches_for_product(conn, product_id)]
             allocations = allocate(batches, quantity)   # raises InsufficientStock
             movement_ids: list[int] = []
@@ -174,7 +245,8 @@ class StockManager:
                 ).fetchone()
                 values = movement_values(allocation.quantity,
                                          allocation.kcal_per_base_unit,
-                                         allocation.price_per_base_unit)
+                                         allocation.price_per_base_unit,
+                                         macro_rates=allocation.macros)
                 # One consumption can span several batches, but the key is UNIQUE:
                 # the first movement carries it, the next ones carry "key#1", "key#2".
                 key = None
@@ -184,7 +256,9 @@ class StockManager:
                     conn, occurred_at=moment, product_id=product_id,
                     article_id=article_row["article_id"], batch_id=allocation.batch_id,
                     quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
-                    kcal=values.kcal, cost=values.cost, idempotency_key=key,
+                    kcal=values.kcal, cost=values.cost, macros=values.macros,
+                    parts_total=parts_total, parts_mine=parts_mine,
+                    idempotency_key=key,
                 ))
                 repo.set_batch_remaining(
                     conn, allocation.batch_id, allocation.remaining_after,
@@ -192,18 +266,37 @@ class StockManager:
                 )
             return movement_ids
 
-    def consume_batch(self, batch_id: int, *, quantity: float | None = None,
+    def consume_batch(self, batch_id: int, *, product_id: int | None = None,
+                      quantity: float | None = None,
                       reason: str = REASON_CONSUMPTION,
-                      occurred_at: str | None = None) -> int:
+                      occurred_at: str | None = None,
+                      idempotency_key: str | None = None,
+                      parts_total: int | None = None, parts_mine: int | None = None) -> int:
         """Take from one precise batch. Without a quantity, empties it.
 
         The expiry list checks off a batch, not a product: FIFO must not apply.
+
+        `product_id`, when given, is checked against the batch's own article:
+        the panel's "manger" screen always sends both, and the pair is
+        checked rather than one of the two being trusted — a batch of the
+        wrong product must be refused, not silently consumed.
         """
         moment = occurred_at or _now()
+        stored_key = _namespaced_key("consume_batch", idempotency_key)
+        # Validated before the write transaction opens: an inconsistent
+        # entry must not take the write lock just to be refused inside it.
+        parts_total, parts_mine = _checked_parts(reason, parts_total, parts_mine)
         with self.db.write() as conn:
+            if stored_key and repo.movement_exists(conn, stored_key):
+                row = conn.execute(
+                    "SELECT id FROM movement WHERE idempotency_key = ?",
+                    (stored_key,),
+                ).fetchone()
+                return int(row["id"])
             row = conn.execute(
                 # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
-                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit"
+                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
+                f" {repo.MACRO_RATE_SQL}"
                 " FROM batch b"
                 " JOIN article a ON a.id = b.article_id"
                 " JOIN product p ON p.id = a.product_id"
@@ -212,18 +305,26 @@ class StockManager:
             ).fetchone()
             if row is None:
                 raise ValueError(f"unknown or closed batch {batch_id}")
+            if product_id is not None and row["product_id"] != product_id:
+                raise ValueError(
+                    f"batch {batch_id} does not belong to product {product_id}")
             taken = row["remaining"] if quantity is None else float(quantity)
+            if taken <= 0:
+                raise ValueError(f"quantity must be positive, got {taken}")
             if taken > row["remaining"] + QUANTITY_EPSILON:
                 raise InsufficientStock(requested=taken, available=row["remaining"])
             remaining_after = row["remaining"] - taken
             closes = is_empty(remaining_after)
             values = movement_values(taken, row["kcal_per_base_unit"],
-                                     row["price_per_base_unit"])
+                                     row["price_per_base_unit"],
+                                     macro_rates=repo.macro_rates(row))
             base_unit = repo.product_base_unit(conn, row["product_id"])
             movement_id = repo.insert_movement(
                 conn, occurred_at=moment, product_id=row["product_id"],
                 article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
                 reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
+                macros=values.macros, parts_total=parts_total, parts_mine=parts_mine,
+                idempotency_key=stored_key,
             )
             repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
                                      closed_at=moment if closes else None)
@@ -291,10 +392,20 @@ class StockManager:
                 return None
             if delta < 0:
                 # Reuse the same BatchView construction as consume(): the rows
-                # from `SELECT * FROM batch` do not carry kcal_per_base_unit, so
-                # inject the article's rate before handing them to the helper.
+                # from `SELECT * FROM batch` do not carry kcal_per_base_unit or
+                # the eight macro columns (those live on `article`, not
+                # `batch`), so inject the article's own values before handing
+                # them to the helper. Unused here in practice — the movement
+                # below is written with kcal and cost pinned to None because a
+                # correction is not a consumption (spec 7.5) — but as_batch_view
+                # now always reads all eight macro columns off its row, so they
+                # must be present to avoid a KeyError.
                 views = [
-                    _as_batch_view({**dict(row), "kcal_per_base_unit": article["kcal_per_base_unit"]})
+                    as_batch_view({
+                        **dict(row),
+                        "kcal_per_base_unit": article["kcal_per_base_unit"],
+                        **repo.macro_rates(article),
+                    })
                     for row in rows
                 ]
                 for allocation in allocate(views, -delta):
@@ -468,9 +579,14 @@ class StockManager:
             entry["display"] = format_quantity(entry["quantity"], entry["base_unit"])
         return sorted(result, key=lambda e: e["product_name"])
 
-    def summary(self, *, expiration_alert_days: int,
-                today: str | None = None) -> dict[str, Any]:
-        """The numbers the entities publish."""
+    def summary(self, *, expiration_alert_days: int, tz: ZoneInfo,
+                now: datetime | None = None, today: str | None = None) -> dict[str, Any]:
+        """The numbers the entities publish.
+
+        `today` and `now` serve two different clocks: `today` is a civil date
+        and only bounds the expiration window, while `now` is an instant and
+        only bounds the food day. Neither substitutes for the other.
+        """
         reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
         limit = reference + timedelta(days=expiration_alert_days)
         conn = self.db.read()
@@ -505,7 +621,9 @@ class StockManager:
              "display": format_quantity(row["quantity"], row["base_unit"])}
             for row in repo.shortage_rows(conn)
         ]
-        totals = repo.counted_totals(conn)
+        cumulative = repo.totals_between(conn)
+        day_start, day_end = food_day_bounds(now or datetime.now(UTC), tz)
+        today_totals = repo.totals_between(conn, day_start, day_end)
 
         # The cart: read on this same connection, like the rest of the
         # summary — a second, separate read here could race a concurrent
@@ -531,8 +649,25 @@ class StockManager:
             "open_batch_count": sum(1 for row in rows if row["opened_at"]),
             "expiring": sorted(expiring, key=lambda e: e["best_before"]),
             "shortages": shortages,
-            "kcal_total": round(totals["kcal"], 1),
-            "cost_total": round(totals["cost"], 2),
+            # Lot 2, amendment A2: these two counters now total consumption
+            # only. Waste has its own, cost_waste_total, so that
+            # cost_total + cost_waste_total gives back the former total.
+            "kcal_total": round(cumulative["kcal"], 1),
+            "cost_total": round(cumulative["cost"], 2),
+            "cost_waste_total": round(cumulative["waste_cost"], 2),
+            "today": {
+                "food_day": food_day_of(now or datetime.now(UTC), tz).isoformat(),
+                # Naive UTC ISO, exactly like every other bound this module
+                # returns (see domain/foodday.py). Sensors turn it into an
+                # aware UTC datetime for `last_reset`; they never resolve a
+                # time zone themselves (spec 9, amendment).
+                "start": day_start,
+                "kcal": round(today_totals["kcal"], 1),
+                **{column: round(today_totals[column], 3) for column in MACRO_COLUMNS},
+                "cost": round(today_totals["cost"], 2),
+                "waste_cost": round(today_totals["waste_cost"], 2),
+                "unvalued": int(today_totals["unvalued"]),
+            },
             # Rounded to 2 decimals like every other euro sensor
             # (stock_value, cost_total): session_totals() itself keeps 4,
             # for the websocket API's own precision needs.
@@ -542,6 +677,69 @@ class StockManager:
             "cart_store": session["store"] if session else None,
             "cart_to_store": awaiting_storage,
         }
+
+    def claim_expiry_announcements(
+        self, *, expiration_alert_days: int, today: str | None = None,
+    ) -> list[tuple[str, list[dict[str, Any]]]]:
+        """What has just crossed a threshold, marked as announced on the way out.
+
+        Claiming and marking happen in ONE write transaction: an announcement
+        read but not marked would be repeated at the next refresh, which is
+        the exact failure this method exists to prevent.
+
+        A stage never goes backwards. A batch already announced as `expired`
+        stays there even if the clock moves back — a corrected timezone or a
+        restored backup must not re-announce the whole fridge.
+        """
+        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        limit = (reference + timedelta(days=expiration_alert_days)).isoformat()
+        claimed: dict[str, list[dict[str, Any]]] = {stage: [] for stage in EXPIRY_STAGES}
+        with self.db.write() as conn:
+            for row in repo.expiry_candidates(conn, limit):
+                stage = ("expired" if date.fromisoformat(row["best_before"]) < reference
+                         else "approaching")
+                already = row["expiry_announced_stage"]
+                if already is not None and (
+                        already == stage
+                        or EXPIRY_STAGES.index(already) > EXPIRY_STAGES.index(stage)):
+                    continue
+                repo.mark_expiry_announced(conn, row["id"], stage)
+                claimed[stage].append({
+                    "batch_id": row["id"],
+                    "product_name": row["product_name"],
+                    "best_before": row["best_before"],
+                    "display": format_quantity(row["remaining"], row["base_unit"]),
+                })
+        return [(stage, batches) for stage, batches in claimed.items() if batches]
+
+    def journal_day(self, day: date | None, *, tz: ZoneInfo,
+                    now: datetime | None = None) -> dict[str, Any]:
+        """One food day: its bounds, its entries, its totals."""
+        reference = day or food_day_of(now or datetime.now(UTC), tz)
+        start, end = bounds_of_food_day(reference, tz)
+        conn = self.db.read()
+        return {
+            "food_day": reference.isoformat(),
+            "start": start,
+            "end": end,
+            "entries": repo.journal_entries(conn, start, end),
+            "totals": repo.totals_between(conn, start, end),
+        }
+
+    def journal_series(self, granularity: str, count: int, *, tz: ZoneInfo,
+                       now: datetime | None = None) -> dict[str, Any]:
+        """The last `count` buckets, oldest first. Raises ValueError on a
+        granularity or a count the domain refuses."""
+        buckets = bucket_bounds(granularity, count, now or datetime.now(UTC), tz)
+        rows = repo.counted_movements(self.db.read(), buckets[0].start)
+        filled = []
+        for bucket in buckets:
+            totals = _empty_totals()
+            for row in rows:
+                if bucket.start <= row["occurred_at"] < bucket.end:
+                    _accumulate(totals, row)
+            filled.append({"label": bucket.label, **totals})
+        return {"granularity": granularity, "buckets": filled}
 
     def export_journal(self) -> list[dict[str, Any]]:
         """The whole append-only journal. It is enough to rebuild everything."""

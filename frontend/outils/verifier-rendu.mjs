@@ -56,10 +56,18 @@
  *  ne trouve pas son bouton — et vérifie que chacune est bien détectée : la
  *  preuve que ce script échoue vraiment quand il le doit, pas seulement
  *  qu'il n'a rien trouvé à dire. Désactivable avec `--sans-auto-verification`.
+ *
+ *  `--deploye` : mesure le bundle réellement écrit par `npm run build`
+ *  (`custom_components/home_stock/panel/home-stock-panel.js`) au lieu de
+ *  celui construit en mémoire — le seul moyen de savoir que ce que Home
+ *  Assistant sert vraiment est aussi propre que ce que ce script mesure
+ *  d'habitude. Ce mode ne lit le fichier que pour le servir tel quel ; il ne
+ *  déclenche jamais lui-même de build.
  */
 import esbuild from 'esbuild';
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -67,6 +75,7 @@ const ICI = dirname(fileURLToPath(import.meta.url));
 const RACINE = join(ICI, '..');
 const SRC = join(RACINE, 'src');
 const TSCONFIG = join(RACINE, 'tsconfig.json');
+const BUNDLE_DEPLOYE = join(RACINE, '..', 'custom_components', 'home_stock', 'panel', 'home-stock-panel.js');
 
 const CIBLE_MIN_PX = 48;
 const CONTRASTE_MIN = 4.5;
@@ -287,13 +296,82 @@ const RESULTAT_LOOKUP_CONNU = {
   conversion_offer: null, throttled: false, timed_out: false,
 };
 
+function entreeJournal(id, extra) {
+  return {
+    id, occurred_at: '2026-08-18T12:00:00', product_name: `Produit ${id}`, quantity: 100,
+    base_unit: 'g', reason: 'consumption', kcal: 100, parts_total: null, parts_mine: null,
+    ...extra,
+  };
+}
+
+// Une journée chargée, réaliste — douze entrées, pas trois : une journée à
+// trois lignes ne prouve rien sur le débordement. Une jetée (yaourt périmé),
+// une partagée à 1/4 (le poulet du dîner, coût jamais divisé — seuls les
+// nutriments le sont), une sans kcal (soupe maison, aucune fiche
+// nutritionnelle) — et un dernier grignotage à 1 h du matin, qui compte
+// encore pour la soirée du 18 (frontière de 4 h, voir docs/exploitation.md).
+const JOURNEE_CHARGEE = {
+  food_day: '2026-08-18', start: '2026-08-18T04:00:00', end: '2026-08-19T04:00:00',
+  entries: [
+    entreeJournal(1, { occurred_at: '2026-08-18T07:15:00', product_name: 'Café noir',
+                       quantity: 250, base_unit: 'ml', kcal: 5 }),
+    entreeJournal(2, { occurred_at: '2026-08-18T07:20:00', product_name: 'Pain complet',
+                       quantity: 80, base_unit: 'g', kcal: 190 }),
+    entreeJournal(3, { occurred_at: '2026-08-18T07:22:00', product_name: 'Beurre doux',
+                       quantity: 15, base_unit: 'g', kcal: 108 }),
+    entreeJournal(4, { occurred_at: '2026-08-18T07:23:00', product_name: 'Confiture de fraises maison',
+                       quantity: 20, base_unit: 'g', kcal: 52 }),
+    entreeJournal(5, { occurred_at: '2026-08-18T12:30:00', product_name: 'Poulet rôti',
+                       quantity: 400, base_unit: 'g', kcal: 480, parts_total: 4, parts_mine: 1 }),
+    entreeJournal(6, { occurred_at: '2026-08-18T12:32:00', product_name: 'Riz basmati demi-complet',
+                       quantity: 150, base_unit: 'g', kcal: 195 }),
+    entreeJournal(7, { occurred_at: '2026-08-18T16:45:00', product_name: 'Fromage râpé emmental',
+                       quantity: 30, base_unit: 'g', kcal: 112 }),
+    entreeJournal(8, { occurred_at: '2026-08-18T16:47:00', product_name: 'Compote de pommes',
+                       quantity: 1, base_unit: 'piece', kcal: 60 }),
+    entreeJournal(9, { occurred_at: '2026-08-18T18:05:00', product_name: 'Yaourt nature',
+                       quantity: 1, base_unit: 'piece', kcal: 65, reason: 'waste' }),
+    entreeJournal(10, { occurred_at: '2026-08-18T19:30:00', product_name: 'Soupe de légumes maison',
+                        quantity: 300, base_unit: 'ml', kcal: null }),
+    entreeJournal(11, { occurred_at: '2026-08-18T20:15:00', product_name: 'Chocolat noir 70%',
+                        quantity: 20, base_unit: 'g', kcal: 118 }),
+    entreeJournal(12, { occurred_at: '2026-08-19T01:10:00', product_name: 'Eau gazeuse aromatisée',
+                        quantity: 500, base_unit: 'ml', kcal: 0 }),
+  ],
+  totals: { kcal: 960, cost: 5.51, waste_cost: 0.35, unvalued: 1 },
+};
+
+// Quatorze seaux (deux semaines de jours) : un jour à zéro (absence du
+// foyer) et un maximum net qui se détache vraiment des autres, sinon les
+// barres ne prouvent rien sur les proportions extrêmes du graphe.
+const SERIE_QUATORZE_JOURS = {
+  granularity: 'day',
+  buckets: [
+    { label: '2026-08-06', kcal: 1850, cost: 4.20, waste_cost: 0 },
+    { label: '2026-08-07', kcal: 2100, cost: 5.10, waste_cost: 0.35 },
+    { label: '2026-08-08', kcal: 1920, cost: 4.60, waste_cost: 0 },
+    { label: '2026-08-09', kcal: 0, cost: 0, waste_cost: 0 },
+    { label: '2026-08-10', kcal: 2260, cost: 6.05, waste_cost: 0 },
+    { label: '2026-08-11', kcal: 1780, cost: 4.15, waste_cost: 0.60 },
+    { label: '2026-08-12', kcal: 2010, cost: 4.85, waste_cost: 0 },
+    { label: '2026-08-13', kcal: 1990, cost: 4.70, waste_cost: 0 },
+    { label: '2026-08-14', kcal: 2150, cost: 5.30, waste_cost: 0 },
+    { label: '2026-08-15', kcal: 3420, cost: 9.80, waste_cost: 0 },
+    { label: '2026-08-16', kcal: 2080, cost: 4.95, waste_cost: 0.20 },
+    { label: '2026-08-17', kcal: 1940, cost: 4.55, waste_cost: 0 },
+    { label: '2026-08-18', kcal: 960, cost: 5.51, waste_cost: 0.35 },
+    { label: '2026-08-19', kcal: 2040, cost: 4.90, waste_cost: 0 },
+  ],
+};
+
 // --- scénarios ---------------------------------------------------------------
 //
 // Chacun mène `<home-stock-panel>`, via son `hass` factice et les mêmes
 // gestes qu'une personne (clic sur un bouton de navigation, scan, appui sur
-// « ranger »), jusqu'à l'un des six écrans du spec — jamais en modifiant
-// directement son état interne, pour que le vérificateur exerce vraiment le
-// câblage plutôt que de le contourner.
+// « ranger », événement de la fiche vers l'écran « manger »), jusqu'à l'un
+// des neuf écrans du spec — jamais en modifiant directement son état
+// interne, pour que le vérificateur exerce vraiment le câblage plutôt que
+// de le contourner.
 const SCENARIOS = [
   {
     nom: 'Scanner (écran par défaut)',
@@ -422,6 +500,42 @@ const SCENARIOS = [
     ecranAttendu: 'home-stock-scanner',
     elementAttendu: { enfant: null, selector: '.erreur-file' },
   },
+  {
+    nom: 'Manger (produit au gramme, portion apprise, partage ouvert)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/product/get': {
+          product: { id: 1, name: 'Riz basmati demi-complet', base_unit: 'g' },
+          suggested_portion: 80, portion_source: 'learned', serving_quantity: null,
+          next_batch: { id: 7, remaining: 500, best_before: '2026-09-01' },
+        },
+      },
+    },
+    // Pas de `click-nav` ici : « manger » n'est pas une destination de la
+    // barre de navigation, il s'ouvre sur un produit désigné (tâche 15). Le
+    // brief décrivait un type d'action `click` inexistant — corrigé en
+    // `click-in-child`, le vocabulaire déjà utilisé pour cliquer dans un
+    // écran monté sous le panneau (voir Catalogue et Réglages ci-dessus).
+    actions: [
+      { type: 'dispatch-evenement', nom: 'manger-produit', detail: { product_id: 1 } },
+      { type: 'click-in-child', enfant: 'home-stock-consommation', selector: '.partage-bascule' },
+    ],
+    ecranAttendu: 'home-stock-consommation',
+    elementAttendu: { enfant: 'home-stock-consommation', selector: '.compteurs' },
+  },
+  {
+    nom: 'Journal (journée chargée, barres sur quatorze jours)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/journal/day': JOURNEE_CHARGEE,
+        'home_stock/journal/series': SERIE_QUATORZE_JOURS,
+      },
+    },
+    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    ecranAttendu: 'home-stock-journal',
+  },
 ];
 
 // --- ce qui s'exécute DANS la page ------------------------------------------
@@ -486,7 +600,8 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   async function reglerAttente() {
     await panneau.updateComplete;
     const enfants = ['home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
-      'home-stock-rangement', 'home-stock-catalogue', 'home-stock-reglages'];
+      'home-stock-rangement', 'home-stock-catalogue', 'home-stock-reglages',
+      'home-stock-consommation', 'home-stock-journal'];
     for (const nom of enfants) {
       const enfant = panneau.shadowRoot.querySelector(nom);
       if (enfant && enfant.updateComplete) await enfant.updateComplete;
@@ -522,6 +637,16 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
           detail: action.detail, bubbles: true, composed: true,
         }));
       }
+    } else if (action.type === 'dispatch-evenement') {
+      // L'écran « manger » n'a aucun bouton de navigation qui y mène (voir
+      // SCENARIOS) : la fiche et le catalogue le désignent tous les deux par
+      // un événement `manger-produit` écouté sur le panneau lui-même
+      // (`this.addEventListener` dans panneau.ts, jamais câblé à un enfant
+      // précis). On l'émet donc directement sur `panneau`, comme le ferait
+      // n'importe lequel des deux écrans qui l'émettent réellement.
+      panneau.dispatchEvent(new CustomEvent(action.nom, {
+        detail: action.detail, bubbles: true, composed: true,
+      }));
     } else if (action.type === 'click-in-child') {
       const enfant = panneau.shadowRoot.querySelector(action.enfant);
       if (enfant && enfant.shadowRoot) {
@@ -780,6 +905,26 @@ const SCENARIOS_MINIFIES = [
     elementAttendu: { enfant: 'home-stock-scanner', selector: '.saisie-manuelle' },
     sansScannerNatif: true,
   },
+  {
+    // « Manger » s'atteint par un événement, jamais un `.nav-bouton` — le
+    // motif que `terser` pourrait casser ici est celui de l'écouteur posé
+    // sur le panneau (`this.addEventListener('manger-produit', …)`), pas un
+    // sélecteur de bouton. Sur le bundle non minifié il n'y a aucune raison
+    // que ça diffère ; c'est justement ce que ce contrôle prouve.
+    nom: 'Manger (bundle minifié, atteint par événement)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/product/get': {
+          product: { id: 1, name: 'Riz basmati demi-complet', base_unit: 'g' },
+          suggested_portion: 80, portion_source: 'learned', serving_quantity: null,
+          next_batch: { id: 7, remaining: 500, best_before: '2026-09-01' },
+        },
+      },
+    },
+    actions: [{ type: 'dispatch-evenement', nom: 'manger-produit', detail: { product_id: 1 } }],
+    ecranAttendu: 'home-stock-consommation',
+  },
 ];
 
 async function verifierBundleMinifie(navigateur, urlMinifie) {
@@ -887,12 +1032,26 @@ async function autoVerification(navigateur, urlHarnais) {
 
 async function main() {
   const sansAutoVerification = process.argv.includes('--sans-auto-verification');
+  const deploye = process.argv.includes('--deploye');
 
-  console.log('Construction du bundle (esbuild, en mémoire — rien n’est écrit sur disque)…');
-  const bundle = await bundlerApplication();
-  const bundleMinifie = await bundlerApplication({ minifier: true });
-  console.log(`Bundle : ${(bundle.length / 1024).toFixed(0)} ko `
-    + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
+  let bundle;
+  let bundleMinifie;
+  if (deploye) {
+    // Le bundle déployé EST déjà celui que `terser` a produit : il n'existe
+    // aucune version « non minifiée » de lui à côté pour rejouer la
+    // distinction SCENARIOS / SCENARIOS_MINIFIES — les deux jeux de
+    // scénarios tournent donc ici sur le même fichier, lu une seule fois.
+    console.log(`Lecture du bundle déployé (${BUNDLE_DEPLOYE})…`);
+    bundle = readFileSync(BUNDLE_DEPLOYE, 'utf8');
+    bundleMinifie = bundle;
+    console.log(`Bundle déployé : ${(bundle.length / 1024).toFixed(0)} ko.`);
+  } else {
+    console.log('Construction du bundle (esbuild, en mémoire — rien n’est écrit sur disque)…');
+    bundle = await bundlerApplication();
+    bundleMinifie = await bundlerApplication({ minifier: true });
+    console.log(`Bundle : ${(bundle.length / 1024).toFixed(0)} ko `
+      + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
+  }
 
   // Une seule page servie pour tout le run (127.0.0.1, port éphémère) : le
   // contenu ne change jamais d'un scénario à l'autre — seul ce qu'on y

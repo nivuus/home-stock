@@ -1,8 +1,9 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from homeassistant.components.todo import DATA_COMPONENT, TodoItem, TodoItemStatus
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
@@ -213,3 +214,62 @@ async def test_a_non_numeric_uid_raises_a_home_assistant_error(hass, loaded):
         await entity.async_update_todo_item(
             TodoItem(uid="not-a-number", status=TodoItemStatus.COMPLETED)
         )
+
+
+async def test_the_four_daily_nutrients_are_on_by_default(hass, setup_entry):
+    await setup_entry()
+    for key in ("kcal_today", "proteins_today", "sugars_today", "salt_today",
+                "cost_today", "cost_waste_total"):
+        assert hass.states.get(f"sensor.home_stock_{key}") is not None, key
+
+
+async def test_the_five_rarer_nutrients_are_created_but_disabled(hass, setup_entry):
+    """They exist in the registry and turn on with one click — but they do not
+    fill the sidebar with columns that are often empty."""
+    entry = await setup_entry()
+    registry = er.async_get(hass)
+    for key in ("carbohydrates_today", "added_sugars_today", "fat_today",
+                "saturated_fat_today", "fiber_today"):
+        entity_id = f"sensor.home_stock_{key}"
+        assert hass.states.get(entity_id) is None, key
+        record = registry.async_get(entity_id)
+        assert record is not None and record.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+
+
+async def test_kcal_today_reports_the_day_and_its_gaps(hass, setup_entry):
+    # setup_entry(with_article=True) seeds an article with no
+    # kcal_per_base_unit set (see conftest.py), so consuming it is genuinely
+    # unvalued — this is the "gap" the test name and the sensor attribute
+    # are both about, not an oversight.
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=500.0, location_id=1))
+    await hass.async_add_executor_job(
+        lambda: manager.consume(product_id=1, quantity=100.0))
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.home_stock_kcal_today")
+    assert state.attributes["unvalued_movements"] == 1
+    assert state.attributes["food_day"] == entry.runtime_data.coordinator.data["today"]["food_day"]
+    assert state.attributes["last_reset"] is not None
+
+
+async def test_the_daily_sensors_declare_a_last_reset(hass, setup_entry):
+    """TOTAL without a last_reset, a drop from 1 800 to 0 would be read as a
+    meter rollover and would inflate the statistics.
+
+    A prefix check on the year is blind to both a naive last_reset and a
+    wrong-but-plausible one, so this compares against the exact aware
+    datetime derived from today["start"] instead."""
+    entry = await setup_entry()
+    state = hass.states.get("sensor.home_stock_cost_today")
+    assert state.attributes["state_class"] == "total"
+
+    last_reset = datetime.fromisoformat(state.attributes["last_reset"])
+    assert last_reset.tzinfo is not None
+
+    expected_start = entry.runtime_data.coordinator.data["today"]["start"]
+    expected = datetime.fromisoformat(expected_start).replace(tzinfo=UTC)
+    assert last_reset == expected

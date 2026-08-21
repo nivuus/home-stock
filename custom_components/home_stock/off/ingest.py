@@ -23,6 +23,7 @@ from .mapping import (
     MIN_NET_QUANTITY,
     map_article,
     nutrition_per_base_unit,
+    plausible_serving,
     to_article_columns,
 )
 
@@ -60,6 +61,7 @@ ARTICLE_OFF_SCHEMA: Final[dict[str, Callable[[Any], Any]]] = {
     "saturated_fat": _NON_NEGATIVE_FLOAT,
     "fiber": _NON_NEGATIVE_FLOAT,
     "salt": _NON_NEGATIVE_FLOAT,
+    "serving_quantity": _NON_NEGATIVE_FLOAT,
     "nutriscore": vol.Any(_GRADE, None),
     "nova": _NOVA,
     "ecoscore": _TEXT,
@@ -154,6 +156,13 @@ def build_article_values(product: dict[str, Any], off_source: str, base_unit: st
     # `kcal_per_base_unit` — see off/mapping.py's own docstring for why
     # skipping this renaming would silently drop the calories.
     values.update(to_article_columns(per_base))
+
+    # The serving comes from the SAME function as m003's retroactive
+    # backfill: two copies of these bounds would drift apart, and that
+    # drift would show up nowhere.
+    values["serving_quantity"] = plausible_serving(
+        product.get("serving_quantity"), base_unit=base_unit,
+        net_quantity=mapped.net_quantity)
 
     # See this function's own docstring: a gap OFF did not fill this time
     # must not erase a value a fuller answer already put there.

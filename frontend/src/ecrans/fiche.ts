@@ -363,6 +363,14 @@ export class FicheArticle extends LitElement {
     }
   }
 
+  /** Envoie l'identifiant du produit rattaché à qui veut ouvrir l'écran
+   *  « manger » — cette fiche ne le fait jamais elle-même, elle n'a ni
+   *  connexion garantie ni file dédiée pour `stock/consume`. */
+  private mangerProduit(productId: number): void {
+    this.dispatchEvent(new CustomEvent('manger-produit',
+                                       { detail: { product_id: productId }, bubbles: true, composed: true }));
+  }
+
   private async voirEffetConversion(): Promise<void> {
     const offre = this.resultat.conversion_offer;
     if (!offre || !this.connexion) return;
@@ -544,6 +552,11 @@ export class FicheArticle extends LitElement {
       <button class="action-principale" ?disabled=${!this.peutValider} @click=${this.valider}>
         ${this.mode === 'panier' ? 'Au panier' : 'Ranger'}
       </button>
+      ${r.product?.id != null ? html`
+        <button type="button" class="manger" @click=${() => this.mangerProduit(r.product!.id)}>
+          Manger
+        </button>
+      ` : nothing}
     `;
   }
 
@@ -585,6 +598,11 @@ export class FicheArticle extends LitElement {
       margin-top: 12px;
     }
     .action-principale:disabled { opacity: 0.5; }
+    .manger {
+      display: block; width: 100%; min-height: 48px; font-size: 1rem; border-radius: 8px;
+      border: none; background: var(--secondary-background-color); color: var(--primary-text-color);
+      margin-top: 8px;
+    }
     button.voir-effet, button.appliquer-conversion {
       min-height: 48px; width: 100%; border-radius: 8px; border: none;
       background: var(--primary-color); color: var(--text-primary-color, #fff);

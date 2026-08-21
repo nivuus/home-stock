@@ -36,6 +36,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { analyserNombre } from '../nombres';
 import type { UniteBase } from './fiche';
 import type { Emplacement } from './rangement';
 
@@ -92,25 +93,6 @@ export function brouillonDepuis(produit: Produit): Brouillon {
 function idOuNull(saisie: string): number | null {
   const s = saisie.trim();
   return s === '' ? null : Number(s);
-}
-
-export type ResultatNombre = { ok: true; valeur: number | null } | { ok: false };
-
-/** Un champ numérique saisi à la main peut être vide (effacé exprès →
- *  `null`), un nombre valide, ou du texte qui n'en est pas — jamais un
- *  `NaN` silencieux : `Number('1,5')` vaut `NaN`, `NaN !== ancienneValeur`
- *  est toujours vrai, et `JSON.stringify(NaN)` vaut `'null'`. Un incident
- *  réel a montré qu'une simple virgule décimale suffisait ainsi à effacer
- *  un seuil de réapprovisionnement en silence tout en laissant croire à un
- *  enregistrement réussi. Accepte donc la virgule comme le point ; refuse
- *  explicitement (`{ok:false}`) tout le reste plutôt que de deviner un
- *  nombre dans du texte (« 7 jours » n'est pas 7). */
-export function analyserNombre(saisie: string): ResultatNombre {
-  const texte = saisie.trim();
-  if (texte === '') return { ok: true, valeur: null };
-  const nombre = Number(texte.replace(',', '.'));
-  if (!Number.isFinite(nombre)) return { ok: false };
-  return { ok: true, valeur: nombre };
 }
 
 const LIBELLE_CHAMP_NUMERIQUE = {
@@ -273,16 +255,24 @@ export class EcranCatalogue extends LitElement {
    *  n'existe plus de deuxième chemin par `connexion` directe. */
   private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
     if (!this.file) return Promise.resolve(false);
-    const cle = this.file.ajouter(type, charge);
+    const suivi = this.file.ajouter(type, charge);
     this.avertirFile();
-    return this.file.rejouer().then(() => {
-      this.avertirFile();
-      return this.file!.resultatDe(cle) === 'envoyee';
-    });
+    void this.file.rejouer().then(() => this.avertirFile());
+    return suivi.sort.then((sort) => sort === 'envoyee');
   }
 
   private avertirFile(): void {
     this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
+  }
+
+  /** Le chemin du fond d'huile dont l'emballage n'est plus sous la main :
+   *  déclarer une consommation sans repasser par un scan. Comme la fiche,
+   *  cet écran ne l'ouvre jamais lui-même — il n'a ni FIFO ni file dédiée
+   *  pour `stock/consume`, c'est le panneau qui bascule sur l'écran
+   *  « manger ». */
+  private mangerProduit(produit: Produit): void {
+    this.dispatchEvent(new CustomEvent('manger-produit',
+                                       { detail: { product_id: produit.id }, bubbles: true, composed: true }));
   }
 
   private async enregistrer(): Promise<void> {
@@ -391,6 +381,7 @@ export class EcranCatalogue extends LitElement {
             · emplacement : ${this.nomEmplacement(produit.default_location_id)}
           </p>
         </div>
+        <button class="manger" @click=${() => this.mangerProduit(produit)}>Manger</button>
         <button class="modifier" @click=${() => this.ouvrirEdition(produit)}>Modifier</button>
         ${this.produitEditeId === produit.id ? this.rendreEdition(this.produitEnEdition ?? produit) : nothing}
       </article>
@@ -445,6 +436,10 @@ export class EcranCatalogue extends LitElement {
     .modifier {
       min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
       background: var(--primary-color); color: var(--text-primary-color, #fff); flex-shrink: 0;
+    }
+    .manger {
+      min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
+      background: var(--secondary-background-color); color: var(--primary-text-color); flex-shrink: 0;
     }
     .edition {
       flex: 1 0 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 8px;

@@ -6,7 +6,10 @@
  */
 export type Envoyeur = (type: string, charge: object) => Promise<unknown>;
 
-type Action = { type: string; charge: Record<string, unknown> };
+/** `resoudre` n'est jamais sérialisé dans le stockage local (voir `ecrire`) :
+ *  une fonction ne passe pas par `JSON.stringify`, et une action restaurée
+ *  au démarrage n'a de toute façon plus d'appelant à prévenir. */
+type Action = { type: string; charge: Record<string, unknown>; resoudre?: (sort: ResultatAction) => void };
 
 /** Un refus tranché par le serveur (mauvaise requête, règle métier) répond
  *  toujours avec ce couple — c'est ainsi que `send_error` répond côté HA. Une
@@ -33,7 +36,7 @@ function estRefusServeur(erreur: unknown): erreur is ErreurServeur {
  *  reconnaît pas obtient le message générique, jamais son texte brut. */
 const CODES_DE_REFUS_EN_FRANCAIS: ReadonlySet<string> = new Set([
   'not_loaded', 'invalid_field', 'invalid_value', 'not_found',
-  'already_exists', 'conversion_refused', 'shopping_refused',
+  'already_exists', 'conversion_refused', 'shopping_refused', 'insufficient_stock',
 ]);
 
 const MESSAGE_REFUS_GENERIQUE = 'Une action a été refusée et n’a pas pu être envoyée.';
@@ -46,18 +49,21 @@ function messageAffichable(erreur: ErreurServeur): string {
  *  (jamais pour une simple panne réseau, celle-là reste en file). */
 export type SurRefus = (action: { type: string; charge: Record<string, unknown> }, message: string) => void;
 
-export type ResultatAction = 'envoyee' | 'refusee';
+/** Le sort d'une action, une fois son passage en file connu. `en-attente`
+ *  n'est ni un succès ni un refus : c'est ce que rend une action toujours
+ *  bloquée par une panne de transport, pour que son appelant obtienne quand
+ *  même une réponse tout de suite au lieu d'attendre indéfiniment un réseau
+ *  qui reviendra peut-être — l'action, elle, reste en file et repartira. */
+export type ResultatAction = 'envoyee' | 'refusee' | 'en-attente';
+
+/** Ce que `ajouter` rend à l'appelant : sa clé d'idempotence, et une
+ *  promesse de SON sort à elle — jamais celui d'une autre action. */
+export type SuiviAction = { cle: string; sort: Promise<ResultatAction> };
 
 const CLE_STOCKAGE = 'home_stock.file';
 
 export class FileAttente {
   private actions: Action[] = [];
-  /** Le sort de chaque action qui vient de quitter la file, par clé
-   *  d'idempotence — le temps que l'appelant qui l'a posée le récupère (voir
-   *  `resultatDe`, qui le consomme). Une action qui reste bloquée par une
-   *  panne de transport n'y apparaît jamais : elle n'a pas encore de sort,
-   *  elle est toujours en file. */
-  private resultats = new Map<string, ResultatAction>();
   /** Le rejeu en cours, s'il y en a un : c'est le verrou qui sérialise les
    *  trois déclencheurs de `rejouer()` (voir sa documentation). `null` quand
    *  rien n'est en vol. */
@@ -71,17 +77,23 @@ export class FileAttente {
     }
   }
 
-  /** Empile une action et rend sa clé d'idempotence. */
-  ajouter(type: string, charge: object): string {
+  /** Empile une action et rend un passage de relais **par clé** : sa clé
+   *  d'idempotence, et la promesse de SON sort à elle. L'entrée garde son
+   *  propre résolveur — `boucle()` l'appelle au moment où le sort de CETTE
+   *  action précise est connu, jamais via une table partagée qu'un rejeu
+   *  concurrent pourrait vider avant que l'appelant n'ait lu sa réponse. */
+  ajouter(type: string, charge: object): SuiviAction {
     const contenu = { ...charge } as Record<string, unknown>;
     // La clé est posée à l'ajout, pas à l'envoi : un rejeu doit porter LA MÊME
     // clé, sinon le serveur voit deux scans distincts et le panier double.
     if (typeof contenu.idempotency_key !== 'string') {
       contenu.idempotency_key = crypto.randomUUID();
     }
-    this.actions.push({ type, charge: contenu });
+    let resoudre!: (sort: ResultatAction) => void;
+    const sort = new Promise<ResultatAction>((resolve) => { resoudre = resolve; });
+    this.actions.push({ type, charge: contenu, resoudre });
     this.ecrire();
-    return contenu.idempotency_key as string;
+    return { cle: contenu.idempotency_key as string, sort };
   }
 
   taille(): number {
@@ -103,10 +115,12 @@ export class FileAttente {
    *  Un appel pendant un rejeu en cours attend donc son tour, puis rejoue à
    *  son tour : quand il retombe, sa propre action a bien été tentée.
    *
-   *  Ce que cela ne règle PAS : la course entre `viderResultats()` et un
-   *  `resultatDe()` concurrent. Ordonner les boucles n'ordonne pas les
-   *  continuations posées dessus — voir `viderResultats`, qui la décrit et
-   *  nomme la forme de sa vraie correction. */
+   *  La course qui restait ici au lot 1 — un rejeu générique du panneau
+   *  pouvant emporter le sort qu'un écran attendait encore — est fermée
+   *  depuis que ce sort n'est plus lu dans une table partagée (voir
+   *  `ajouter` et `SuiviAction`) : chaque action porte désormais sa propre
+   *  promesse, résolue une fois pour toutes par son entrée, peu importe
+   *  quel appel à `rejouer()` la traite. */
   async rejouer(): Promise<void> {
     const precedent = this.enVol;
     const courant = (async () => {
@@ -134,67 +148,40 @@ export class FileAttente {
   private async boucle(): Promise<void> {
     while (this.actions.length) {
       const action = this.actions[0];
-      const cle = action.charge.idempotency_key as string | undefined;
       try {
         await this.envoyer(action.type, action.charge);
       } catch (erreur) {
         if (estRefusServeur(erreur)) {
           this.actions.shift();
           this.ecrire();
-          if (cle) this.resultats.set(cle, 'refusee');
+          action.resoudre?.('refusee');
           this.surRefus?.(action, messageAffichable(erreur));
           continue;
         }
-        return;   // panne de transport : on garde la file intacte et on réessaiera
+        // Panne de transport : la file reste intacte, elle repartira au
+        // prochain rejeu — mais son appelant, lui, ne peut pas attendre
+        // indéfiniment un réseau qui reviendra peut-être : chaque entrée
+        // encore en file (celle-ci comprise) obtient tout de suite un sort
+        // « en-attente », puis perd son résolveur pour ne pas être rappelée
+        // en vain au prochain passage.
+        for (const restante of this.actions) {
+          restante.resoudre?.('en-attente');
+          restante.resoudre = undefined;
+        }
+        return;
       }
       this.actions.shift();
       this.ecrire();
-      if (cle) this.resultats.set(cle, 'envoyee');
+      action.resoudre?.('envoyee');
     }
   }
 
-  /** Le sort d'une action posée par `ajouter`, une fois `rejouer` retombé —
-   *  `undefined` tant qu'elle est toujours en file (panne de transport, ou
-   *  simplement pas encore essayée). Consommé au premier appel : un appelant
-   *  ne lit le sort de SA propre action qu'une fois, ce n'est pas un journal —
-   *  l'entrée est retirée dès sa lecture, elle ne traîne pas derrière. */
-  resultatDe(cle: string): ResultatAction | undefined {
-    const resultat = this.resultats.get(cle);
-    this.resultats.delete(cle);
-    return resultat;
-  }
-
-  /** Purge tout ce qui n'a jamais été réclamé. Pour les rejeux qui ne
-   *  connaissent aucune clé précise à réclamer — au démarrage du panneau et
-   *  au retour réseau, `rejouer()` vide alors la file entière plutôt qu'une
-   *  action qu'on vient d'ajouter soi-même — et dont l'appelant d'origine
-   *  (un écran déjà démonté, une page précédente) ne lira donc jamais le
-   *  sort. Sans ce nettoyage explicite ces entrées-là resteraient pour
-   *  toujours : `resultatDe` ne les retire que si quelqu'un les demande, et
-   *  ici personne ne le fera jamais.
-   *
-   *  ⚠️ **Cet appel peut encore emporter le résultat qu'un écran attendait.**
-   *  Sérialiser `rejouer()` a ordonné les BOUCLES, pas les continuations :
-   *  quand le rejeu générique du panneau démarre avant l'écriture d'un
-   *  écran, son `.then(viderResultats)` est mis en file d'attente AVANT le
-   *  `.then(resultatDe)` de l'écran, et efface le sort le premier —
-   *  l'écran croit alors son action encore en file alors que le serveur l'a
-   *  bien reçue (« Envoi en attente de réseau » sur une session pourtant
-   *  ouverte). Le coût est faible : un rafraîchissement ultérieur corrige
-   *  l'affichage, et la clé d'idempotence garantit qu'aucune action n'est
-   *  envoyée deux fois.
-   *
-   *  La vraie correction n'est pas un verrou de plus : c'est un passage de
-   *  relais **par clé** — `ajouter` rend une promesse, l'entrée de file la
-   *  résout elle-même au moment où son sort est connu, et l'appelant n'a
-   *  plus jamais à relire une table partagée après coup. Reporté au lot 2 ;
-   *  ne pas écrire ici que la course est fermée tant qu'elle ne l'est
-   *  pas. */
-  viderResultats(): void {
-    this.resultats.clear();
-  }
-
+  /** Ne persiste que `type` et `charge` : `resoudre` est une fonction, donc
+   *  non sérialisable, et une action restaurée au démarrage n'a de toute
+   *  façon plus d'appelant à prévenir (voir le type `Action`). */
   private ecrire(): void {
-    this.stockage.setItem(CLE_STOCKAGE, JSON.stringify(this.actions));
+    this.stockage.setItem(CLE_STOCKAGE, JSON.stringify(
+      this.actions.map(({ type, charge }) => ({ type, charge })),
+    ));
   }
 }

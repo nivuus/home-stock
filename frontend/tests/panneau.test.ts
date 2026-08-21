@@ -745,6 +745,134 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
   });
 });
 
+describe('panneau : le journal et l’écran « manger »', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  // Le brief de cette tâche renvoie à un « helper déjà présent dans ce
+  // fichier » nommé `monterPanneau` — il n'existe pas ; chaque describe de
+  // ce fichier définit son propre montage local (voir `monter` ci-dessus,
+  // dans « le catalogue et les réglages »). Celui-ci en reprend le même
+  // schéma : un hass dont `session/current` répond `null`, pour ne pas
+  // dépendre d'une session de courses ouverte.
+  async function monterPanneau() {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+    return element as any;
+  }
+
+  it('expose le journal dans la navigation, mais pas « manger »', async () => {
+    const panneau = await monterPanneau();
+    const libelles = [...panneau.shadowRoot.querySelectorAll('.nav-bouton')]
+      .map((b: Element) => b.textContent?.trim());
+    expect(libelles).toContain('Journal');
+    // « Manger » a besoin d'un produit : un bouton de navigation nu ouvrirait
+    // un écran qui n'a rien à montrer.
+    expect(libelles).not.toContain('Manger');
+  });
+
+  it('ouvre l’écran « manger » sur le produit qu’on lui désigne', async () => {
+    const panneau = await monterPanneau();
+    panneau.dispatchEvent(new CustomEvent('manger-produit',
+      { detail: { product_id: 42 }, bubbles: true, composed: true }));
+    await panneau.updateComplete;
+    expect(panneau.ecran).toBe('consommation');
+    expect(panneau.shadowRoot.querySelector('home-stock-consommation').productId).toBe(42);
+  });
+
+  it('revient au scanner quand une consommation est enregistrée', async () => {
+    const panneau = await monterPanneau();
+    panneau.ecran = 'consommation';
+    await panneau.updateComplete;
+    panneau.shadowRoot.querySelector('home-stock-consommation')
+      ?.dispatchEvent(new CustomEvent('consommation-enregistree',
+                                      { bubbles: true, composed: true }));
+    await panneau.updateComplete;
+    expect(panneau.ecran).toBe('scanner');
+  });
+
+  it('le bouton « Journal » mène à <home-stock-journal>, avec connexion', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/journal/day') {
+        return Promise.resolve({ food_day: '2026-08-21', start: '', end: '', entries: [],
+          totals: { kcal: 0, cost: 0, waste_cost: 0, unvalued: 0 } });
+      }
+      if (msg.type === 'home_stock/journal/series') return Promise.resolve({ granularity: 'day', buckets: [] });
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+
+    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b: Element) => b.textContent?.includes('Journal')) as HTMLButtonElement;
+    expect(bouton).not.toBeUndefined();
+    bouton.click();
+    await (element as any).updateComplete;
+
+    expect(element.ecran).toBe('journal');
+    const journal = element.shadowRoot!.querySelector('home-stock-journal') as any;
+    expect(journal).not.toBeNull();
+    expect(journal.connexion).toBeDefined();
+  });
+
+  it('quitter un rangement en attente vers « manger » prévient d’abord, comme vers tout autre écran', async () => {
+    const hass = hassAvecReponses((msg: any) => {
+      if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; updateComplete: Promise<boolean>; ecran: string; shadowRoot: ShadowRoot;
+    };
+    element.hass = hass;
+    document.body.appendChild(element);
+    await laisserPasserLesMicrotaches();
+
+    const scanner = element.shadowRoot!.querySelector('home-stock-scanner')!;
+    scanner.dispatchEvent(new CustomEvent('code-lu', {
+      detail: { code: '3229820129488' }, bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+    const fiche = element.shadowRoot!.querySelector('home-stock-fiche')!;
+    fiche.dispatchEvent(new CustomEvent('article-pret', {
+      detail: { articleId: 42, quantite: 500, prixUnitaire: 0.005, mode: 'rangement', offDroppedFields: [] },
+      bubbles: true, composed: true,
+    }));
+    await laisserPasserLesMicrotaches();
+    await (element as any).updateComplete;
+    expect(element.ecran).toBe('rangement');
+
+    element.dispatchEvent(new CustomEvent('manger-produit',
+      { detail: { product_id: 42 }, bubbles: true, composed: true }));
+    await (element as any).updateComplete;
+
+    expect(element.ecran).toBe('rangement');
+    expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
+  });
+});
+
 /** Un serveur en mémoire qui se comporte comme le vrai : une seule session
  *  ouverte à la fois, `current` qui ne rend que les sessions `shopping` ou
  *  `to_store`, et une session qui se clôt d'elle-même quand toutes ses

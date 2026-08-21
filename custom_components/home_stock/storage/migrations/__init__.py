@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from . import m001_initial, m002_scan
+from . import m001_initial, m002_scan, m003_consumption
 
-MIGRATIONS = (m001_initial, m002_scan)
+MIGRATIONS = (m001_initial, m002_scan, m003_consumption)
 CURRENT_VERSION = MIGRATIONS[-1].VERSION
 
 

@@ -61,8 +61,7 @@ describe('grouperParRayon : regroupe sans jamais retrier', () => {
 });
 
 function monter(props: { donnees?: DonneesSession | null; connexion?: Connexion;
-                         file?: { ajouter: ReturnType<typeof vi.fn>; rejouer?: ReturnType<typeof vi.fn>;
-                                  resultatDe?: ReturnType<typeof vi.fn> };
+                         file?: { ajouter: ReturnType<typeof vi.fn>; rejouer?: ReturnType<typeof vi.fn> };
                          enAttente?: number } = {}) {
   const element = document.createElement('home-stock-panier') as HTMLElement & {
     donnees: DonneesSession | null; connexion?: Connexion; file?: unknown; enAttente: number;
@@ -113,9 +112,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('demande deux appuis avant de supprimer une ligne', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1 })];
-    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     const boutonSupprimer = element.shadowRoot!.querySelector('.supprimer') as HTMLButtonElement;
@@ -134,9 +133,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('annule l’armement sans rien envoyer', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1 })];
-    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     (element.shadowRoot!.querySelector('.supprimer') as HTMLButtonElement).click();
@@ -161,9 +160,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('ajuste la quantité par paquet (net_quantity) via update_line', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1, quantity: 1000, net_quantity: 500, base_unit: 'g' })];
-    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     (element.shadowRoot!.querySelector('.plus') as HTMLButtonElement).click();
@@ -179,11 +178,10 @@ describe('<home-stock-panier>', () => {
 
   it('accumule l’intention hors ligne : trois appuis sur « + » demandent bien trois paquets de plus, '
      + 'et l’affichage bouge à chaque appui', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('en-attente') });
     const rejouer = vi.fn().mockResolvedValue(undefined); // ne se résout jamais vers un nouveau `donnees` : hors ligne
-    const resultatDe = vi.fn().mockReturnValue(undefined); // toujours en file, hors ligne : pas encore de sort
     const lignes = [ligne({ id: 1, quantity: 1000, net_quantity: 500, base_unit: 'g' })];
-    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer, resultatDe } });
+    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer } });
     await element.updateComplete;
 
     const plus = element.shadowRoot!.querySelector('.plus') as HTMLButtonElement;
@@ -207,9 +205,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('efface l’intention locale dès qu’une quantité serveur fraîche arrive pour la ligne', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1, quantity: 1000, net_quantity: 500, base_unit: 'g' })];
-    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     (element.shadowRoot!.querySelector('.plus') as HTMLButtonElement).click();
@@ -224,9 +222,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('convertit le prix de paquet saisi en prix par unité de base avant l’envoi', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1, base_unit: 'g', net_quantity: 500, unit_price: 0.004 })];
-    const element = monter({ donnees: donnees(lignes, 2), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 2), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     const champPrix = element.shadowRoot!.querySelector('.prix-champ') as HTMLInputElement;
@@ -280,7 +278,8 @@ describe('<home-stock-panier>', () => {
     const lignes = [ligne({ id: 1 }), ligne({ id: 2 })];
     const element = monter({
       donnees: donnees(lignes, 2.5),
-      file: { ajouter: vi.fn(), rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') },
+      file: { ajouter: vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') }),
+              rejouer: vi.fn().mockResolvedValue(undefined) },
     });
     await element.updateComplete;
 
@@ -314,9 +313,9 @@ describe('<home-stock-panier>', () => {
   });
 
   it('prévient plutôt que d’effacer en silence un prix tapé sur une ligne au poids sans poids connu', async () => {
-    const ajouter = vi.fn().mockReturnValue('cle-test');
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
     const lignes = [ligne({ id: 1, base_unit: 'g', net_quantity: null })];
-    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') } });
+    const element = monter({ donnees: donnees(lignes, 2.5), file: { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) } });
     await element.updateComplete;
 
     const champPrix = element.shadowRoot!.querySelector('.prix-champ') as HTMLInputElement;

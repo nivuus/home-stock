@@ -6,9 +6,14 @@ service can write a batch and its movement atomically.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from typing import Any
 
-from ..const import COUNTED_REASONS
+from ..const import (
+    CONSUME_REASONS,
+    MACRO_COLUMNS,
+    REASON_CONSUMPTION,
+)
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -20,7 +25,7 @@ ARTICLE_FIELDS = (
     "carbohydrates", "sugars", "added_sugars", "fat", "saturated_fat", "fiber",
     "salt", "nutriscore", "nova", "ecoscore", "allergens", "traces", "additives",
     "off_labels", "off_source", "off_synced_at", "off_raw", "manual_fields",
-    "is_generic", "external_ref",
+    "is_generic", "external_ref", "serving_quantity",
 )
 
 # The kcal rate to price a movement with: the article's own kcal_per_base_unit,
@@ -30,6 +35,18 @@ ARTICLE_FIELDS = (
 # sites (resolve_kcal_rate, used by application.add_stock/consume_batch) cannot
 # drift apart.
 KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
+
+# The eight macro rates, read straight off the article. Unlike the kcal rate
+# above, there is NO product-level fallback: `product.reference_kcal` exists
+# because a generic article (loose apples) still has a known calorie count,
+# but nobody maintains a reference protein content per product. No value on
+# the article means no value, and the movement freezes NULL.
+MACRO_RATE_SQL = ", ".join(f"a.{column}" for column in MACRO_COLUMNS)
+
+
+def macro_rates(row: Mapping[str, Any]) -> dict[str, float | None]:
+    """The eight macro rates of an already-read row, keyed by column name."""
+    return {column: row[column] for column in MACRO_COLUMNS}
 
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -253,8 +270,8 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     (spec 7.4 — generic/produce articles usually carry no rate of their own).
     """
     return _rows(conn.execute(
-        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit,"
-        "       a.product_id FROM batch b"
+        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit, {MACRO_RATE_SQL},"
+        "       a.product_id, a.serving_quantity FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
         " WHERE a.product_id = ? AND b.closed_at IS NULL",
@@ -309,15 +326,23 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
                     quantity: float, reason: str, base_unit: str,
                     batch_id: int | None = None,
                     kcal: float | None = None, cost: float | None = None,
+                    macros: Mapping[str, float | None] | None = None,
+                    parts_total: int | None = None, parts_mine: int | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
-    return _insert(conn, "movement", {
+    values: dict[str, Any] = {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
         "batch_id": batch_id, "quantity": quantity, "reason": reason,
         "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
+        "parts_total": parts_total, "parts_mine": parts_mine,
         "idempotency_key": idempotency_key,
-    })
+    }
+    # Always all eight columns, so an absent rate lands as an explicit NULL
+    # rather than as a column this INSERT simply never mentioned.
+    given = macros or {}
+    values.update({column: given.get(column) for column in MACRO_COLUMNS})
+    return _insert(conn, "movement", values)
 
 
 def product_base_unit(conn, product_id: int) -> str:
@@ -371,19 +396,113 @@ def stock_rows(conn) -> list[dict[str, Any]]:
     ))
 
 
-def counted_totals(conn) -> dict[str, float]:
-    """Cumulative kcal and cost of everything that left the stock.
+# The personal share of a movement. The CAST is not decoration: parts_mine and
+# parts_total are INTEGER columns, and SQLite's `1 / 4` on two integers is 0 —
+# without it, one plate out of four would silently zero the whole day and the
+# sensor would read 0 kcal with no error anywhere.
+SHARE_SQL = "(CAST(COALESCE(parts_mine, 1) AS REAL) / COALESCE(parts_total, 1))"
 
-    Purchases, inventory corrections and transfers are excluded: only the reasons
-    listed in COUNTED_REASONS feed the daily totals (spec 7.5).
+# Only a consumption feeds the personal diary. Waste and expiry leave the
+# stock and cost money, but nobody ate them (spec 7).
+_PERSONAL_SUMS = ", ".join(
+    [f"COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}'"
+     f" THEN kcal * {SHARE_SQL} END), 0) AS kcal"]
+    + [f"COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}'"
+       f" THEN {column} * {SHARE_SQL} END), 0) AS {column}"
+       for column in MACRO_COLUMNS]
+)
+
+
+def _reasons_sql(reasons) -> str:
+    """An `IN (...)` literal for a handful of reason strings, quoted.
+
+    A function, not a constant computed once at import: journal_entries,
+    counted_movements and totals_between all call this AT QUERY TIME on
+    const.CONSUME_REASONS (or a filtered view of it), so a reason added to
+    that one tuple reaches all three queries by construction — there is no
+    second, independently-typed copy of the set anywhere in this file left
+    to forget. Baking the string once at import time would defeat the
+    point: a test (or a future caller) patching CONSUME_REASONS would then
+    silently keep seeing the stale set."""
+    return "(" + ", ".join(f"'{r}'" for r in reasons) + ")"
+
+
+def totals_between(conn, start: str | None = None,
+                   end: str | None = None) -> dict[str, Any]:
+    """Nutrients, money and coverage over a half-open range, or over everything.
+
+    Money is NEVER divided by the parts: the pack cost what it cost, whether
+    it was eaten alone or shared four ways (spec 7). Only the nine nutrients
+    carry the personal share.
     """
-    marks = ", ".join("?" for _ in COUNTED_REASONS)
+    where, params = "", []
+    if start is not None and end is not None:
+        where = " WHERE occurred_at >= ? AND occurred_at < ?"
+        params = [start, end]
     row = conn.execute(
-        f"SELECT COALESCE(SUM(kcal), 0) AS kcal, COALESCE(SUM(cost), 0) AS cost"
-        f" FROM movement WHERE reason IN ({marks})",
-        tuple(sorted(COUNTED_REASONS)),
+        f"SELECT {_PERSONAL_SUMS},"
+        f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' THEN cost END), 0)"
+        "   AS cost,"
+        f" COALESCE(SUM(CASE WHEN reason IN "
+        f'{_reasons_sql(r for r in CONSUME_REASONS if r != REASON_CONSUMPTION)}'
+        " THEN cost END), 0)"
+        "   AS waste_cost,"
+        f" COALESCE(SUM(CASE WHEN reason = '{REASON_CONSUMPTION}' AND kcal IS NULL"
+        "   THEN 1 END), 0) AS unvalued"
+        f" FROM movement{where}",
+        tuple(params),
     ).fetchone()
-    return {"kcal": float(row["kcal"]), "cost": float(row["cost"])}
+    return dict(row)
+
+
+def journal_entries(conn, start: str, end: str) -> list[dict[str, Any]]:
+    """What left the stock during a food day, oldest first."""
+    return _rows(conn.execute(
+        "SELECT m.id, m.occurred_at, m.quantity, m.reason, m.base_unit, m.kcal,"
+        "       m.cost, m.parts_total, m.parts_mine, p.name AS product_name"
+        " FROM movement m JOIN product p ON p.id = m.product_id"
+        f" WHERE m.reason IN {_reasons_sql(CONSUME_REASONS)}"
+        "   AND m.occurred_at >= ? AND m.occurred_at < ?"
+        " ORDER BY m.occurred_at, m.id",
+        (start, end),
+    ))
+
+
+def counted_movements(conn, since: str) -> list[dict[str, Any]]:
+    """The raw rows a series is bucketed from, in Python.
+
+    Bucketing here rather than in SQL is not laziness: SQLite ships no
+    timezone database, so a GROUP BY on a locally-shifted date would be wrong
+    twice a year — precisely on the two days the food-day boundary is
+    interesting. The volume makes this free: a household writes some fifteen
+    movements a day, so twelve months is on the order of 5 000 rows.
+    """
+    return _rows(conn.execute(
+        "SELECT occurred_at, reason, kcal, cost, parts_total, parts_mine,"
+        f"       {', '.join(MACRO_COLUMNS)}"
+        " FROM movement"
+        f" WHERE reason IN {_reasons_sql(CONSUME_REASONS)}"
+        "   AND occurred_at >= ? ORDER BY occurred_at, id",
+        (since,),
+    ))
+
+
+def learned_portion(conn, product_id: int) -> float | None:
+    """The median of the last three consumptions of this product, or nothing.
+
+    Under three, there is no habit yet — and proposing a number drawn from a
+    single meal would train the button to be wrong. Same discipline as lot 1's
+    learned shelf life.
+    """
+    rows = conn.execute(
+        "SELECT ABS(quantity) AS quantity FROM movement"
+        f" WHERE product_id = ? AND reason = '{REASON_CONSUMPTION}'"
+        " ORDER BY id DESC LIMIT 3",
+        (product_id,),
+    ).fetchall()
+    if len(rows) < 3:
+        return None
+    return float(sorted(row["quantity"] for row in rows)[1])
 
 
 def shortage_rows(conn) -> list[dict[str, Any]]:
@@ -404,6 +523,27 @@ def shortage_rows(conn) -> list[dict[str, Any]]:
         " HAVING quantity < p.min_quantity"
         " ORDER BY p.name"
     ))
+
+
+def expiry_candidates(conn, limit: str) -> list[dict[str, Any]]:
+    """Open batches with a date on or before `limit`, and what has already
+    been announced about each one."""
+    return _rows(conn.execute(
+        "SELECT b.id, b.best_before, b.remaining, b.expiry_announced_stage,"
+        "       p.name AS product_name, p.base_unit"
+        " FROM batch b"
+        " JOIN article a ON a.id = b.article_id"
+        " JOIN product p ON p.id = a.product_id"
+        " WHERE b.closed_at IS NULL AND b.best_before IS NOT NULL"
+        "   AND b.best_before <= ?"
+        " ORDER BY b.best_before, b.id",
+        (limit,),
+    ))
+
+
+def mark_expiry_announced(conn, batch_id: int, stage: str) -> None:
+    conn.execute("UPDATE batch SET expiry_announced_stage = ? WHERE id = ?",
+                 (stage, batch_id))
 
 
 # --- shopping sessions ------------------------------------------------------

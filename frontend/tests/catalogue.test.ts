@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import '../src/ecrans/catalogue';
-import { brouillonDepuis, champsModifies, filtrerProduits, analyserNombre, CHAMPS_CATALOGUE_MODIFIABLES,
+import { brouillonDepuis, champsModifies, filtrerProduits, CHAMPS_CATALOGUE_MODIFIABLES,
          type Brouillon, type Produit, type Rayon } from '../src/ecrans/catalogue';
+import { analyserNombre } from '../src/nombres';
 import type { Connexion } from '../src/connexion';
 import type { Emplacement } from '../src/ecrans/rangement';
 
@@ -290,8 +291,8 @@ describe('<home-stock-catalogue>', () => {
 
   it('n’envoie que les champs modifiés à home_stock/product/update, via la file', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -311,8 +312,8 @@ describe('<home-stock-catalogue>', () => {
 
   it('« 1,5 » tapé dans le seuil est envoyé comme 1.5, pas effacé par la virgule française', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -333,8 +334,8 @@ describe('<home-stock-catalogue>', () => {
   it('« 7 jours » tapé dans la durée de conservation refuse l’envoi entier : rien n’est mis en file, '
      + 'et un message en français explique pourquoi — jamais un null silencieux', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -358,8 +359,8 @@ describe('<home-stock-catalogue>', () => {
 
   it('vider le champ seuil (effacement voulu) envoie explicitement null, pas un refus', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -397,8 +398,8 @@ describe('<home-stock-catalogue>', () => {
 
   it('ferme l’édition sans rien envoyer sur « Annuler »', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -419,5 +420,19 @@ describe('<home-stock-catalogue>', () => {
     await element.updateComplete;
 
     expect(element.shadowRoot!.querySelector('.en-attente')!.textContent).toContain('2');
+  });
+
+  it('offre de manger un produit du catalogue', async () => {
+    const connexion = connexionFactice(reponsesParDefaut);
+    const element = monter({ connexion });
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+
+    const vus: number[] = [];
+    element.addEventListener('manger-produit', (e: any) => vus.push(e.detail.product_id));
+    element.shadowRoot!.querySelector('.manger')?.dispatchEvent(new Event('click'));
+
+    expect(vus.length).toBe(1);
+    expect(vus).toEqual([1]);
   });
 });

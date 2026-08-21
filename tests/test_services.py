@@ -152,6 +152,17 @@ async def test_consume_rejects_an_id_larger_than_64_bits(hass, seeded):
         }, blocking=True)
 
 
+async def test_consume_rejects_a_negative_product_id(hass, seeded):
+    """No real row has a negative id: refused at the schema, the same as the
+    websocket surface (correction round 1 pin — see
+    tests/test_websocket_consume.py::test_consume_refuses_a_negative_product_id)."""
+    entry, ids = seeded
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": -1, "quantity": 1,
+        }, blocking=True)
+
+
 # --- Fix round 5: best_before must not be able to disable the pantry -------
 # A bad best_before used to be accepted by cv.string, stored verbatim, and
 # from that moment application.py's summary() raised ValueError on every
@@ -233,15 +244,116 @@ async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass
         }, blocking=True)
 
 
+async def test_consume_reports_an_unknown_product_as_a_home_assistant_error(hass, seeded):
+    """StockManager.consume's FIFO path (no batch_id) calls
+    repo.product_base_unit(conn, product_id) directly on the caller's own
+    id, before any existence check — it raises a bare `LookupError`, not a
+    `ValueError`. `_run` used to only translate the `ValueError` family, so
+    a well-formed but nonexistent product_id (a deleted product an
+    automation still references) escaped as a raw Python exception instead
+    of the French refusal the websocket surface already gives for the same
+    case. Pins both: a HomeAssistantError, in French, not a bare
+    LookupError."""
+    entry, ids = seeded
+    with pytest.raises(HomeAssistantError) as refusal:
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 999, "quantity": 1,
+        }, blocking=True)
+    assert str(refusal.value) == "Produit 999 inconnu."
+
+
 async def test_consume_rejects_a_reason_not_meant_for_consumption(hass, seeded):
     entry, ids = seeded
     # "purchase"/"inventory"/"transfer" are written by other services; letting
-    # consume() carry them would silently escape COUNTED_REASONS and
-    # under-count the kcal/cost totals for stock that really left the pantry.
+    # consume() carry them would silently escape the reasons totals_between
+    # tracks, and under-count the kcal/cost/cost_waste totals for stock that
+    # really left the pantry.
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "consume", {
             "product_id": ids["product_id"], "quantity": 1, "reason": "purchase",
         }, blocking=True)
+
+
+async def test_the_consume_service_records_the_parts(hass, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    await hass.services.async_call(DOMAIN, "consume", {
+        "product_id": 1, "quantity": 400.0, "parts_total": 4, "parts_mine": 1,
+    }, blocking=True)
+
+    row = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT parts_total, parts_mine FROM movement"
+        " WHERE reason = 'consumption'").fetchone())
+    assert (row["parts_total"], row["parts_mine"]) == (4, 1)
+
+
+async def test_the_consume_service_refuses_impossible_parts(hass, setup_entry):
+    """The same rule as the websocket surface, on the oldest surface."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": 100.0, "parts_total": 2, "parts_mine": 3,
+        }, blocking=True)
+
+
+@pytest.mark.parametrize("value", [1.5, "2", -1, 25])
+async def test_the_consume_service_refuses_a_parts_value_the_schema_rejects(
+        hass, setup_entry, value):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=800.0, location_id=1))
+
+    with pytest.raises((vol.Invalid, HomeAssistantError)):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": 100.0, "parts_total": value, "parts_mine": 1,
+        }, blocking=True)
+
+
+async def test_the_consume_service_refuses_a_negative_quantity_on_a_batch(
+        hass, setup_entry):
+    """Same guard as the websocket surface (test_websocket_consume.py::
+    test_consume_batch_refuses_a_negative_quantity): the service's own
+    finite_float schema lets a negative quantity through, so the floor has
+    to live in StockManager.consume_batch itself."""
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    batch_id = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=200.0, location_id=1))
+
+    with pytest.raises(HomeAssistantError, match="positive"):
+        await hass.services.async_call(DOMAIN, "consume", {
+            "product_id": 1, "quantity": -50.0, "batch_id": batch_id,
+        }, blocking=True)
+
+    row = await hass.async_add_executor_job(lambda: manager.db.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone())
+    assert row["remaining"] == 200.0
+
+
+async def test_the_consume_service_can_target_one_batch(hass, setup_entry):
+    entry = await setup_entry(with_article=True)
+    manager = entry.runtime_data.manager
+    old = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))
+    recent = await hass.async_add_executor_job(
+        lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))
+
+    await hass.services.async_call(DOMAIN, "consume", {
+        "product_id": 1, "quantity": 50.0, "batch_id": recent,
+    }, blocking=True)
+
+    remaining = await hass.async_add_executor_job(lambda: dict(
+        manager.db.read().execute("SELECT id, remaining FROM batch ORDER BY id")
+        .fetchall()[1]))
+    assert remaining["remaining"] == 50.0
 
 
 async def test_query_stock_returns_a_response(hass, seeded):

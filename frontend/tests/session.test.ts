@@ -7,16 +7,13 @@ function laisserPasserLesMicrotaches(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** `sort` dit ce que `resultatDe` répondra : « envoyee », « refusee », ou
- *  « en-file » — ce dernier étant le `undefined` que rend la vraie file
- *  quand l'action attend encore le réseau. (Écrit comme une chaîne et non
- *  comme `undefined` : un argument `undefined` réactiverait la valeur par
- *  défaut du paramètre, et le cas hors ligne se testerait en ligne.) */
-function fileFactice(sort: 'envoyee' | 'refusee' | 'en-file' = 'envoyee') {
+/** `sort` dit ce que `suivi.sort` résoudra : « envoyee », « refusee », ou
+ *  « en-attente » — ce dernier étant ce que rend la vraie file quand
+ *  l'action reste en attente du réseau (voir `FileAttente.ajouter`). */
+function fileFactice(sort: 'envoyee' | 'refusee' | 'en-attente' = 'envoyee') {
   return {
-    ajouter: vi.fn().mockReturnValue('cle-1'),
+    ajouter: vi.fn().mockReturnValue({ cle: 'cle-1', sort: Promise.resolve(sort) }),
     rejouer: vi.fn().mockResolvedValue(undefined),
-    resultatDe: vi.fn().mockReturnValue(sort === 'en-file' ? undefined : sort),
     taille: vi.fn().mockReturnValue(0),
   };
 }
@@ -86,7 +83,7 @@ describe('écran Courses : ouvrir une session', () => {
   });
 
   it('le dit quand l’ouverture reste en file faute de réseau, plutôt que de faire semblant', async () => {
-    const file = fileFactice('en-file');   // ni envoyée ni refusée : toujours en file
+    const file = fileFactice('en-attente');   // ni envoyée ni refusée : toujours en file
     const element = monter({ connexion: connexionFactice(), file });
     await element.updateComplete;
     await laisserPasserLesMicrotaches();

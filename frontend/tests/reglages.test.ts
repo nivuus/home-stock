@@ -99,8 +99,8 @@ describe('<home-stock-reglages>', () => {
 
   it('« descendre » envoie la liste complète réordonnée à aisles/reorder, via la file', async () => {
     const connexion = connexionFactice(reponsesParDefaut);
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('envoyee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('envoyee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -130,8 +130,8 @@ describe('<home-stock-reglages>', () => {
      + 'à afficher (et à renvoyer) un ordre que le serveur n’a jamais accepté', async () => {
     const appeler = vi.fn().mockImplementation(reponsesParDefaut);
     const connexion = { appeler } as unknown as Connexion;
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue('refusee') };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('refusee') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
@@ -154,10 +154,10 @@ describe('<home-stock-reglages>', () => {
   it('ne recharge rien quand le réordonnancement reste simplement en file (hors ligne, pas un refus)', async () => {
     const appeler = vi.fn().mockImplementation(reponsesParDefaut);
     const connexion = { appeler } as unknown as Connexion;
-    const ajouter = vi.fn().mockReturnValue('cle-test');
-    // `undefined` : toujours en file, comme `FileAttente.resultatDe` le rend
+    // « en-attente » : toujours en file, comme `FileAttente.ajouter` le rend
     // tant qu'aucun sort n'est connu (panne de transport).
-    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined), resultatDe: vi.fn().mockReturnValue(undefined) };
+    const ajouter = vi.fn().mockReturnValue({ cle: 'cle-test', sort: Promise.resolve('en-attente') });
+    const file = { ajouter, rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = monter({ connexion, file });
     await laisserPasserLesMicrotaches();
     await element.updateComplete;

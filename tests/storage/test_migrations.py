@@ -6,6 +6,7 @@ from custom_components.home_stock.aisles import AISLES, CATEGORY_TO_AISLE
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import (
     CURRENT_VERSION,
+    MIGRATIONS,
     apply_migrations,
 )
 
@@ -144,7 +145,7 @@ def _lot0_database() -> sqlite3.Connection:
 def test_m002_freezes_the_unit_on_existing_movements():
     conn = _lot0_database()
 
-    assert apply_migrations(conn) == 2
+    assert apply_migrations(conn) == CURRENT_VERSION
 
     row = conn.execute("SELECT base_unit FROM movement WHERE id = 1").fetchone()
     assert row["base_unit"] == "piece"
@@ -241,3 +242,130 @@ def test_a_movement_whose_product_vanished_keeps_an_unknown_unit():
     }
     assert rows[1] == "piece"  # normal row: still correctly filled
     assert rows[2] is None  # product 999 does not exist: honestly unknown
+
+
+def _open(tmp_path) -> sqlite3.Connection:
+    """A raw connection to a fresh database file, pragmas included — the
+    same ones Database.connect() applies in production."""
+    conn = sqlite3.connect(str(tmp_path / "home_stock.db"))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def _migrated(tmp_path) -> sqlite3.Connection:
+    """A raw connection, migrated to CURRENT_VERSION."""
+    conn = _open(tmp_path)
+    apply_migrations(conn)
+    return conn
+
+
+def _migrated_to(tmp_path, *, version: int):
+    """A database stopped at a given version, to observe what the next
+    one does with content already present."""
+    conn = _open(tmp_path)                    # opening helper already defined above
+    for migration in MIGRATIONS:
+        if migration.VERSION > version:
+            break
+        conn.executescript(migration.SQL)
+        hook = getattr(migration, "apply", None)
+        if hook is not None:
+            hook(conn)
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    conn.execute("DELETE FROM schema_version")
+    conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+    return conn
+
+
+def _seed_one_movement(conn) -> None:
+    conn.execute("INSERT INTO location (name, kind) VALUES ('Placard', 'cupboard')")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
+    conn.execute("INSERT INTO article (product_id) VALUES (1)")
+    conn.execute(
+        "INSERT INTO movement (occurred_at, product_id, article_id, quantity,"
+        " reason, base_unit) VALUES ('2026-08-20T10:00:00', 1, 1, -125,"
+        " 'consumption', 'g')")
+    conn.commit()
+
+
+def test_m003_adds_the_journal_columns(tmp_path):
+    conn = _migrated(tmp_path)                       # helper already defined earlier in this file
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(movement)")}
+    assert {"parts_total", "parts_mine", "proteins", "carbohydrates", "sugars",
+            "added_sugars", "fat", "saturated_fat", "fiber", "salt"} <= columns
+    assert "serving_quantity" in {r["name"] for r in conn.execute("PRAGMA table_info(article)")}
+    assert "expiry_announced_stage" in {r["name"] for r in conn.execute("PRAGMA table_info(batch)")}
+
+
+def test_m003_keeps_the_movement_triggers(tmp_path):
+    """m003 does not touch the triggers — but a movement must still stay
+    unmodifiable after it, or the migration broke append-only with
+    nothing else around to say so."""
+    conn = _migrated(tmp_path)
+    _seed_one_movement(conn)                          # helper to add, see Step 7
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE movement SET quantity = 999 WHERE id = 1")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM movement WHERE id = 1")
+
+
+def test_m003_backfills_serving_quantity_from_off_raw(tmp_path):
+    conn = _migrated_to(tmp_path, version=2)          # helper to add, see Step 7
+    conn.execute("INSERT INTO location (name, kind) VALUES ('Placard', 'cupboard')")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Pomme', 'piece')")
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw) VALUES (1, 125, ?)",
+        ('{"serving_quantity": "100"}',))
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw) VALUES (2, 150, ?)",
+        ('{"serving_quantity": "100"}',))
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw) VALUES (1, 125, ?)",
+        ('{"serving_quantity": "500"}',))     # bigger than the pack: rejected
+    conn.execute("INSERT INTO article (product_id, off_raw) VALUES (1, '{tronqu')")
+    conn.commit()
+
+    apply_migrations(conn)
+
+    servings = [row["serving_quantity"] for row in
+                conn.execute("SELECT serving_quantity FROM article ORDER BY id")]
+    assert servings == [100.0, None, None, None]
+
+
+def test_m003_is_replayable(tmp_path):
+    """Replaying the migration on an already-migrated database must change
+    nothing — and especially must not overwrite a hand-corrected serving."""
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw, serving_quantity)"
+        " VALUES (1, 125, ?, 60)", ('{"serving_quantity": "100"}',))
+    conn.commit()
+
+    apply_migrations(conn)
+
+    assert conn.execute("SELECT serving_quantity FROM article").fetchone()[0] == 60.0
+
+
+def test_m003_apply_never_overwrites_a_serving_already_set(tmp_path):
+    """apply_migrations() locks by version: once the base sits at
+    CURRENT_VERSION, m003's own apply() hook is never invoked again, so
+    test_m003_is_replayable's second apply_migrations() call is a total
+    no-op and cannot exercise the `serving_quantity IS NULL` guard in
+    m003_consumption.apply(). Calling m003_consumption.apply(conn) directly
+    is the only path that bypasses the version lock — same trick
+    test_m002_never_overwrites_an_aisle_already_chosen already uses for
+    m002's own hook."""
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Yaourt', 'g')")
+    conn.execute(
+        "INSERT INTO article (product_id, net_quantity, off_raw, serving_quantity)"
+        " VALUES (1, 125, ?, 60)", ('{"serving_quantity": "100"}',))
+    conn.commit()
+
+    from custom_components.home_stock.storage.migrations import m003_consumption
+
+    m003_consumption.apply(conn)  # replayed by hand, bypassing the version lock
+
+    assert conn.execute("SELECT serving_quantity FROM article").fetchone()[0] == 60.0

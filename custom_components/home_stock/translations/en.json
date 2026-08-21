@@ -27,11 +27,25 @@
       "kcal_total": { "name": "Kilocalories out of stock" },
       "cost_total": { "name": "Cost of stock consumed" },
       "cart_total": { "name": "Current cart" },
-      "to_store": { "name": "To put away" }
+      "to_store": { "name": "To put away" },
+      "kcal_today": { "name": "Today's kilocalories" },
+      "proteins_today": { "name": "Today's protein" },
+      "carbohydrates_today": { "name": "Today's carbohydrates" },
+      "sugars_today": { "name": "Today's sugars" },
+      "added_sugars_today": { "name": "Today's added sugars" },
+      "fat_today": { "name": "Today's fat" },
+      "saturated_fat_today": { "name": "Today's saturated fat" },
+      "fiber_today": { "name": "Today's fiber" },
+      "salt_today": { "name": "Today's salt" },
+      "cost_today": { "name": "Today's food spending" },
+      "cost_waste_total": { "name": "Cost of waste" }
     },
     "binary_sensor": {
       "expirations": { "name": "Expiring soon" },
       "shortages": { "name": "Shortages" }
+    },
+    "event": {
+      "expiration": { "name": "Expiration" }
     },
     "todo": {
       "expirations": { "name": "To eat" }

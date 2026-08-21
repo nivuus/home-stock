@@ -159,12 +159,10 @@ export class EcranPanier extends LitElement {
    *  dans les deux écrans. */
   private ecrire(type: string, charge: Record<string, unknown>): Promise<boolean> {
     if (!this.file) return Promise.resolve(false);
-    const cle = this.file.ajouter(type, charge);
+    const suivi = this.file.ajouter(type, charge);
     this.avertirFile();
-    return this.file.rejouer().then(() => {
-      this.avertirFile();
-      return this.file!.resultatDe(cle) === 'envoyee';
-    });
+    void this.file.rejouer().then(() => this.avertirFile());
+    return suivi.sort.then((sort) => sort === 'envoyee');
   }
 
   private avertirFile(): void {

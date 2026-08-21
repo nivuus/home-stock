@@ -111,11 +111,11 @@ export class EcranReglages extends LitElement {
     if (nouvelOrdre === null) return;
     this.rayons = nouvelOrdre;
     if (!this.file) return;
-    const cle = this.file.ajouter('home_stock/aisles/reorder', { aisle_ids: nouvelOrdre.map((r) => r.id) });
+    const suivi = this.file.ajouter('home_stock/aisles/reorder', { aisle_ids: nouvelOrdre.map((r) => r.id) });
     this.avertirFile();
     await this.file.rejouer();
     this.avertirFile();
-    if (this.file.resultatDe(cle) === 'refusee') {
+    if (await suivi.sort === 'refusee') {
       // Déjà signalé en français dans la bannière globale du panneau : rien
       // à ajouter ici, seulement corriger l'affichage.
       await this.charger();
