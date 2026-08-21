@@ -1,5 +1,6 @@
 import itertools
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -737,8 +738,8 @@ def test_m005_is_replayable(tmp_path):
     """Rejouer `apply_migrations` sur une base déjà en version 5 ne doit rien
     changer et rien lever."""
     conn = _migrated(tmp_path)
-    assert apply_migrations(conn) == 5
-    assert apply_migrations(conn) == 5
+    assert apply_migrations(conn) == CURRENT_VERSION
+    assert apply_migrations(conn) == CURRENT_VERSION
 
 
 def test_m005_applies_on_a_copy_of_the_lot2_database(tmp_path):
@@ -746,5 +747,178 @@ def test_m005_applies_on_a_copy_of_the_lot2_database(tmp_path):
     et des mouvements — c'est celle-là qui existe dans la maison."""
     conn = _migrated_to(tmp_path, version=4)
     _seed_one_movement(conn)
-    assert apply_migrations(conn) == 5
+    assert apply_migrations(conn) == CURRENT_VERSION
     assert conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"] == 1
+
+
+def test_m006_creates_the_seven_tables(tmp_path):
+    conn = _migrated(tmp_path)
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"store", "store_aisle", "shopping_list_item", "shopping_list_claim",
+            "shopping_recurring", "receipt", "receipt_line"} <= tables
+
+
+def test_m006_adds_the_four_columns(tmp_path):
+    conn = _migrated(tmp_path)
+
+    def columns(table):
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    assert "corrects_id" in columns("movement")
+    assert "store_id" in columns("shopping_session")
+    assert "price_source" in columns("shopping_line")
+    assert "store_id" in columns("price")
+
+
+def test_m006_keeps_price_store_as_a_free_string(tmp_path):
+    """`price` est un journal d'observations : chaque ligne dit ce qui a été
+    vu le jour où ça l'a été. `store_id` s'AJOUTE, `store` n'est pas réécrite."""
+    assert "store" in {r["name"] for r in _migrated(tmp_path).execute(
+        "PRAGMA table_info(price)")}
+
+
+def test_a_movement_can_only_be_corrected_once(tmp_path):
+    """L'index unique partiel, pas une lecture préalable : deux corrections
+    concurrentes de la même ligne rembourseraient deux fois."""
+    conn = _migrated(tmp_path)
+    _seed_one_movement(conn)
+    conn.execute("INSERT INTO movement (occurred_at, product_id, article_id,"
+                 " quantity, reason, base_unit, corrects_id)"
+                 " VALUES ('2026-08-21T10:00:00', 1, 1, 200, 'consumption', 'g', 1)")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO movement (occurred_at, product_id, article_id,"
+                     " quantity, reason, base_unit, corrects_id)"
+                     " VALUES ('2026-08-21T11:00:00', 1, 1, 200, 'consumption', 'g', 1)")
+
+
+def test_two_uncorrected_movements_do_not_collide(tmp_path):
+    """Le garde-fou du test précédent : l'index est PARTIEL. Sans le
+    `WHERE corrects_id IS NOT NULL`, le deuxième mouvement ordinaire du foyer
+    serait refusé — panne totale, en silence, à la première consommation."""
+    conn = _migrated(tmp_path)
+    _seed_one_movement(conn)
+    conn.execute("INSERT INTO movement (occurred_at, product_id, article_id,"
+                 " quantity, reason, base_unit)"
+                 " VALUES ('2026-08-21T11:00:00', 1, 1, -50, 'consumption', 'g')")
+    assert conn.execute("SELECT COUNT(*) AS n FROM movement").fetchone()["n"] == 2
+
+
+def test_only_one_open_list_item_per_product(tmp_path):
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Lait', 'ml')")
+    conn.execute("INSERT INTO shopping_list_item (product_id, added_at)"
+                 " VALUES (1, '2026-08-21T09:00:00')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO shopping_list_item (product_id, added_at)"
+                     " VALUES (1, '2026-08-21T09:05:00')")
+    # Cochée ou retirée, la ligne sort de l'index : une ligne neuve est possible.
+    conn.execute("UPDATE shopping_list_item SET checked_at = '2026-08-21T10:00:00'")
+    conn.execute("INSERT INTO shopping_list_item (product_id, added_at)"
+                 " VALUES (1, '2026-08-21T10:05:00')")
+
+
+def test_a_free_text_line_needs_no_product(tmp_path):
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO shopping_list_item (free_text, added_at)"
+                 " VALUES ('Piles télécommande salon', '2026-08-21T09:00:00')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO shopping_list_item (added_at)"
+                     " VALUES ('2026-08-21T09:00:00')")
+
+
+def test_a_claim_is_unique_per_origin(tmp_path):
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO shopping_list_item (free_text, added_at)"
+                 " VALUES ('Pain', '2026-08-21T09:00:00')")
+    for origin in ("shortage", "meal_plan"):
+        conn.execute("INSERT INTO shopping_list_claim (item_id, origin, claimed_at)"
+                     " VALUES (1, ?, '2026-08-21T09:00:00')", (origin,))
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO shopping_list_claim (item_id, origin, claimed_at)"
+                     " VALUES (1, 'shortage', '2026-08-21T09:10:00')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO shopping_list_claim (item_id, origin, claimed_at)"
+                     " VALUES (1, 'envie', '2026-08-21T09:10:00')")
+
+
+def test_m006_backfills_stores_by_exact_equality_only(tmp_path):
+    """Fusionner « Leclerc » et « E.Leclerc » est une DÉCISION, pas une
+    migration. Une migration qui devine réunit un jour deux magasins
+    réellement différents, sans laisser de trace."""
+    conn = _migrated_to(tmp_path, version=5)
+    conn.execute("INSERT INTO shopping_session (started_at, state, store)"
+                 " VALUES ('2026-08-01T09:00:00', 'done', 'Leclerc')")
+    conn.execute("INSERT INTO shopping_session (started_at, state, store)"
+                 " VALUES ('2026-08-08T09:00:00', 'done', 'E.Leclerc')")
+    conn.execute("INSERT INTO shopping_session (started_at, state, store)"
+                 " VALUES ('2026-08-15T09:00:00', 'done', NULL)")
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Lait', 'ml')")
+    conn.execute("INSERT INTO article (product_id, label) VALUES (1, 'Lait 1 L')")
+    conn.execute("INSERT INTO price (article_id, observed_on, price_per_base_unit,"
+                 " store, source) VALUES (1, '2026-08-01', 0.001, 'Lidl', 'manual')")
+    conn.commit()
+    migrations.apply_migrations(conn)
+
+    names = [r["name"] for r in conn.execute("SELECT name FROM store ORDER BY name")]
+    assert names == ["E.Leclerc", "Leclerc", "Lidl"]
+    rows = dict(conn.execute(
+        "SELECT s.store, st.name FROM shopping_session s"
+        " LEFT JOIN store st ON st.id = s.store_id").fetchall())
+    assert rows == {"Leclerc": "Leclerc", "E.Leclerc": "E.Leclerc", None: None}
+    assert conn.execute("SELECT store, store_id FROM price").fetchone()["store"] == "Lidl"
+
+
+def test_m006_marks_existing_lines_manual(tmp_path):
+    """Faux dans le détail, et le choix le moins nuisible : `manual` CONSERVE
+    le comportement actuel de la cascade. Marquer `open_prices` rétroactivement
+    supposerait de deviner, et effacerait des prix réellement tapés."""
+    conn = _migrated_to(tmp_path, version=5)
+    conn.execute("INSERT INTO product (name, base_unit) VALUES ('Lait', 'ml')")
+    conn.execute("INSERT INTO article (product_id, label) VALUES (1, 'Lait 1 L')")
+    conn.execute("INSERT INTO shopping_session (started_at, state) VALUES ('x', 'done')")
+    conn.execute("INSERT INTO shopping_line (session_id, article_id, quantity,"
+                 " unit_price, scanned_at) VALUES (1, 1, 1000, 0.001, 'x')")
+    conn.execute("INSERT INTO shopping_line (session_id, article_id, quantity,"
+                 " scanned_at) VALUES (1, 1, 1000, 'x')")
+    conn.commit()
+    migrations.apply_migrations(conn)
+    sources = [r["price_source"] for r in conn.execute(
+        "SELECT price_source FROM shopping_line ORDER BY id")]
+    assert sources == ["manual", "manual"]
+
+
+def test_m006_creates_no_list_line(tmp_path):
+    """Une migration qui sème 40 lignes ferait apparaître au premier
+    redémarrage une liste que personne n'a demandée — et la première
+    impression d'une liste de courses décide si on s'en sert."""
+    conn = _migrated(tmp_path)
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_list_item").fetchone()["n"] == 0
+
+
+def test_m006_apply_is_replayable(tmp_path):
+    from custom_components.home_stock.storage.migrations import m006_shopping
+    conn = _migrated(tmp_path)
+    conn.execute("INSERT INTO shopping_session (started_at, state, store)"
+                 " VALUES ('2026-08-01T09:00:00', 'done', 'Leclerc')")
+    conn.commit()
+    m006_shopping.apply(conn)
+    m006_shopping.apply(conn)                # rejouée à la main, deux fois
+    assert conn.execute("SELECT COUNT(*) AS n FROM store").fetchone()["n"] == 1
+
+
+def test_m006_applies_to_a_copy_of_the_real_lot5_database(tmp_path):
+    """Sur une COPIE de la vraie base, jamais sur l'originale et jamais sur
+    une base vide : une base vide ne prouve rien d'un remplissage rétroactif.
+    Sautée si la base n'est pas lisible — un test ne fait pas échouer une
+    suite parce qu'une machine n'a pas le garde-manger du foyer."""
+    source = Path("/opt/nivuus/HomeAssistant/config/home_stock.db")
+    if not source.exists():
+        pytest.skip("base réelle absente")
+    copy = tmp_path / "copie.db"
+    copy.write_bytes(source.read_bytes())
+    conn = sqlite3.connect(copy)
+    conn.row_factory = sqlite3.Row
+    assert migrations.apply_migrations(conn) == 6
+    assert migrations.apply_migrations(conn) == 6      # rejouée : sans effet
