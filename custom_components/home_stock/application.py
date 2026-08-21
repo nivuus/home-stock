@@ -34,6 +34,7 @@ from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, 
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import convertible_amount, format_quantity, to_base_quantity
+from .recipes.adapt import AdaptedRecipe
 from .recipes.mapping import SourceIngredient, SourceRecipe
 from .storage import repositories as repo
 from .storage.database import Database
@@ -917,7 +918,8 @@ class StockManager:
                     "pour que le journal reste lisible")
             repo.delete_recipe(conn, recipe_id)
 
-    def write_source_recipe(self, recipe: SourceRecipe) -> tuple[int, bool]:
+    def write_source_recipe(self, recipe: SourceRecipe, *,
+                            adapted: AdaptedRecipe | None = None) -> tuple[int, bool]:
         """Write an imported card. Replayable: returns `(recipe_id, created)`.
 
         A second import of the same `source_ref` UPDATES the first rather than
@@ -933,17 +935,44 @@ class StockManager:
         with self.db.write() as conn:
             existing = repo.find_recipe_by_source(conn, "themealdb", recipe.source_ref)
             created = existing is None
+            # Adapted or not, in one shot. There is no half-adapted recipe:
+            # `adapt` returns a whole AdaptedRecipe or None, so the fields
+            # below either all come from the agent or all come from the source.
+            if adapted is None:
+                fields = {"name": recipe.name, "language": "en",
+                          "needs_review": 1, "adapted_at": None}
+            else:
+                fields = {
+                    "name": adapted.name, "summary": adapted.summary,
+                    "total_minutes": adapted.total_minutes,
+                    "utensils": adapted.utensils, "servings": adapted.servings,
+                    "language": "fr", "needs_review": 0, "adapted_at": moment,
+                }
+            fields |= {"image_url": recipe.image_url,
+                       "source_url": recipe.source_url}
+
             if created:
                 recipe_id = repo.insert_recipe(
-                    conn, name=recipe.name, source="themealdb", created_at=moment,
-                    source_ref=recipe.source_ref, source_url=recipe.source_url,
-                    image_url=recipe.image_url, language="en", needs_review=1)
+                    conn, source="themealdb", created_at=moment,
+                    source_ref=recipe.source_ref, **fields)
             else:
                 recipe_id = existing["id"]
-                repo.update_recipe_fields(conn, recipe_id, {
-                    "name": recipe.name, "image_url": recipe.image_url,
-                    "source_url": recipe.source_url})
-            _write_source_ingredients_within(conn, recipe_id, recipe, moment)
+                repo.update_recipe_fields(conn, recipe_id, fields)
+                conn.execute(
+                    "DELETE FROM recipe_instruction WHERE step_id IN"
+                    " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
+                conn.execute("DELETE FROM recipe_step WHERE recipe_id = ?", (recipe_id,))
+
+            if adapted is not None:
+                _write_steps_within(conn, recipe_id, [
+                    {"title": step.title,
+                     "instructions": [
+                         {"text": text, "timer_label": label,
+                          "timer_seconds": seconds}
+                         for text, label, seconds in step.bullets]}
+                    for step in adapted.steps])
+            _write_source_ingredients_within(conn, recipe_id, recipe, moment,
+                                             adapted=adapted)
             return recipe_id, created
 
 
@@ -1150,7 +1179,8 @@ def _resolve_source_quantity(
 
 
 def _write_source_ingredients_within(conn, recipe_id: int, recipe: SourceRecipe,
-                                     moment: str) -> None:
+                                     moment: str,
+                                     adapted: AdaptedRecipe | None = None) -> None:
     """Rewrite the imported lines, sparing everything a human touched."""
     products = repo.list_products(conn)
     measures_by_name = {m["name"]: m for m in repo.list_measures(conn)}
@@ -1165,8 +1195,14 @@ def _write_source_ingredients_within(conn, recipe_id: int, recipe: SourceRecipe,
     for ingredient in recipe.ingredients:
         if ingredient.position in protected:
             continue
+        # The agent's isolated name, when it gave one for this position: it
+        # is a better needle than the raw text, which still carries its
+        # quantity. Positions are 1-based, the tuple is 0-based.
+        isolated = ingredient.name
+        if adapted is not None and ingredient.position <= len(adapted.ingredient_names):
+            isolated = adapted.ingredient_names[ingredient.position - 1]
         state, product_id, score, _ = resolve_ingredient_match(
-            conn, raw_text=ingredient.raw_text, ingredient_name=ingredient.name,
+            conn, raw_text=ingredient.raw_text, ingredient_name=isolated,
             products=products)
         product = next((p for p in products if p["id"] == product_id), None)
         amount, measure_id = _resolve_source_quantity(

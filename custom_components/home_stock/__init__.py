@@ -13,10 +13,16 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
 from .application import StockManager
-from .const import DATABASE_FILENAME, DOMAIN
+from .const import (
+    CONF_RECIPE_SOURCE_KEY,
+    DATABASE_FILENAME,
+    DEFAULT_RECIPE_SOURCE_KEY,
+    DOMAIN,
+)
 from .coordinator import HomeStockCoordinator
 from .off.client import AiohttpTransport, OffClient
 from .panel import async_register_panel, async_remove_panel
+from .recipes.source import MealDbClient
 from .services import async_register_services
 from .shopping import ShoppingService
 from .storage.database import Database
@@ -49,6 +55,10 @@ class HomeStockData:
     # all) replaces this with a fake instead of waiting BULK_INTERVAL
     # seconds of real wall clock — the same pattern OffClient's own
     # `sleeper` constructor argument already uses.
+    # The TheMealDB client. Rebuilt on every reload, so changing the API key
+    # in the options takes effect without restarting Home Assistant — the
+    # reload listener below already exists for expiration_alert_days.
+    recipe_source: MealDbClient | None = None
     resync_sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep
     # Claimed synchronously (no `await` between the check and the set) at
     # the top of services.resync_off, before the barcode list is even read:
@@ -93,8 +103,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     off_client = OffClient(transport, user_agent=user_agent)
     shopping = ShoppingService(manager)
 
+    recipe_source = MealDbClient(
+        transport,
+        key=entry.options.get(CONF_RECIPE_SOURCE_KEY, DEFAULT_RECIPE_SOURCE_KEY),
+        user_agent=user_agent,
+    )
+
     entry.runtime_data = HomeStockData(
-        database, manager, coordinator, shopping, off_client, transport, user_agent
+        database, manager, coordinator, shopping, off_client, transport, user_agent,
+        recipe_source=recipe_source,
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

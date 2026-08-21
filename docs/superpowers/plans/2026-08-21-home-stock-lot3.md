@@ -1338,7 +1338,7 @@ async def adapt(hass, *, agent_id: str | None, recipe: SourceRecipe) -> AdaptedR
 
 **Décision de plan — la lecture est défensive de bout en bout.** Un agent conversationnel a le droit d'écrire « Voici la recette adaptée : » devant son JSON, c'est même son métier. `extract_json` cherche d'abord la charge telle quelle, puis le premier bloc délimité par des **accolades équilibrées** (compteur, pas d'expression régulière — une regex non gloutonne coupe au premier `}` interne). Chaque champ passe par `bounded_text` / `finite_float` / `bounded_int`. **Toute anomalie fait échouer l'adaptation entière** ; la recette est alors écrite telle quelle depuis la source, `language = 'en'`, `needs_review = 1`, `adapted_at = NULL`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # --- l'invite ---------------------------------------------------------------
@@ -1396,17 +1396,17 @@ async def test_the_source_key_defaults_to_one(hass): ...
 async def test_changing_an_option_reloads_the_entry(hass): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_adapt.py tests/test_config_flow.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/recipes/test_adapt.py tests/test_config_flow.py -q`
 
-- [ ] **Step 3: Écrire `recipes/adapt.py`, les options et le câblage**
+- [x] **Step 3: Écrire `recipes/adapt.py`, les options et le câblage**
 
 Le composant **n'embarque aucune clé d'API** et n'en lit aucune : ni `GEMINI_KEY`, ni le `.env` de `data/tools/grocy-off`, ni rien d'autre. C'est une règle, pas une préférence — le composant part sur HACS.
 
 Ajouter les deux libellés dans `options.step.init.data` de `translations/fr.json` **et** `en.json`.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/recipes tests/test_config_flow.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/recipes tests/test_config_flow.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/recipes/adapt.py custom_components/home_stock/config_flow.py custom_components/home_stock/const.py custom_components/home_stock/__init__.py custom_components/home_stock/translations tests/recipes/test_adapt.py tests/test_config_flow.py
 git commit -m "feat: adapt an imported recipe through a Home Assistant conversation agent"

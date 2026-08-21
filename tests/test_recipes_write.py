@@ -322,3 +322,97 @@ def test_an_unknown_recipe_is_named_in_the_error(manager):
                  lambda: manager.delete_recipe(999)):
         with pytest.raises(ValueError, match="999"):
             call()
+
+
+# --- lot 3 : adaptée ou pas, jamais à moitié --------------------------------
+
+def _adapted(**overrides):
+    from custom_components.home_stock.recipes.adapt import AdaptedRecipe, AdaptedStep
+    payload = dict(
+        name="Gratin de poulet teriyaki", summary="Un gratin sucré-salé",
+        total_minutes=35, utensils="poêle, four", servings=4,
+        steps=(AdaptedStep(title="Préparer la sauce", bullets=(
+            ("Émincer l'oignon", None, None),
+            ("Cuire", "Cuisson", 600))),),
+        ingredient_names=("sauce soja",),
+        ingredient_amounts=((None, None),))
+    payload.update(overrides)
+    return AdaptedRecipe(**payload)
+
+
+def test_an_adapted_recipe_lands_in_french_with_its_pages(manager):
+    _products(manager, ("Sauce soja", "ml"))
+    recipe_id, _ = manager.write_source_recipe(
+        _source(_ingredient(1, "soy sauce", "3/4 cup soy sauce", 0.75, "cup")),
+        adapted=_adapted())
+
+    view = manager.get_recipe_view(recipe_id)
+    assert view["recipe"]["name"] == "Gratin de poulet teriyaki"
+    assert view["recipe"]["language"] == "fr"
+    assert view["recipe"]["needs_review"] == 0
+    assert view["recipe"]["adapted_at"] is not None
+    assert view["recipe"]["servings"] == 4
+    [step] = view["steps"]
+    assert step["title"] == "Préparer la sauce"
+    assert [b["text"] for b in step["instructions"]] == ["Émincer l'oignon", "Cuire"]
+    assert step["instructions"][1]["timer_seconds"] == 600
+
+
+def test_without_an_adaptation_the_recipe_stays_english_and_reviewable(manager):
+    """Le contrat des cinq échecs : agent absent, en panne, hors quota,
+    illisible ou hors bornes donnent tous CE résultat — la recette existe,
+    entière, en anglais, marquée à relire, et sans une seule étape orpheline."""
+    recipe_id, _ = manager.write_source_recipe(
+        _source(_ingredient(1, "soy sauce", "3/4 cup soy sauce", 0.75, "cup")))
+    view = manager.get_recipe_view(recipe_id)
+    assert view["recipe"]["name"] == "Teriyaki"
+    assert view["recipe"]["language"] == "en"
+    assert view["recipe"]["needs_review"] == 1
+    assert view["recipe"]["adapted_at"] is None
+    assert view["steps"] == []          # aucune page à moitié écrite
+    assert len(view["ingredients"]) == 1
+
+
+def test_adapting_later_replaces_the_pages_instead_of_stacking_them(manager):
+    """`home_stock.adapt_recipe` rattrape une recette importée sans agent. Le
+    second passage ne doit pas empiler une deuxième série de pages."""
+    source = _source(_ingredient(1, "soy sauce", "3/4 cup soy sauce", 0.75, "cup"))
+    recipe_id, _ = manager.write_source_recipe(source)
+    manager.write_source_recipe(source, adapted=_adapted())
+    manager.write_source_recipe(source, adapted=_adapted())
+
+    view = manager.get_recipe_view(recipe_id)
+    assert len(view["steps"]) == 1
+    assert len(view["steps"][0]["instructions"]) == 2
+    assert view["recipe"]["language"] == "fr"
+
+
+def test_the_agents_isolated_name_is_used_to_match(manager):
+    """« 3/4 cup soy sauce » n'apparie rien ; « sauce soja », si. Le nom isolé
+    que rend l'agent est une meilleure aiguille que le texte brut, qui traîne
+    encore sa quantité."""
+    ids = _products(manager, ("Sauce soja", "ml"))
+    source = _source(_ingredient(1, "soy sauce", "3/4 cup soy sauce", 0.75, "cup"))
+
+    recipe_id, _ = manager.write_source_recipe(source)
+    [before] = repo.list_ingredients(manager.db.read(), recipe_id)
+    assert before["product_id"] is None
+
+    manager.write_source_recipe(source, adapted=_adapted())
+    [after] = repo.list_ingredients(manager.db.read(), recipe_id)
+    assert after["product_id"] == ids["Sauce soja"]
+
+
+def test_adaptation_never_rewrites_a_confirmed_ingredient(manager):
+    ids = _products(manager, ("Sauce soja", "ml"), ("Vinaigre", "ml"))
+    source = _source(_ingredient(1, "soy sauce", "3/4 cup soy sauce", 0.75, "cup"))
+    recipe_id, _ = manager.write_source_recipe(source)
+    [line] = repo.list_ingredients(manager.db.read(), recipe_id)
+    manager.match_ingredient(line["id"], product_id=ids["Vinaigre"],
+                             state="confirmed")
+
+    manager.write_source_recipe(source, adapted=_adapted())
+
+    [after] = repo.list_ingredients(manager.db.read(), recipe_id)
+    assert after["product_id"] == ids["Vinaigre"]
+    assert after["match_state"] == "confirmed"

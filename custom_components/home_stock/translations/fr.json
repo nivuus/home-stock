@@ -15,40 +15,84 @@
       "init": {
         "title": "Options du garde-manger",
         "data": {
-          "expiration_alert_days": "Alerter combien de jours avant la date limite"
+          "expiration_alert_days": "Alerter combien de jours avant la date limite",
+          "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
+          "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)"
         }
       }
     }
   },
   "entity": {
     "sensor": {
-      "stock_value": { "name": "Valeur du stock" },
-      "batches": { "name": "Lots en stock" },
-      "kcal_total": { "name": "Kilocalories sorties du stock" },
-      "cost_total": { "name": "Coût des sorties de stock" },
-      "cart_total": { "name": "Panier en cours" },
-      "to_store": { "name": "À ranger" },
-      "kcal_today": { "name": "Kilocalories du jour" },
-      "proteins_today": { "name": "Protéines du jour" },
-      "carbohydrates_today": { "name": "Glucides du jour" },
-      "sugars_today": { "name": "Sucres du jour" },
-      "added_sugars_today": { "name": "Sucres ajoutés du jour" },
-      "fat_today": { "name": "Matières grasses du jour" },
-      "saturated_fat_today": { "name": "Graisses saturées du jour" },
-      "fiber_today": { "name": "Fibres du jour" },
-      "salt_today": { "name": "Sel du jour" },
-      "cost_today": { "name": "Dépense alimentaire du jour" },
-      "cost_waste_total": { "name": "Coût du gaspillage" }
+      "stock_value": {
+        "name": "Valeur du stock"
+      },
+      "batches": {
+        "name": "Lots en stock"
+      },
+      "kcal_total": {
+        "name": "Kilocalories sorties du stock"
+      },
+      "cost_total": {
+        "name": "Coût des sorties de stock"
+      },
+      "cart_total": {
+        "name": "Panier en cours"
+      },
+      "to_store": {
+        "name": "À ranger"
+      },
+      "kcal_today": {
+        "name": "Kilocalories du jour"
+      },
+      "proteins_today": {
+        "name": "Protéines du jour"
+      },
+      "carbohydrates_today": {
+        "name": "Glucides du jour"
+      },
+      "sugars_today": {
+        "name": "Sucres du jour"
+      },
+      "added_sugars_today": {
+        "name": "Sucres ajoutés du jour"
+      },
+      "fat_today": {
+        "name": "Matières grasses du jour"
+      },
+      "saturated_fat_today": {
+        "name": "Graisses saturées du jour"
+      },
+      "fiber_today": {
+        "name": "Fibres du jour"
+      },
+      "salt_today": {
+        "name": "Sel du jour"
+      },
+      "cost_today": {
+        "name": "Dépense alimentaire du jour"
+      },
+      "cost_waste_total": {
+        "name": "Coût du gaspillage"
+      }
     },
     "binary_sensor": {
-      "expirations": { "name": "Péremptions proches" },
-      "shortages": { "name": "Ruptures" }
+      "expirations": {
+        "name": "Péremptions proches"
+      },
+      "shortages": {
+        "name": "Ruptures"
+      }
     },
     "event": {
-      "expiration": { "name": "Péremption" }
+      "expiration": {
+        "name": "Péremption"
+      }
     },
     "todo": {
-      "expirations": { "name": "À consommer" }
+      "expirations": {
+        "name": "À consommer"
+      }
     }
   }
 }
