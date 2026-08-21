@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import voluptuous as vol
 
 from .const import (
+    BATTERY_EVENT_KINDS,
     BATTERY_KINDS,
     DEFAULT_KEEP_PERCENT,
     DEFAULT_LOW_PERCENT,
@@ -34,7 +35,8 @@ from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
-from .validators import check_battery_fields
+from .messages import french_message
+from .validators import check_battery_event, check_battery_fields
 
 # Nutrition columns of `article`, all stored per base unit, all rescaled when a
 # product changes unit.
@@ -234,49 +236,66 @@ class StockManager:
         # entry must not take the write lock just to be refused inside it.
         parts_total, parts_mine = _checked_parts(reason, parts_total, parts_mine)
         with self.db.write() as conn:
-            if stored_key and repo.movement_exists(conn, stored_key):
-                # Replayed call: return the movements the first call wrote.
-                # The key itself is escaped so '%'/'_' inside it are matched
-                # literally; only the trailing '%' we append is a real wildcard.
-                rows = conn.execute(
-                    "SELECT id FROM movement WHERE idempotency_key = ?"
-                    " OR idempotency_key LIKE ? ESCAPE '\\' ORDER BY id",
-                    (stored_key, f"{_escape_like(stored_key)}#%"),
-                ).fetchall()
-                return [int(row["id"]) for row in rows]
-            # Every batch of one product necessarily shares that product's unit:
-            # read it once here rather than once per batch in the loop below.
-            base_unit = repo.product_base_unit(conn, product_id)
-            batches = [as_batch_view(row)
-                       for row in repo.list_batches_for_product(conn, product_id)]
-            allocations = allocate(batches, quantity)   # raises InsufficientStock
-            movement_ids: list[int] = []
-            for index, allocation in enumerate(allocations):
-                article_row = conn.execute(
-                    "SELECT article_id FROM batch WHERE id = ?", (allocation.batch_id,)
-                ).fetchone()
-                values = movement_values(allocation.quantity,
-                                         allocation.kcal_per_base_unit,
-                                         allocation.price_per_base_unit,
-                                         macro_rates=allocation.macros)
-                # One consumption can span several batches, but the key is UNIQUE:
-                # the first movement carries it, the next ones carry "key#1", "key#2".
-                key = None
-                if stored_key:
-                    key = stored_key if index == 0 else f"{stored_key}#{index}"
-                movement_ids.append(repo.insert_movement(
-                    conn, occurred_at=moment, product_id=product_id,
-                    article_id=article_row["article_id"], batch_id=allocation.batch_id,
-                    quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
-                    kcal=values.kcal, cost=values.cost, macros=values.macros,
-                    parts_total=parts_total, parts_mine=parts_mine,
-                    idempotency_key=key,
-                ))
-                repo.set_batch_remaining(
-                    conn, allocation.batch_id, allocation.remaining_after,
-                    closed_at=moment if allocation.closes_batch else None,
-                )
-            return movement_ids
+            return self._consume_within(
+                conn, product_id=product_id, quantity=quantity, reason=reason,
+                moment=moment, stored_key=stored_key,
+                parts_total=parts_total, parts_mine=parts_mine)
+
+    def _consume_within(self, conn, *, product_id: int, quantity: float,
+                        reason: str, moment: str, stored_key: str | None,
+                        parts_total: int | None, parts_mine: int | None) -> list[int]:
+        """The body of `consume`, on a connection the CALLER already owns.
+
+        Extracted so a second operation can write a consumption inside its own
+        transaction. `Database._lock` is a plain `threading.Lock`, not a
+        reentrant one: calling `self.consume(...)` from inside a `db.write()`
+        block deadlocks the process FOREVER, with no exception and no log —
+        the caller simply never returns. Anything that needs to consume while
+        already holding the write lock calls this, never `consume`.
+        """
+        if stored_key and repo.movement_exists(conn, stored_key):
+            # Replayed call: return the movements the first call wrote.
+            # The key itself is escaped so '%'/'_' inside it are matched
+            # literally; only the trailing '%' we append is a real wildcard.
+            rows = conn.execute(
+                "SELECT id FROM movement WHERE idempotency_key = ?"
+                " OR idempotency_key LIKE ? ESCAPE '\\' ORDER BY id",
+                (stored_key, f"{_escape_like(stored_key)}#%"),
+            ).fetchall()
+            return [int(row["id"]) for row in rows]
+        # Every batch of one product necessarily shares that product's unit:
+        # read it once here rather than once per batch in the loop below.
+        base_unit = repo.product_base_unit(conn, product_id)
+        batches = [as_batch_view(row)
+                   for row in repo.list_batches_for_product(conn, product_id)]
+        allocations = allocate(batches, quantity)   # raises InsufficientStock
+        movement_ids: list[int] = []
+        for index, allocation in enumerate(allocations):
+            article_row = conn.execute(
+                "SELECT article_id FROM batch WHERE id = ?", (allocation.batch_id,)
+            ).fetchone()
+            values = movement_values(allocation.quantity,
+                                     allocation.kcal_per_base_unit,
+                                     allocation.price_per_base_unit,
+                                     macro_rates=allocation.macros)
+            # One consumption can span several batches, but the key is UNIQUE:
+            # the first movement carries it, the next ones carry "key#1", "key#2".
+            key = None
+            if stored_key:
+                key = stored_key if index == 0 else f"{stored_key}#{index}"
+            movement_ids.append(repo.insert_movement(
+                conn, occurred_at=moment, product_id=product_id,
+                article_id=article_row["article_id"], batch_id=allocation.batch_id,
+                quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
+                kcal=values.kcal, cost=values.cost, macros=values.macros,
+                parts_total=parts_total, parts_mine=parts_mine,
+                idempotency_key=key,
+            ))
+            repo.set_batch_remaining(
+                conn, allocation.batch_id, allocation.remaining_after,
+                closed_at=moment if allocation.closes_batch else None,
+            )
+        return movement_ids
 
     def consume_batch(self, batch_id: int, *, product_id: int | None = None,
                       quantity: float | None = None,
@@ -893,3 +912,89 @@ class StockManager:
             own = battery_plan([], now=now)
             merged = merge_plan(own, extra_items=extra_items, extra_keep=extra_keep)
             return {**merged, "complete": False}
+
+    def record_battery_event(self, battery_id: int, *, kind: str,
+                             occurred_at: str | None = None,
+                             consume_spare: bool | None = None,
+                             note: str | None = None,
+                             idempotency_key: str | None = None) -> dict[str, Any]:
+        """Record a charge or a replacement, and take the spare out of the
+        cupboard when there is one to take.
+
+        ONE transaction, never two. The event and the movement are written on
+        the SAME connection: `Database._lock` is not reentrant, so calling
+        `self.consume(...)` from inside this `db.write()` block would freeze
+        the process forever, with no exception to see it by. That is why this
+        goes through `_consume_within`.
+
+        Idempotence crosses both tables: the movement's key is
+        `_namespaced_key('battery_event', key)`, so a replay from the offline
+        queue can neither write a second event nor decrement the cupboard
+        twice, and answers the SAME `event_id`.
+        """
+        if kind not in BATTERY_EVENT_KINDS:
+            raise vol.Invalid(f"unknown battery event kind {kind!r}")
+        moment = occurred_at or _now()
+        stored_key = _namespaced_key("battery_event", idempotency_key)
+        with self.db.write() as conn:
+            if stored_key:
+                existing = repo.battery_event_by_key(conn, stored_key)
+                if existing is not None:
+                    return {"event_id": int(existing["id"]),
+                            "movement_id": existing["movement_id"],
+                            "spare_refused": None}
+            battery = repo.get_battery(conn, battery_id)
+            if battery is None:
+                raise ValueError(f"unknown battery {battery_id}")
+
+            # `consume_spare` defaults by nature, and an explicit value always
+            # wins. A rechargeable cell consumes NOTHING by default: the four
+            # LADDA rotate between the drawer and three sensors, and counting
+            # each rotation would empty the stock in a year while all four
+            # cells are still in the house — a lying shortage, and a shopping
+            # line for batteries one already owns.
+            wants_spare = consume_spare
+            if wants_spare is None:
+                wants_spare = (battery["kind"] == "primary"
+                               and battery["product_id"] is not None)
+            check_battery_event(kind, battery_kind=battery["kind"],
+                                consume_spare=bool(wants_spare),
+                                product_id=battery["product_id"])
+
+            movement_id: int | None = None
+            spare_refused: str | None = None
+            # The spare comes out of the cupboard BEFORE the event is written,
+            # not after: `battery_event` is append-only (two triggers), so
+            # there is no second pass to fill `movement_id` in. The event is
+            # therefore written once, complete, whichever way this goes.
+            if wants_spare and battery["product_id"] is not None:
+                try:
+                    movement_ids = self._consume_within(
+                        conn, product_id=int(battery["product_id"]),
+                        quantity=float(battery["cell_count"]),
+                        reason=REASON_CONSUMPTION, moment=moment,
+                        stored_key=stored_key, parts_total=None, parts_mine=None)
+                except InsufficientStock as err:
+                    # The event still gets written. We do not lose "the
+                    # battery was changed" because the cupboard was out of
+                    # date; the refusal travels back as data, all the way to
+                    # the panel.
+                    spare_refused = french_message(err)
+                else:
+                    movement_id = movement_ids[0] if movement_ids else None
+
+            event_id = repo.insert_battery_event(
+                conn, battery_id=battery_id, occurred_at=moment, kind=kind,
+                movement_id=movement_id, note=note, idempotency_key=stored_key)
+
+            if kind in ("install", "replacement"):
+                # A new cell: we know nothing about it until the device
+                # speaks, so the old reading goes. It is also what stops a
+                # "Pile HS ?" from firing the minute after a replacement.
+                repo.update_battery_fields(conn, battery_id, {
+                    "installed_on": moment[:10],
+                    "last_percent": None, "last_reading_at": None,
+                })
+
+            return {"event_id": event_id, "movement_id": movement_id,
+                    "spare_refused": spare_refused}

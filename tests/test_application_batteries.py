@@ -206,3 +206,136 @@ def test_an_explicit_external_ref_is_not_overwritten_by_a_queue_key(manager):
     row = manager.db.read().execute(
         "SELECT external_ref FROM battery WHERE id = ?", (battery_id,)).fetchone()
     assert row["external_ref"] == "grocy:battery:7"
+
+
+# --- tâche 7 : l'événement de pile et la rechange qui sort du placard -------
+
+def test_replacing_a_primary_consumes_one_spare(manager):
+    product_id = _seed_spare(manager, name="CR2032", quantity=3)
+    battery_id = manager.declare_battery(label="Velux (CH)", kind="primary",
+                                         product_id=product_id, cell_count=1)
+    result = manager.record_battery_event(battery_id, kind="replacement")
+    assert result["movement_id"] is not None
+    assert _stock_of(manager, product_id) == 2.0
+
+
+def test_a_two_cell_device_consumes_two(manager):
+    product_id = _seed_spare(manager, name="AAA", quantity=4)
+    battery_id = manager.declare_battery(label="Interrupteur cuisine", kind="primary",
+                                         product_id=product_id, cell_count=2)
+    manager.record_battery_event(battery_id, kind="replacement")
+    assert _stock_of(manager, product_id) == 2.0
+
+
+def test_the_movement_is_a_plain_consumption(manager):
+    """Aucun motif `battery` : ajouter un motif aurait obligé à repasser sur
+    CONSUME_REASONS, totals_between, journal_entries et les onze capteurs du
+    lot 2, pour une distinction qui se lit déjà dans `product.edible = 0`."""
+    product_id = _seed_spare(manager, name="CR2032", quantity=3)
+    battery_id = manager.declare_battery(label="X", kind="primary", product_id=product_id)
+    movement_id = manager.record_battery_event(battery_id, kind="replacement")["movement_id"]
+    row = _movement(manager, movement_id)
+    assert row["reason"] == "consumption"
+    assert row["kcal"] is None              # aucune table nutritionnelle : NULL, pas 0.0
+
+
+def test_a_rechargeable_cell_consumes_nothing_by_default(manager):
+    product_id = _seed_spare(manager, name="LADDA AAA", quantity=4)
+    battery_id = manager.declare_battery(label="Capteur", kind="rechargeable_cell",
+                                         product_id=product_id)
+    result = manager.record_battery_event(battery_id, kind="charge")
+    assert result["movement_id"] is None
+    assert _stock_of(manager, product_id) == 4.0
+
+
+def test_a_rechargeable_cell_consumes_when_asked_explicitly(manager):
+    product_id = _seed_spare(manager, name="LADDA AAA", quantity=4)
+    battery_id = manager.declare_battery(label="Capteur", kind="rechargeable_cell",
+                                         product_id=product_id)
+    manager.record_battery_event(battery_id, kind="replacement", consume_spare=True)
+    assert _stock_of(manager, product_id) == 3.0
+
+
+def test_a_built_in_battery_never_consumes(manager):
+    battery_id = manager.declare_battery(label="Rideau cuisine", kind="built_in")
+    assert manager.record_battery_event(battery_id, kind="charge")["movement_id"] is None
+    with pytest.raises(vol.Invalid):
+        manager.record_battery_event(battery_id, kind="replacement")
+
+
+def test_a_primary_cannot_be_charged(manager):
+    battery_id = manager.declare_battery(label="X", kind="primary")
+    with pytest.raises(vol.Invalid):
+        manager.record_battery_event(battery_id, kind="charge")
+
+
+def test_an_unknown_event_kind_is_refused(manager):
+    battery_id = manager.declare_battery(label="X", kind="primary")
+    with pytest.raises(vol.Invalid):
+        manager.record_battery_event(battery_id, kind="explosion")
+
+
+def test_replaying_the_key_writes_neither_a_second_event_nor_a_second_decrement(manager):
+    product_id = _seed_spare(manager, name="CR2032", quantity=3)
+    battery_id = manager.declare_battery(label="X", kind="primary", product_id=product_id)
+    first = manager.record_battery_event(battery_id, kind="replacement",
+                                         idempotency_key="k")
+    second = manager.record_battery_event(battery_id, kind="replacement",
+                                          idempotency_key="k")
+    assert first["event_id"] == second["event_id"]
+    assert first["movement_id"] == second["movement_id"]
+    assert _stock_of(manager, product_id) == 2.0
+    assert len(manager.list_battery_events(battery_id)) == 1
+
+
+def test_an_empty_cupboard_still_records_the_replacement(manager):
+    """On ne perd pas « la pile a été changée » parce que le placard n'était
+    pas à jour. Le refus est une donnée rendue, pas une exception avalée."""
+    product_id = _seed_spare(manager, name="CR2032", quantity=0)
+    battery_id = manager.declare_battery(label="X", kind="primary", product_id=product_id)
+    result = manager.record_battery_event(battery_id, kind="replacement")
+    assert result["movement_id"] is None
+    assert "Stock insuffisant" in result["spare_refused"]
+    assert len(manager.list_battery_events(battery_id)) == 1
+
+
+def test_a_successful_replacement_reports_no_refusal(manager):
+    product_id = _seed_spare(manager, name="CR2032", quantity=3)
+    battery_id = manager.declare_battery(label="X", kind="primary", product_id=product_id)
+    assert manager.record_battery_event(battery_id,
+                                        kind="replacement")["spare_refused"] is None
+
+
+def test_a_replacement_forgets_the_old_reading(manager):
+    battery_id = manager.declare_battery(label="X", kind="primary")
+    manager.record_reading(battery_id, percent=4.0, at="2026-08-20T00:00:00")
+    manager.record_battery_event(battery_id, kind="replacement",
+                                 occurred_at="2026-08-21T10:00:00")
+    row = manager.list_batteries()[0]
+    assert row["last_percent"] is None and row["last_reading_at"] is None
+    assert row["installed_on"] == "2026-08-21"
+
+
+def test_a_charge_does_not_forget_the_reading(manager):
+    """Recharger une cellule ne la remplace pas : le dernier relevé reste
+    valable, et l'effacer ferait croire à une pile jamais relevée."""
+    battery_id = manager.declare_battery(label="Capteur", kind="rechargeable_cell")
+    manager.record_reading(battery_id, percent=4.0, at="2026-08-20T00:00:00")
+    manager.record_battery_event(battery_id, kind="charge")
+    assert manager.list_batteries()[0]["last_percent"] == 4.0
+
+
+def test_a_fresh_replacement_produces_no_task_at_all(manager):
+    """Le corollaire du test précédent, vu depuis le plan : une pile qu'on
+    vient de changer ne doit produire ni item de niveau ni « Pile HS ? »."""
+    battery_id = manager.declare_battery(label="X", kind="primary", tracked=True)
+    manager.record_reading(battery_id, percent=4.0, at="2026-08-20T00:00:00")
+    manager.record_battery_event(battery_id, kind="replacement")
+    plan = manager.maintenance_plan(now=NOW, readings={})
+    assert plan["items"] == []
+    assert plan["keep"] == ["Pile à changer — X"]
+
+
+def test_a_charge_on_an_unknown_battery_says_so(manager):
+    with pytest.raises(ValueError, match="unknown battery 999"):
+        manager.record_battery_event(999, kind="charge")
