@@ -1948,7 +1948,7 @@ git commit -m "feat: next meal, recipe and missing-ingredient sensors"
 
 **Toute commande qui écrit accepte une `idempotency_key`** — la file hors-ligne la pose sur **tout** ce qui passe par elle, sans notion de « cette commande n'en prend pas ». C'est ce qu'a coûté l'incident du lot 1 : trois commandes à schéma strict, refusées au premier rejeu hors ligne.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Deux fichiers, motif de `tests/test_websocket_consume.py` (`setup_entry`, `hass_ws_client`, `send_json_auto_id`).
 
@@ -1997,7 +1997,7 @@ Et dans `tests/test_offline_queue_contract.py`, **les trois gestes** :
 
 ⚠️ Le scanner ne voit que les **littéraux** passés à `.ajouter(` / `.ecrire(`. Une commande construite par concaténation serait invisible et le contrat serait vert à tort.
 
-- [ ] **Step 2 → 4: Échec, écriture, vert**
+- [x] **Step 2 → 4: Échec, écriture, vert**
 
 ```bash
 ./scripts/test.sh tests/test_websocket_recipes.py tests/test_websocket_meals.py -q  # FAIL puis PASS
@@ -2006,7 +2006,7 @@ Et dans `tests/test_offline_queue_contract.py`, **les trois gestes** :
 
 Note : le contrat ne passera **complètement** qu'après la tâche 21 (le front doit avoir écrit ses littéraux). Jusque-là, écrire les entrées de `EXPECTED_QUEUED_COMMAND_TYPES` **en même temps** que les littéraux front, tâche par tâche, plutôt que toutes ici — sinon le premier test du contrat (`… finds exactly the commands …`) tombe et reste rouge pendant quatre tâches.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/websocket_recipes.py custom_components/home_stock/websocket_api.py tests/test_websocket_recipes.py tests/test_websocket_meals.py
 git commit -m "feat: fourteen websocket commands for recipes, meals and validation"

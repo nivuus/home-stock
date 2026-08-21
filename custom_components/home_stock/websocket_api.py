@@ -1238,3 +1238,9 @@ def async_register_websocket(hass: HomeAssistant) -> None:
                     session_update_line, session_remove_line, session_checkout,
                     session_store_line, session_close):
         websocket_api.async_register_command(hass, command)
+    # Lot 3's fourteen commands live in their own module — a file-layout
+    # decision, not a contract one (see websocket_recipes' docstring).
+    # Imported here rather than at module level: websocket_recipes reuses this
+    # module's helpers, so a top-level import either way would be circular.
+    from .websocket_recipes import async_register_recipe_commands
+    async_register_recipe_commands(hass)
