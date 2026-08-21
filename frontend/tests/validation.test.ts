@@ -62,8 +62,8 @@ describe('<home-stock-validation>', () => {
            ['unmatched', 'produit non identifié'],
            ['unquantified', 'quantité inconnue']])(
     'donne un libellé français au statut %s', async (statut, libelle) => {
-      const donnees = preview();
-      (donnees.lines[0] as any).status = statut;
+      const donnees = preview() as any;
+      donnees.lines[0].status = statut;
       if (statut === 'short') donnees.blocking = ['short'];
       const element = monter({ preview: donnees });
       await stabiliser(element);

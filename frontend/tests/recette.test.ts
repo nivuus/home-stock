@@ -292,3 +292,72 @@ describe('<home-stock-recette>', () => {
     expect((element.constructor as any).styles.cssText).toContain('min-height: 48px');
   });
 });
+
+describe('<home-stock-recette> — apparier depuis la cuisine', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  function monterAvecCandidats() {
+    const recette = JSON.parse(JSON.stringify(RECETTE));
+    recette.ingredients[1].candidates = [
+      { product_id: 12, name: 'Ail', score: 0.9 },
+      { product_id: 13, name: 'Ail des ours', score: 0.6 },
+    ];
+    const element = document.createElement('home-stock-recette') as any;
+    element.connexion = { appeler: vi.fn(async () => recette) };
+    element.file = {
+      ajouter: vi.fn(() => ({ cle: 'k', sort: Promise.resolve('envoyee') })),
+      rejouer: vi.fn(async () => {}),
+    };
+    element.recipeId = 4;
+    document.body.append(element);
+    return element;
+  }
+
+  it('propose les candidats d’une ligne non appariée', async () => {
+    const element = monterAvecCandidats();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.ingredients-bouton').click();
+    await stabiliser(element);
+    const noms = [...element.shadowRoot.querySelectorAll('.candidat')]
+      .map((n: Element) => n.textContent?.trim());
+    expect(noms).toEqual(['Ail', 'Ail des ours']);
+  });
+
+  it('n’en propose aucun pour une ligne déjà appariée', async () => {
+    const element = monterAvecCandidats();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.ingredients-bouton').click();
+    await stabiliser(element);
+    const lignes = element.shadowRoot.querySelectorAll('.ingredient');
+    expect(lignes[0].querySelectorAll('.candidat')).toHaveLength(0);
+  });
+
+  it('apparie par la file et apprend l’alias, ce geste étant humain', async () => {
+    const element = monterAvecCandidats();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.ingredients-bouton').click();
+    await stabiliser(element);
+
+    element.shadowRoot.querySelector('.candidat').click();
+    await stabiliser(element);
+
+    expect(element.file.ajouter).toHaveBeenCalledWith(
+      'home_stock/recipe/ingredient/match',
+      { ingredient_id: 42, product_id: 12, state: 'confirmed', create_alias: true });
+  });
+
+  it('retire la mention « à sortir à la main » une fois apparié', async () => {
+    const element = monterAvecCandidats();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.ingredients-bouton').click();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.candidat').click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.mention')).toBeNull();
+    expect(element.shadowRoot.querySelectorAll('.candidat')).toHaveLength(0);
+    const noms = [...element.shadowRoot.querySelectorAll('.ingredient-nom')]
+      .map((n: Element) => n.textContent?.trim());
+    expect(noms).toEqual(['Courgette', 'Ail']);
+  });
+});

@@ -58,6 +58,10 @@ export type LigneIngredient = {
   raw_text: string;
   match_state: string;
   display_amount?: string;
+  /** Les cinq meilleurs produits, calculés par le serveur pour une ligne non
+   *  appariée. C'est ce qui rend l'appariement faisable ici, en un appui,
+   *  plutôt que de renvoyer quelqu'un vers un écran d'administration. */
+  candidates?: { product_id: number; name: string; score: number }[];
 };
 
 export type VueRecette = {
@@ -202,6 +206,33 @@ export class EcranRecette extends LitElement {
       ligne.measure_name, ligne.packaging_name);
   }
 
+  /** Apparier une ligne sur un produit, depuis la cuisine.
+   *
+   *  Passe par la file : c'est une écriture, et le Wi-Fi de la cuisine ne vaut
+   *  pas mieux que celui d'un rayon. `create_alias` est vrai parce que ce
+   *  geste-ci est une décision HUMAINE explicite — c'est exactement le seul
+   *  cas où un alias s'apprend.
+   */
+  async apparier(ligne: LigneIngredient, produitId: number): Promise<void> {
+    if (!this.file) return;
+    this.file.ajouter('home_stock/recipe/ingredient/match', {
+      ingredient_id: ligne.id, product_id: produitId,
+      state: 'confirmed', create_alias: true,
+    });
+    void this.file.rejouer?.();
+    if (this.vue) {
+      const nom = ligne.candidates?.find((c) => c.product_id === produitId)?.name
+        ?? null;
+      this.vue = {
+        ...this.vue,
+        ingredients: this.vue.ingredients.map((l) => l.id === ligne.id
+          ? { ...l, match_state: 'confirmed', product_id: produitId,
+              product_name: nom, candidates: [] }
+          : l),
+      };
+    }
+  }
+
   private rendreIngredients() {
     const lignes = this.vue?.ingredients ?? [];
     return html`
@@ -215,6 +246,15 @@ export class EcranRecette extends LitElement {
               <span class="ingredient-nom">${ligne.product_name ?? ligne.raw_text}</span>
               ${ligne.match_state === 'unmatched'
                 ? html`<span class="mention">à sortir à la main</span>`
+                : nothing}
+              ${ligne.match_state === 'unmatched' && ligne.candidates?.length
+                ? html`<span class="candidats">
+                    ${ligne.candidates.map((c) => html`
+                      <button class="candidat"
+                              @click=${() => this.apparier(ligne, c.product_id)}>
+                        ${c.name}
+                      </button>`)}
+                  </span>`
                 : nothing}
             </li>`)}
         </ul>
@@ -324,10 +364,16 @@ export class EcranRecette extends LitElement {
     .minuteur.termine { background: var(--error-color, #a01b1b); color: #fff; }
     .ingredients ul { list-style: none; padding: 0; display: flex;
                       flex-direction: column; gap: 12px; }
-    .ingredient { display: flex; gap: 10px; align-items: baseline;
-                  min-height: 48px; }
+    .ingredient { display: flex; flex-wrap: wrap; gap: 10px;
+                  align-items: baseline; min-height: 48px; }
     .quantite { font-weight: 600; min-width: 6em; }
     .a-la-main .mention { opacity: 0.8; font-size: 0.9rem; font-style: italic; }
+    .candidats { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+    .candidat {
+      min-height: 48px; padding: 0 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--divider-color); font-size: 0.95rem;
+      background: var(--card-background-color); color: var(--primary-text-color);
+    }
     .barre {
       display: flex; gap: 8px; align-items: center; margin-top: 20px;
       position: sticky; bottom: 0; padding: 8px 0;

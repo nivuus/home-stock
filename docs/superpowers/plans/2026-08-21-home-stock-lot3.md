@@ -2369,7 +2369,7 @@ git commit -m "feat: the validation screen — two taps, and it says there is no
 
 **Le planning :** sept colonnes × quatre créneaux en 1280 × 800, **une journée à la fois** en 412 × 915 avec précédent / suivant. **Pas de grille de sept colonnes réduite** : elle produirait des cibles sous 48 px et `verifier-rendu.mjs` la refuserait, à juste titre.
 
-- [ ] **Step 1: Écrire les tests du planning**
+- [x] **Step 1: Écrire les tests du planning**
 
 ```ts
 it('affiche sept colonnes et quatre créneaux en large', ...);
@@ -2388,7 +2388,7 @@ it('n’ouvre pas la validation sur un repas déjà validé', ...);
 it('affiche un jour vide sans planter', ...);
 ```
 
-- [ ] **Step 2: Écrire les tests de navigation** dans `frontend/tests/panneau.test.ts`
+- [x] **Step 2: Écrire les tests de navigation** dans `frontend/tests/panneau.test.ts`
 
 ```ts
 it('affiche les boutons Recettes et Planning dans la barre', ...);
@@ -2405,17 +2405,17 @@ it('applique le garde-fou du rangement en attente aux quatre nouvelles cibles',
 it('n’ouvre pas la vue cuisine sans recetteOuverte', ...);
 ```
 
-- [ ] **Step 3: Lancer, vérifier l'échec**
+- [x] **Step 3: Lancer, vérifier l'échec**
 
 Run (depuis `frontend/`) : `npm test -- tests/planning.test.ts tests/panneau.test.ts`
 
-- [ ] **Step 4: Écrire l'écran et la navigation**
+- [x] **Step 4: Écrire l'écran et la navigation**
 
 Six endroits, tous obligatoires : le type `Ecran`, les quatre `import './ecrans/…'`, les quatre branches de `rendreEcran()`, les deux boutons de `rendreNavigation()`, la liste `enfants` de `reglerAttente()` dans `verifier-rendu.mjs` (tâche 22), et les scénarios (tâche 22).
 
 Ajouter `'home_stock/meal/plan'`, `'home_stock/meal/move'`, `'home_stock/meal/cancel'` et `'home_stock/recipe/ingredient/match'` à `EXPECTED_QUEUED_COMMAND_TYPES`, en même temps que leurs littéraux.
 
-- [ ] **Step 5: Vert**
+- [x] **Step 5: Vert**
 
 ```bash
 cd frontend && npm test
@@ -2423,7 +2423,7 @@ cd frontend && npm test
 ```
 Expected: PASS des deux. Le contrat de la file d'attente doit maintenant être **complet** : `tested == discovered == EXPECTED_QUEUED_COMMAND_TYPES`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add frontend/src/ecrans/planning.ts frontend/src/panneau.ts frontend/tests tests/test_offline_queue_contract.py
 git commit -m "feat: the planning screen, and the navigation that makes lot 3 reachable"

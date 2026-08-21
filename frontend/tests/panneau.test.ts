@@ -1080,3 +1080,174 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     expect(dans('home-stock-session', '.ouvrir-session')).not.toBeNull();
   });
 });
+
+/** Lot 3 — les points d'entrée FONT PARTIE du livrable.
+ *
+ *  Sans eux, les écrans des tâches 18 à 20 sont des composants que rien
+ *  n'ouvre : exactement le défaut qui a échappé aux dix-sept revues du lot 1,
+ *  où `session/start` n'était appelé par personne et emportait avec lui le
+ *  panier, deux capteurs et tout le parcours en magasin.
+ */
+describe('<home-stock-panel> — navigation du lot 3', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  function monterPanneau() {
+    const hass = hassAvecReponses((msg: any) => {
+      // L'écran « rangement » charge ses emplacements dès qu'il est monté :
+      // sans cette réponse il rend `undefined.map` et pollue le run d'erreurs
+      // qui n'ont rien à voir avec la navigation testée ici.
+      if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      if (msg.type === 'home_stock/recipes/list') return Promise.resolve({ recipes: [] });
+      if (msg.type === 'home_stock/meals/list') return Promise.resolve({ meals: [] });
+      if (msg.type === 'home_stock/recipe/get') {
+        return Promise.resolve({
+          recipe: { id: 4, name: 'Gratin', servings: 2, total_minutes: null,
+                    utensils: null, summary: null, image_url: null,
+                    language: 'fr', needs_review: 0 },
+          steps: [], ingredients: [],
+        });
+      }
+      if (msg.type === 'home_stock/meal/preview') {
+        return Promise.resolve({
+          meal_id: 12, day: '2026-08-21', slot_key: 'dinner', recipe: null,
+          servings: 1, factor: 1, lines: [], by_hand: [], dish: null,
+          blocking: [],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const element = document.createElement('home-stock-panel') as any;
+    element.hass = hass;
+    document.body.appendChild(element);
+    return element;
+  }
+
+  async function stabiliser(element: any) {
+    await laisserPasserLesMicrotaches();
+    await element.updateComplete;
+    await element.updateComplete;
+  }
+
+  const boutons = (element: any) =>
+    [...element.shadowRoot.querySelectorAll('.nav-bouton')]
+      .map((b: Element) => b.textContent?.trim());
+
+  function cliquerNav(element: any, libelle: string) {
+    const bouton = [...element.shadowRoot.querySelectorAll('.nav-bouton')]
+      .find((b: Element) => b.textContent?.trim() === libelle) as HTMLElement;
+    bouton.click();
+  }
+
+  it('affiche les boutons Recettes et Planning dans la barre', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    expect(boutons(element)).toContain('Recettes');
+    expect(boutons(element)).toContain('Planning');
+  });
+
+  it('n’affiche aucun bouton pour la vue cuisine ni pour la validation', async () => {
+    // On y entre depuis une liste ou depuis le planning, comme `fiche` et
+    // `consommation` au lot 2.
+    const element = monterPanneau();
+    await stabiliser(element);
+    expect(boutons(element)).not.toContain('Recette');
+    expect(boutons(element)).not.toContain('Validation');
+  });
+
+  it('ouvre l’écran Recettes au clic sur son bouton', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    cliquerNav(element, 'Recettes');
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('home-stock-recettes')).not.toBeNull();
+  });
+
+  it('ouvre le planning au clic sur son bouton', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    cliquerNav(element, 'Planning');
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('home-stock-planning')).not.toBeNull();
+  });
+
+  it('ouvre la vue cuisine sur « recette-ouverte » et retient l’identifiant',
+     async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    cliquerNav(element, 'Recettes');
+    await stabiliser(element);
+
+    element.shadowRoot.querySelector('home-stock-recettes')!.dispatchEvent(
+      new CustomEvent('recette-ouverte', {
+        detail: { recipe_id: 4 }, bubbles: true, composed: true }));
+    await stabiliser(element);
+
+    expect(element.recetteOuverte).toBe(4);
+    expect(element.shadowRoot.querySelector('home-stock-recette')).not.toBeNull();
+  });
+
+  it('n’ouvre pas la vue cuisine sans recetteOuverte', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    element.ecran = 'recette';
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('home-stock-recette')).toBeNull();
+    expect(element.shadowRoot.querySelector('home-stock-scanner')).not.toBeNull();
+  });
+
+  it('ouvre la validation sur « valider-repas »', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    cliquerNav(element, 'Planning');
+    await stabiliser(element);
+
+    element.shadowRoot.querySelector('home-stock-planning')!.dispatchEvent(
+      new CustomEvent('valider-repas', {
+        detail: { meal_id: 12 }, bubbles: true, composed: true }));
+    await stabiliser(element);
+
+    expect(element.repasAValider).toBe(12);
+    expect(element.shadowRoot.querySelector('home-stock-validation')).not.toBeNull();
+  });
+
+  it('revient au planning après « repas-valide »', async () => {
+    const element = monterPanneau();
+    await stabiliser(element);
+    element.repasAValider = 12;
+    element.ecran = 'validation';
+    await stabiliser(element);
+
+    element.shadowRoot.querySelector('home-stock-validation')!.dispatchEvent(
+      new CustomEvent('repas-valide', {
+        detail: { meal_id: 12 }, bubbles: true, composed: true }));
+    await stabiliser(element);
+
+    expect(element.ecran).toBe('planning');
+    expect(element.repasAValider).toBeNull();
+  });
+
+  it.each(['recettes', 'planning'])(
+    'applique le garde-fou du rangement en attente à la cible %s', async (cible) => {
+      const element = monterPanneau();
+      await stabiliser(element);
+      element.ecran = 'rangement';
+      // Une ligne complète, pas un objet minimal : l'écran « rangement » la
+      // rend vraiment, et un fantôme y déclencherait des erreurs de rendu qui
+      // n'ont rien à voir avec le garde-fou qu'on teste.
+      element.enAttenteRangement = [{
+        source: 'autonome', id: 'a1', article_id: 42, quantity: 500,
+        unit_price: null, product_name: 'Muesli', base_unit: 'g',
+        default_location_id: null, default_shelf_life_days: null,
+        brand: null, image: null, net_quantity: null,
+      }];
+      await stabiliser(element);
+
+      cliquerNav(element, cible === 'recettes' ? 'Recettes' : 'Planning');
+      await stabiliser(element);
+
+      // Armé, pas navigué : quitter un rangement inachevé demande deux appuis.
+      expect(element.ecran).toBe('rangement');
+      expect(element.navigationArmee).toBe(cible);
+    });
+});

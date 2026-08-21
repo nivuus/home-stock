@@ -11,13 +11,18 @@ import './ecrans/catalogue';
 import './ecrans/reglages';
 import './ecrans/consommation';
 import './ecrans/journal';
+import './ecrans/recettes';
+import './ecrans/recette';
+import './ecrans/validation';
+import './ecrans/planning';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
-  | 'catalogue' | 'reglages' | 'consommation' | 'journal';
+  | 'catalogue' | 'reglages' | 'consommation' | 'journal'
+  | 'recettes' | 'recette' | 'planning' | 'validation';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -86,6 +91,7 @@ export class PanneauGardeManger extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener('resize', this.surRedimensionnement);
     this.connexion = new Connexion(this.hass);
     this.file = new FileAttente(
       window.localStorage,
@@ -130,6 +136,7 @@ export class PanneauGardeManger extends LitElement {
     this.desabonner?.();
     this.desabonner = undefined;
     window.removeEventListener('online', this.auRetourDuReseau);
+    window.removeEventListener('resize', this.surRedimensionnement);
     this.removeEventListener('manger-produit', this.surMangerProduit as EventListener);
     this.removeEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
@@ -275,6 +282,40 @@ export class PanneauGardeManger extends LitElement {
    *  silencieusement de naviguer plutôt que d'avertir. Même geste à deux
    *  appuis que la suppression d'une ligne : armer, puis confirmer ou
    *  annuler, en boutons, dans l'écran. */
+  /** La recette ouverte en vue cuisine, et le repas en cours de validation.
+   *  Retenus ici parce que `recette` et `validation` n'ont pas de bouton de
+   *  navigation : on y entre depuis une liste ou depuis le planning, comme
+   *  `fiche` et `consommation` au lot 2. */
+  /** Vrai sur la dalle 1280 × 800, faux sur le 412 × 915. Le planning s'en
+   *  sert pour choisir entre la semaine et la journée : une grille de sept
+   *  colonnes réduite à 412 px produirait des cibles sous 48 px. Mesuré, pas
+   *  déduit d'un agent utilisateur. */
+  @state() large = typeof window !== 'undefined' && window.innerWidth >= 1000;
+
+  private surRedimensionnement = () => {
+    this.large = window.innerWidth >= 1000;
+  };
+
+  @state() recetteOuverte: number | null = null;
+  @state() repasDeLaRecette: number | null = null;
+  @state() repasAValider: number | null = null;
+
+  private surRecetteOuverte = (e: CustomEvent) => {
+    this.recetteOuverte = e.detail.recipe_id;
+    this.repasDeLaRecette = e.detail.meal_id ?? null;
+    this.demanderNavigation('recette');
+  };
+
+  private surValiderRepas = (e: CustomEvent) => {
+    this.repasAValider = e.detail.meal_id;
+    this.demanderNavigation('validation');
+  };
+
+  private surRepasValide = () => {
+    this.repasAValider = null;
+    this.demanderNavigation('planning');
+  };
+
   private demanderNavigation(cible: Ecran): void {
     if (this.ecran === 'rangement' && cible !== 'rangement' && this.enAttenteRangement.length > 0) {
       this.navigationArmee = cible;
@@ -336,6 +377,8 @@ export class PanneauGardeManger extends LitElement {
           <button class="nav-bouton" @click=${() => this.demanderNavigation('journal')}>Journal</button>
         ` : nothing}
         ${this.ecran !== 'reglages' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('recettes')}>Recettes</button>
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('planning')}>Planning</button>
           <button class="nav-bouton" @click=${() => this.demanderNavigation('reglages')}>Réglages</button>
         ` : nothing}
       </nav>
@@ -436,6 +479,36 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'journal') {
       return html`
         <home-stock-journal .connexion=${this.connexion}></home-stock-journal>`;
+    }
+    if (this.ecran === 'recettes') {
+      return html`
+        <home-stock-recettes .connexion=${this.connexion} .file=${this.file}
+          .enAttente=${this.enAttente} @recette-ouverte=${this.surRecetteOuverte}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-recettes>`;
+    }
+    if (this.ecran === 'recette' && this.recetteOuverte !== null) {
+      return html`
+        <home-stock-recette .connexion=${this.connexion} .file=${this.file}
+          .recipeId=${this.recetteOuverte} .mealId=${this.repasDeLaRecette}
+          @valider-repas=${this.surValiderRepas}
+          @recette-fermee=${() => this.demanderNavigation('recettes')}>
+        </home-stock-recette>`;
+    }
+    if (this.ecran === 'validation' && this.repasAValider !== null) {
+      return html`
+        <home-stock-validation .connexion=${this.connexion} .file=${this.file}
+          .mealId=${this.repasAValider} @repas-valide=${this.surRepasValide}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-validation>`;
+    }
+    if (this.ecran === 'planning') {
+      return html`
+        <home-stock-planning .connexion=${this.connexion} .file=${this.file}
+          .large=${this.large} @recette-ouverte=${this.surRecetteOuverte}
+          @valider-repas=${this.surValiderRepas}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-planning>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}
