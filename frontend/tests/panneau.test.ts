@@ -1347,3 +1347,41 @@ describe('panneau : les deux écrans du lot 5', () => {
     return element;
   }
 });
+
+describe('la navigation du lot 4', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  function monterPanneau() {
+    const element = document.createElement('home-stock-panel') as HTMLElement & {
+      hass: Hass; ecran: string; updateComplete: Promise<boolean>;
+    };
+    element.hass = hassAvecReponses(async () => null);
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it('expose un bouton « Liste »', async () => {
+    const element = monterPanneau();
+    await element.updateComplete;
+
+    const libelles = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .map((b) => b.textContent!.trim());
+    expect(libelles).toContain('Liste');
+  });
+
+  it('bascule sur l’écran Liste et retire son propre bouton', async () => {
+    const element = monterPanneau();
+    await element.updateComplete;
+
+    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .find((b) => b.textContent!.trim() === 'Liste') as HTMLButtonElement;
+    bouton.click();
+    await element.updateComplete;
+
+    expect(element.ecran).toBe('liste');
+    expect(element.shadowRoot!.querySelector('home-stock-liste')).not.toBeNull();
+    const libelles = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
+      .map((b) => b.textContent!.trim());
+    expect(libelles).not.toContain('Liste');
+  });
+});

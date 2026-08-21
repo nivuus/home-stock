@@ -17,6 +17,7 @@ import './ecrans/validation';
 import './ecrans/planning';
 import './ecrans/piles';
 import './ecrans/equipements';
+import './ecrans/liste';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
@@ -25,7 +26,7 @@ import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } fr
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
   | 'recettes' | 'recette' | 'planning' | 'validation'
-  | 'piles' | 'equipements';
+  | 'piles' | 'equipements' | 'liste';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -398,6 +399,9 @@ export class PanneauGardeManger extends LitElement {
             Équipements
           </button>
         ` : nothing}
+        ${this.ecran !== 'liste' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('liste')}>Liste</button>
+        ` : nothing}
         ${this.ecran !== 'reglages' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('recettes')}>Recettes</button>
           <button class="nav-bouton" @click=${() => this.demanderNavigation('planning')}>Planning</button>
@@ -538,6 +542,12 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-equipements .connexion=${this.connexion} .file=${this.file}
           @file-changee=${this.surFileChangee}>
         </home-stock-equipements>`;
+    }
+    if (this.ecran === 'liste') {
+      return html`
+        <home-stock-liste .connexion=${this.connexion} .file=${this.file}
+          .enAttente=${this.enAttente} @file-changee=${this.surFileChangee}>
+        </home-stock-liste>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}
