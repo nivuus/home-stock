@@ -46,6 +46,7 @@ from .const import (
     RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.route import RouteEntry, learn_route
 from .domain.shoppinglist import (
     Claim,
     WantedItem,
@@ -2211,6 +2212,45 @@ class StockManager:
         wanted += [WantedItem(free_text=text, claims=tuple(claims))
                    for text, claims in by_text.items()]
         return wanted
+
+    # --- § 11 : l'ordre des rayons d'un magasin ---------------------------
+
+    def learn_store_route(self, store_id: int, *,
+                          moment: str | None = None) -> dict[str, Any]:
+        """Recalculer l'ordre d'un magasin. Ouvre sa propre transaction."""
+        when = moment or _now()
+        with self.db.write() as conn:
+            return self._learn_store_route_within(conn, store_id, moment=when)
+
+    def _learn_store_route_within(self, conn, store_id: int, *,
+                                  moment: str) -> dict[str, Any]:
+        """Le corps, sur une connexion déjà tenue.
+
+        Extrait pour `ShoppingService.close`, qui apprend DANS la transaction
+        de clôture : un second `db.write()` y figerait la clôture d'une
+        session en plein magasin, sans exception et sans trace.
+        """
+        sessions = repo.recent_session_aisle_sequences(conn, store_id)
+        defaults = {int(row["id"]): int(row["position"])
+                    for row in repo.list_aisles(conn)}
+        pinned = {int(row["aisle_id"]): int(row["position"])
+                  for row in repo.store_aisles(conn, store_id)
+                  if row["source"] == "manual"}
+        entries = learn_route(sessions, default_positions=defaults, pinned=pinned)
+        repo.save_store_route(conn, store_id, entries, updated_at=moment)
+        return {"store_id": store_id, "sessions": len(sessions),
+                "aisles": len(entries)}
+
+    def store_route(self, store_id: int) -> list[dict[str, Any]]:
+        return repo.store_route(self.db.read(), store_id)
+
+    def pin_store_aisles(self, store_id: int, aisle_ids) -> None:
+        with self.db.write() as conn:
+            repo.pin_store_aisles(conn, store_id, list(aisle_ids))
+
+    def unpin_store_aisle(self, store_id: int, aisle_id: int) -> None:
+        with self.db.write() as conn:
+            repo.unpin_store_aisle(conn, store_id, aisle_id)
 
     # --- § 12.4 : corriger un prix ----------------------------------------
 

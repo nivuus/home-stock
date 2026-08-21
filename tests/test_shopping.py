@@ -547,3 +547,145 @@ def test_checking_needs_no_open_session(service):
     service.manager.check_list_item(item_id, at="2026-08-21T09:30:00")
     assert _item(service, item_id)["checked_at"] == "2026-08-21T09:30:00"
     assert _item(service, item_id)["session_id"] is None
+
+
+# --- § 11 : apprendre le parcours à la clôture ------------------------------
+
+def _walk(service, *, store="Leclerc", articles=(10,), close=True):
+    from custom_components.home_stock.storage import repositories as repo
+    session = service.start(store=store)
+    for article_id in articles:
+        service.add_line(article_id=article_id, quantity=1, unit_price=None,
+                         idempotency_key=None)
+    if close:
+        service.checkout()
+        service.close()
+    return session
+
+
+def _second_product(service):
+    from custom_components.home_stock.storage import repositories as repo
+    with service.manager.db.write() as conn:
+        product_id = repo.insert_product(
+            conn, name="Yaourt", base_unit="piece",
+            aisle_id=(select := conn.execute(
+                "SELECT id FROM aisle WHERE name = 'Crémerie'").fetchone())["id"])
+        return repo.insert_article(conn, product_id=product_id, label="Nature x4")
+
+
+def test_closing_a_session_recalculates_the_route(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, articles=(other, 10))
+
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    route = {row["aisle_name"]: row for row in repo.store_route(conn, store_id)}
+    assert route["Crémerie"]["observed_sessions"] == 1
+    assert route["Crémerie"]["mean_rank"] == pytest.approx(0.0)
+    assert route["Épicerie salée"]["mean_rank"] == pytest.approx(1.0)
+    # Un seul voyage : les rangs sont ENREGISTRÉS mais ne déplacent encore
+    # rien — un rayon vu une fois garde sa place par défaut (§ 11.3).
+    assert route["Crémerie"]["position"] > route["Fruits et légumes"]["position"]
+
+
+def test_scanning_does_not_recalculate_anything(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, articles=(other, 10), close=False)
+
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    assert repo.store_aisles(conn, store_id) == []
+
+
+def test_the_cart_is_sorted_by_the_store_route_once_it_is_reliable(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    for _ in range(3):
+        _walk(service, articles=(other, 10))
+
+    session = _walk(service, articles=(10, other), close=False)
+    lines = repo.list_lines(service.manager.db.read(), session["id"])
+
+    assert [row["aisle_name"] for row in lines] == ["Crémerie", "Épicerie salée"]
+
+
+def test_the_cart_keeps_the_default_order_below_three_sessions(service):
+    """`store_aisle` est REMPLI et visible ; seul l'affichage attend."""
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    for _ in range(2):
+        _walk(service, articles=(other, 10))
+
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    assert repo.store_aisles(conn, store_id)          # rempli
+
+    session = _walk(service, articles=(10, other), close=False)
+    lines = repo.list_lines(service.manager.db.read(), session["id"])
+    default_order = [row["name"] for row in repo.list_aisles(conn)]
+    assert default_order.index(lines[0]["aisle_name"]) < \
+        default_order.index(lines[1]["aisle_name"])
+
+
+def test_a_pinned_aisle_survives_the_next_close(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, articles=(other, 10))
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    aisles = {row["name"]: row["id"] for row in repo.list_aisles(conn)}
+    with service.manager.db.write() as write:
+        repo.pin_store_aisles(write, store_id,
+                              [aisles["Épicerie salée"], aisles["Crémerie"]])
+
+    _walk(service, articles=(other, 10))
+
+    rows = {row["aisle_id"]: row for row in
+            repo.store_aisles(service.manager.db.read(), store_id)}
+    assert rows[aisles["Épicerie salée"]]["position"] == 1
+    assert rows[aisles["Épicerie salée"]]["source"] == "manual"
+
+
+def test_unpinning_gives_the_line_back_to_learning(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, articles=(other, 10))
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    aisles = {row["name"]: row["id"] for row in repo.list_aisles(conn)}
+    with service.manager.db.write() as write:
+        repo.pin_store_aisles(write, store_id, [aisles["Épicerie salée"]])
+        repo.unpin_store_aisle(write, store_id, aisles["Épicerie salée"])
+
+    _walk(service, articles=(other, 10))
+
+    rows = {row["aisle_id"]: row for row in
+            repo.store_aisles(service.manager.db.read(), store_id)}
+    assert rows[aisles["Crémerie"]]["position"] == 1
+
+
+def test_a_session_with_no_store_learns_nothing_and_raises_nothing(service):
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, store=None, articles=(other, 10))
+    assert repo.list_stores(service.manager.db.read()) == []
+
+
+def test_learning_runs_inside_the_close_transaction(service):
+    """Avec `--timeout=60` : un `db.write()` imbriqué figerait la clôture
+    d'une session en plein magasin, sans exception et sans trace."""
+    other = _second_product(service)
+    _walk(service, articles=(other, 10))
+    assert service.current() is None
+
+
+def test_the_put_away_screen_is_not_sorted_by_aisle(service):
+    """Garde-fou explicite : le rangement groupe par emplacement dans la
+    MAISON. Un test l'épingle pour que personne ne « corrige » ça."""
+    import inspect
+
+    from custom_components.home_stock import websocket_api
+    source = inspect.getsource(websocket_api)
+    assert "store_aisle" not in source

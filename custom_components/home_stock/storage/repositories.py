@@ -13,12 +13,14 @@ from typing import Any, Final
 
 from ..const import (
     CONSUME_REASONS,
+    ROUTE_SESSION_WINDOW,
     MACRO_COLUMNS,
     NUTRITION_COLUMNS,
     OBSERVED_PRICE_SOURCES,
     REASON_CONSUMPTION,
 )
 from ..domain.matching import normalise
+from ..domain.route import is_reliable
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -818,26 +820,52 @@ def count_pending_lines_for_product(conn, product_id: int) -> int:
     return int(row["n"])
 
 
+# `sa.position` d'abord : l'ordre appris DE CE MAGASIN. `ai.position`
+# ensuite — on sait où est le rayon en général, on ne sait juste pas où il
+# est ici. 999 enfin, pour un produit sans rayon du tout.
 _LINE_SELECT_SQL = """
 SELECT l.*, p.id AS product_id, p.name AS product_name, p.base_unit,
        p.default_location_id, p.default_shelf_life_days, p.days_after_opening,
        a.label AS article_label, a.brand, a.image, a.net_quantity,
-       ai.name AS aisle_name, COALESCE(ai.position, 999) AS aisle_position
+       ai.name AS aisle_name,
+       COALESCE(sa.position, ai.position, 999) AS aisle_position
 FROM shopping_line l
 JOIN article a ON a.id = l.article_id
 JOIN product p ON p.id = a.product_id
 LEFT JOIN aisle ai ON ai.id = p.aisle_id
+LEFT JOIN store_aisle sa ON sa.aisle_id = ai.id AND sa.store_id = ?
 WHERE l.session_id = ?
 """
 
 
 def list_lines(conn, session_id: int, *, pending_only: bool = False) -> list[dict[str, Any]]:
-    """The cart, in walking order. Scan order is never what a shopper wants."""
+    """The cart, in walking order. Scan order is never what a shopper wants.
+
+    The learned order of THIS shop only applies once the shop is reliable
+    (three closed sessions, § 11.3). Below that, `store_aisle` is filled and
+    visible in the settings, but the display keeps `aisle.position`: one
+    observation would turn an exceptional detour into the law.
+    """
+    store_id = _reliable_store_of(conn, session_id)
     sql = _LINE_SELECT_SQL
     if pending_only:
         sql += " AND l.stored_at IS NULL"
     sql += " ORDER BY aisle_position, p.name, l.id"
-    return _rows(conn.execute(sql, (session_id,)))
+    return _rows(conn.execute(sql, (store_id, session_id)))
+
+
+def _reliable_store_of(conn, session_id: int) -> int | None:
+    """The session's shop, but only once it has taught us enough."""
+    row = conn.execute(
+        "SELECT store_id FROM shopping_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    store_id = row["store_id"] if row else None
+    if store_id is None:
+        return None
+    closed = conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_session"
+        " WHERE store_id = ? AND state = 'done'", (store_id,)).fetchone()["n"]
+    return store_id if is_reliable(int(closed)) else None
 
 
 def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> None:
@@ -1042,6 +1070,85 @@ def store_aisles(conn, store_id: int) -> list[dict[str, Any]]:
     return _rows(conn.execute(
         "SELECT sa.* FROM store_aisle sa WHERE sa.store_id = ? ORDER BY sa.position",
         (store_id,)))
+
+
+def store_route(conn, store_id: int) -> list[dict[str, Any]]:
+    """The walking order with the aisle names, for the settings screen."""
+    return _rows(conn.execute(
+        "SELECT sa.*, ai.name AS aisle_name, ai.position AS default_position"
+        " FROM store_aisle sa JOIN aisle ai ON ai.id = sa.aisle_id"
+        " WHERE sa.store_id = ? ORDER BY sa.position", (store_id,)))
+
+
+def recent_session_aisle_sequences(conn, store_id: int,
+                                   limit: int = ROUTE_SESSION_WINDOW
+                                   ) -> list[list[int]]:
+    """Les rayons parcourus lors des dernières sessions CLOSES de ce magasin.
+
+    Triées par `scanned_at`, jamais par `id` : c'est l'ordre du PARCOURS
+    qu'on apprend, et deux lignes peuvent être écrites dans un ordre que le
+    chariot n'a pas suivi (rejeu de la file hors ligne).
+
+    Seules les sessions closes : on n'apprend pas d'un parcours en cours.
+    """
+    sessions = _rows(conn.execute(
+        "SELECT s.id FROM shopping_session s"
+        " WHERE s.store_id = ? AND s.state = 'done'"
+        " ORDER BY COALESCE(s.closed_at, s.started_at) DESC, s.id DESC"
+        " LIMIT ?", (store_id, limit)))
+    sequences: list[list[int]] = []
+    for session in sessions:
+        rows = _rows(conn.execute(
+            "SELECT p.aisle_id FROM shopping_line l"
+            " JOIN article a ON a.id = l.article_id"
+            " JOIN product p ON p.id = a.product_id"
+            " WHERE l.session_id = ? AND p.aisle_id IS NOT NULL"
+            " ORDER BY l.scanned_at, l.id", (session["id"],)))
+        if rows:
+            sequences.append([int(row["aisle_id"]) for row in rows])
+    return sequences
+
+
+def save_store_route(conn, store_id: int, entries, *, updated_at: str) -> None:
+    """Écrit l'ordre appris, et n'écrase JAMAIS une ligne `manual`.
+
+    Le rang moyen et le nombre de sessions sont écrits même sur une ligne
+    épinglée : on doit VOIR que l'apprentissage la contredit. Seule
+    `position` reste celle qu'on a choisie.
+    """
+    pinned = {row["aisle_id"] for row in store_aisles(conn, store_id)
+              if row["source"] == "manual"}
+    for entry in entries:
+        if entry.aisle_id in pinned:
+            conn.execute(
+                "UPDATE store_aisle SET mean_rank = ?, observed_sessions = ?,"
+                " updated_at = ? WHERE store_id = ? AND aisle_id = ?",
+                (entry.mean_rank, entry.observed_sessions, updated_at,
+                 store_id, entry.aisle_id))
+            continue
+        set_store_aisle(conn, store_id=store_id, aisle_id=entry.aisle_id,
+                        position=entry.position, source=entry.source,
+                        mean_rank=entry.mean_rank,
+                        observed_sessions=entry.observed_sessions,
+                        updated_at=updated_at)
+
+
+def pin_store_aisles(conn, store_id: int, aisle_ids: Sequence[int]) -> None:
+    """Le propriétaire a rangé ces rayons dans cet ordre : ils y restent."""
+    for position, aisle_id in enumerate(aisle_ids, start=1):
+        conn.execute(
+            "INSERT INTO store_aisle (store_id, aisle_id, position, source)"
+            " VALUES (?, ?, ?, 'manual')"
+            " ON CONFLICT (store_id, aisle_id) DO UPDATE SET"
+            "   position = excluded.position, source = 'manual'",
+            (store_id, aisle_id, position))
+
+
+def unpin_store_aisle(conn, store_id: int, aisle_id: int) -> None:
+    """« Reprendre l'apprentissage » : la ligne redevient automatique."""
+    conn.execute(
+        "UPDATE store_aisle SET source = 'learned'"
+        " WHERE store_id = ? AND aisle_id = ?", (store_id, aisle_id))
 
 
 # =============================================================================

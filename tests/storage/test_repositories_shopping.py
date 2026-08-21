@@ -471,3 +471,94 @@ def test_a_session_with_no_line_publishes_zeroes_not_nulls(conn):
     assert totals == {"lines": 0, "pending": 0, "total": 0.0, "observed": 0.0,
                       "estimated": 0.0, "unpriced_lines": 0, "off_list_lines": 0,
                       "checked_items": 0, "list_items": 0}
+
+
+# --- § 11 : l'ordre des rayons par magasin ---------------------------------
+
+def test_recent_session_aisle_sequences_reads_closed_sessions_only(conn):
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    aisles = {row["name"]: row["id"] for row in repo.list_aisles(conn)}
+    closed = repo.open_session(conn, started_at="2026-08-01T09:00:00",
+                               store="Leclerc", store_id=store_id)
+    repo.add_line(conn, session_id=closed, article_id=2, quantity=1,
+                  unit_price=None, scanned_at="2026-08-01T09:05:00",
+                  idempotency_key=None)
+    repo.add_line(conn, session_id=closed, article_id=1, quantity=1,
+                  unit_price=None, scanned_at="2026-08-01T09:02:00",
+                  idempotency_key=None)
+    repo.set_session_state(conn, closed, "done", closed_at="2026-08-01T10:00:00")
+    still_open = repo.open_session(conn, started_at="2026-08-08T09:00:00",
+                                   store="Leclerc", store_id=store_id)
+    repo.add_line(conn, session_id=still_open, article_id=1, quantity=1,
+                  unit_price=None, scanned_at="2026-08-08T09:01:00",
+                  idempotency_key=None)
+
+    sequences = repo.recent_session_aisle_sequences(conn, store_id)
+
+    # Une seule session close, et ses lignes triées par `scanned_at` — pas
+    # par `id` : on apprend l'ordre du PARCOURS.
+    assert sequences == [[aisles["Épicerie salée"], aisles["Crémerie"]]]
+
+
+def test_only_the_last_ten_sessions_are_read(conn):
+    from custom_components.home_stock.const import ROUTE_SESSION_WINDOW
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    for day in range(1, 15):
+        session_id = repo.open_session(conn, started_at=f"2026-08-{day:02d}T09:00:00",
+                                       store="Leclerc", store_id=store_id)
+        repo.add_line(conn, session_id=session_id, article_id=1, quantity=1,
+                      unit_price=None, scanned_at=f"2026-08-{day:02d}T09:05:00",
+                      idempotency_key=None)
+        repo.set_session_state(conn, session_id, "done",
+                               closed_at=f"2026-08-{day:02d}T10:00:00")
+
+    assert len(repo.recent_session_aisle_sequences(conn, store_id)) == ROUTE_SESSION_WINDOW
+
+
+def test_save_store_route_never_overwrites_a_pinned_row(conn):
+    from custom_components.home_stock.domain.route import RouteEntry
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    aisles = {row["name"]: row["id"] for row in repo.list_aisles(conn)}
+    repo.set_store_aisle(conn, store_id=store_id, aisle_id=aisles["Crémerie"],
+                         position=1, source="manual",
+                         updated_at="2026-08-01T10:00:00")
+
+    repo.save_store_route(conn, store_id, [
+        RouteEntry(aisles["Crémerie"], 9, 0.9, 3, "learned"),
+        RouteEntry(aisles["Épicerie salée"], 2, 0.2, 3, "learned"),
+    ], updated_at="2026-08-21T10:00:00")
+
+    rows = {row["aisle_id"]: row for row in repo.store_aisles(conn, store_id)}
+    assert rows[aisles["Crémerie"]]["position"] == 1
+    assert rows[aisles["Crémerie"]]["source"] == "manual"
+    # L'apprentissage reste VISIBLE sur la ligne épinglée : on voit qu'il la
+    # contredit, sans qu'il la déplace.
+    assert rows[aisles["Crémerie"]]["mean_rank"] == pytest.approx(0.9)
+    assert rows[aisles["Épicerie salée"]]["position"] == 2
+
+
+def test_pinning_and_unpinning_an_aisle(conn):
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    aisles = [row["id"] for row in repo.list_aisles(conn)][:3]
+
+    repo.pin_store_aisles(conn, store_id, aisles)
+
+    rows = {row["aisle_id"]: row for row in repo.store_aisles(conn, store_id)}
+    assert [rows[aisle_id]["position"] for aisle_id in aisles] == [1, 2, 3]
+    assert all(rows[aisle_id]["source"] == "manual" for aisle_id in aisles)
+
+    repo.unpin_store_aisle(conn, store_id, aisles[1])
+    rows = {row["aisle_id"]: row for row in repo.store_aisles(conn, store_id)}
+    assert rows[aisles[1]]["source"] == "learned"
+
+
+def test_store_route_joins_the_aisle_names(conn):
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    aisle_id = repo.list_aisles(conn)[0]["id"]
+    repo.set_store_aisle(conn, store_id=store_id, aisle_id=aisle_id, position=1,
+                         source="learned", mean_rank=0.1, observed_sessions=3,
+                         updated_at="2026-08-21T10:00:00")
+    [row] = repo.store_route(conn, store_id)
+    assert row["aisle_name"]
+    assert row["mean_rank"] == pytest.approx(0.1)
+    assert row["observed_sessions"] == 3

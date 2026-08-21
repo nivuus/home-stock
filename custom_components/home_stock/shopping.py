@@ -134,7 +134,21 @@ class ShoppingService:
             session = repo.current_session(conn)
             if session is None:
                 raise ShoppingError("Aucune session de courses en cours.")
-            repo.set_session_state(conn, session["id"], "done", closed_at=_now())
+            moment = _now()
+            repo.set_session_state(conn, session["id"], "done", closed_at=moment)
+            # L'apprentissage a lieu ICI, dans la transaction de clôture, et
+            # pas à chaque scan : on n'apprend pas d'un parcours en cours.
+            # `_learn_store_route_within` et non la méthode publique —
+            # `Database._lock` n'est pas réentrant, et un second `db.write()`
+            # figerait la clôture d'une session en plein magasin.
+            if session["store_id"] is not None:
+                try:
+                    self.manager._learn_store_route_within(
+                        conn, int(session["store_id"]), moment=moment)
+                except Exception:               # noqa: BLE001
+                    # Apprendre est accessoire ; clore ne l'est pas.
+                    _LOGGER.debug("apprentissage du parcours ignoré pour le "
+                                  "magasin %s", session["store_id"], exc_info=True)
             return repo.get_session(conn, session["id"])
 
     # --- lines --------------------------------------------------------------
