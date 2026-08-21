@@ -148,3 +148,97 @@ async def test_the_horizon_is_bounded(hass):
             result["flow_id"],
             user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
                         CONF_SHOPPING_LIST_HORIZON_DAYS: 0})
+
+
+async def test_the_options_flow_refuses_an_entity_without_attachments(hass):
+    """En français, AU RÉGLAGE. Découvrir ça sur un parking à 21 h n'est pas
+    un moment acceptable."""
+    from homeassistant.components.ai_task import AITaskEntityFeature
+
+    from custom_components.home_stock.const import CONF_RECEIPT_AGENT
+    from custom_components.home_stock.receipt import task as receipt_task
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.states.async_set("ai_task.sans_photo", "unknown",
+                          {"supported_features": AITaskEntityFeature.GENERATE_DATA})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
+                    CONF_RECEIPT_AGENT: "ai_task.sans_photo"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_RECEIPT_AGENT: "no_attachments"}
+    assert receipt_task is not None
+
+
+async def test_the_options_flow_accepts_an_entity_with_attachments(hass):
+    from homeassistant.components.ai_task import AITaskEntityFeature
+
+    from custom_components.home_stock.const import CONF_RECEIPT_AGENT
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(
+        "ai_task.gemini", "unknown",
+        {"supported_features": AITaskEntityFeature.GENERATE_DATA
+                               | AITaskEntityFeature.SUPPORT_ATTACHMENTS})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
+                    CONF_RECEIPT_AGENT: "ai_task.gemini"})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_RECEIPT_AGENT] == "ai_task.gemini"
+
+
+async def test_an_empty_receipt_agent_is_a_valid_setting(hass):
+    """Même forme que `recipe_agent` au lot 3 : `vol.Optional` plus
+    `suggested_value`, jamais `default=""` — `EntitySelector` refuse la
+    chaîne vide, et « pas d'agent » deviendrait irreprésentable."""
+    from custom_components.home_stock.const import CONF_RECEIPT_AGENT
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    keys = {str(key) for key in result["data_schema"].schema}
+    assert CONF_RECEIPT_AGENT in keys
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS})
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options.get(CONF_RECEIPT_AGENT) is None
+
+
+async def test_the_horizon_option_survives_a_round_trip(hass):
+    from custom_components.home_stock.const import CONF_SHOPPING_LIST_HORIZON_DAYS
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
+                    CONF_SHOPPING_LIST_HORIZON_DAYS: 10})
+    await hass.async_block_till_done()
+
+    again = await hass.config_entries.options.async_init(entry.entry_id)
+    field = next(key for key in again["data_schema"].schema
+                 if str(key) == CONF_SHOPPING_LIST_HORIZON_DAYS)
+    assert field.default() == 10

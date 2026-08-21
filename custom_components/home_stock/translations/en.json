@@ -18,9 +18,13 @@
      "expiration_alert_days": "How many days before the best-before date to alert",
      "recipe_agent": "Conversation agent that translates and adapts imported recipes (optional)",
      "recipe_source_key": "TheMealDB API key (\"1\" is the public test key)",
-     "shopping_list_horizon_days": "How many days of planned meals the shopping list looks ahead"
+     "shopping_list_horizon_days": "How many days of planned meals the shopping list looks ahead",
+     "receipt_agent": "ai_task entity that reads receipt photos (optional)"
     }
    }
+  },
+  "error": {
+   "no_attachments": "This entity does not accept attachments, so it cannot read a receipt photo. Pick another one, or leave the field empty."
   }
  },
  "entity": {

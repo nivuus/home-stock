@@ -16,6 +16,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_EXPIRATION_ALERT_DAYS,
     CONF_RECIPE_AGENT,
+    CONF_RECEIPT_AGENT,
     CONF_RECIPE_SOURCE_KEY,
     CONF_SHOPPING_LIST_HORIZON_DAYS,
     DEFAULT_EXPIRATION_ALERT_DAYS,
@@ -23,6 +24,7 @@ from .const import (
     DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     DOMAIN,
 )
+from .receipt.task import supports_attachments
 from .validators import bounded_text
 
 
@@ -52,8 +54,17 @@ class HomeStockOptionsFlow(OptionsFlow):
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            # L'entité de lecture est validée QUAND ELLE EST CHOISIE, pas
+            # quand elle sert : découvrir à 21 h sur un parking qu'elle
+            # n'accepte pas de pièce jointe n'est pas un moment acceptable
+            # pour l'apprendre.
+            chosen = user_input.get(CONF_RECEIPT_AGENT)
+            if chosen and not supports_attachments(self.hass, chosen):
+                errors[CONF_RECEIPT_AGENT] = "no_attachments"
+            if not errors:
+                return self.async_create_entry(data=user_input)
         options = self.config_entry.options
         current = options.get(CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS)
         source_key = options.get(CONF_RECIPE_SOURCE_KEY, DEFAULT_RECIPE_SOURCE_KEY)
@@ -73,6 +84,12 @@ class HomeStockOptionsFlow(OptionsFlow):
             agent_field = vol.Optional(
                 CONF_RECIPE_AGENT,
                 description={"suggested_value": options[CONF_RECIPE_AGENT]})
+        # Même forme, et pour la même raison, que `recipe_agent`.
+        receipt_field = vol.Optional(CONF_RECEIPT_AGENT)
+        if options.get(CONF_RECEIPT_AGENT):
+            receipt_field = vol.Optional(
+                CONF_RECEIPT_AGENT,
+                description={"suggested_value": options[CONF_RECEIPT_AGENT]})
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
@@ -84,5 +101,8 @@ class HomeStockOptionsFlow(OptionsFlow):
                     vol.All(TextSelector(), bounded_text),
                 vol.Required(CONF_SHOPPING_LIST_HORIZON_DAYS, default=horizon):
                     vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+                receipt_field:
+                    EntitySelector(EntitySelectorConfig(domain="ai_task")),
             }),
+            errors=errors,
         )

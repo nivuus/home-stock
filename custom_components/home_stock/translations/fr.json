@@ -18,9 +18,13 @@
      "expiration_alert_days": "Alerter combien de jours avant la date limite",
      "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
      "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)",
-     "shopping_list_horizon_days": "Nombre de jours de repas pris en compte pour la liste de courses"
+     "shopping_list_horizon_days": "Nombre de jours de repas pris en compte pour la liste de courses",
+     "receipt_agent": "Entité ai_task qui lit les photos de tickets de caisse (facultatif)"
     }
    }
+  },
+  "error": {
+   "no_attachments": "Cette entité n'accepte pas de pièce jointe : elle ne peut pas lire une photo de ticket. Choisissez-en une autre, ou laissez le champ vide."
   }
  },
  "entity": {
