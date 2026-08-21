@@ -15,13 +15,15 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_EXPIRATION_ALERT_DAYS,
+    CONF_GOALS,
     CONF_RECIPE_AGENT,
     CONF_RECIPE_SOURCE_KEY,
     DEFAULT_EXPIRATION_ALERT_DAYS,
     DEFAULT_RECIPE_SOURCE_KEY,
     DOMAIN,
+    GOAL_NUTRIENTS,
 )
-from .validators import bounded_text
+from .validators import bounded_text, goal_quantity
 
 
 class HomeStockConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -51,7 +53,7 @@ class HomeStockOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            return self.async_create_entry(data=_fold_goals(user_input))
         options = self.config_entry.options
         current = options.get(CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS)
         source_key = options.get(CONF_RECIPE_SOURCE_KEY, DEFAULT_RECIPE_SOURCE_KEY)
@@ -61,6 +63,7 @@ class HomeStockOptionsFlow(OptionsFlow):
         # validation instead of turning adaptation off. Suggested-value plus
         # `vol.Optional` means an emptied field simply omits the key, which
         # reads back as None: no agent, no adaptation, no error.
+        goals = options.get(CONF_GOALS, {}) or {}
         agent_field = vol.Optional(CONF_RECIPE_AGENT)
         if options.get(CONF_RECIPE_AGENT):
             agent_field = vol.Optional(
@@ -75,5 +78,41 @@ class HomeStockOptionsFlow(OptionsFlow):
                     EntitySelector(EntitySelectorConfig(domain="conversation")),
                 vol.Optional(CONF_RECIPE_SOURCE_KEY, default=source_key):
                     vol.All(TextSelector(), bounded_text),
+                # Les neuf plafonds, ajoutés en fin de schéma et construits
+                # par compréhension sur GOAL_NUTRIENTS : le formulaire est
+                # fermé sur les nutriments que le journal fige, et une clé de
+                # plus ne peut pas y entrer par recopie.
+                **{_goal_field(nutrient, goals): goal_quantity
+                   for nutrient in GOAL_NUTRIENTS},
             }),
         )
+
+
+def _goal_field(nutrient: str, goals: dict[str, Any]) -> vol.Optional:
+    """One optional cap field, carrying a SUGGESTED value, never a default.
+
+    A `default=` would put the value back into a form somebody just emptied,
+    making "no goal any more" unreachable — the same trap `CONF_RECIPE_AGENT`
+    avoids for the same reason.
+    """
+    key = f"goal_{nutrient}"
+    if goals.get(nutrient) is None:
+        return vol.Optional(key)
+    return vol.Optional(key, description={"suggested_value": goals[nutrient]})
+
+
+def _fold_goals(user_input: dict[str, Any]) -> dict[str, Any]:
+    """The nine flat `goal_*` fields, folded into one `nutrition_goals` dict.
+
+    An emptied field OMITS its nutrient rather than writing 0: "no goal" has
+    to stay expressible, and a cap of zero would make every day a breach. The
+    rest of the component never sees the nine flat keys.
+    """
+    folded = dict(user_input)
+    goals: dict[str, float] = {}
+    for nutrient in GOAL_NUTRIENTS:
+        value = folded.pop(f"goal_{nutrient}", None)
+        if value is not None:
+            goals[nutrient] = value
+    folded[CONF_GOALS] = goals
+    return folded

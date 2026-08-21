@@ -17,7 +17,16 @@
         "data": {
           "expiration_alert_days": "Alerter combien de jours avant la date limite",
           "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
-          "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)"
+          "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)",
+          "goal_kcal": "Objectif maximal d'énergie par jour (kcal)",
+          "goal_proteins": "Objectif maximal de protéines par jour (g)",
+          "goal_carbohydrates": "Objectif maximal de glucides par jour (g)",
+          "goal_sugars": "Objectif maximal de sucres par jour (g)",
+          "goal_added_sugars": "Objectif maximal de sucres ajoutés par jour (g)",
+          "goal_fat": "Objectif maximal de matières grasses par jour (g)",
+          "goal_saturated_fat": "Objectif maximal de graisses saturées par jour (g)",
+          "goal_fiber": "Objectif maximal de fibres par jour (g)",
+          "goal_salt": "Objectif maximal de sel par jour (g)"
         }
       }
     }
