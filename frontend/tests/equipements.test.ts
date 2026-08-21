@@ -154,3 +154,54 @@ describe('<home-stock-equipements>', () => {
     expect(ajouter).not.toHaveBeenCalled();
   });
 });
+
+// --- lot 6 : le tableau au-delà de 1000 px ----------------------------------
+
+async function monterLarge(large: boolean) {
+  const { element, ajouter } = monter();
+  element.large = large;
+  await attendre(element);
+  return { element, ajouter };
+}
+
+const entetes = (element: any): string[] =>
+  Array.from(element.shadowRoot.querySelectorAll('thead th'))
+    .map((th: any) => th.textContent.trim());
+
+describe('<home-stock-equipements> : la vue dense (lot 6)', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('rend un tableau au-delà de 1000 px', async () => {
+    const { element } = await monterLarge(true);
+    expect(element.shadowRoot.querySelector('table')).not.toBeNull();
+    expect(entetes(element)).toEqual(['Appareil', 'Emplacement', 'Garantie',
+                                      'Consommables']);
+    expect(element.shadowRoot.querySelectorAll('tbody tr')).toHaveLength(3);
+  });
+
+  it('reste une liste de cartes en étroit', async () => {
+    const { element } = await monterLarge(false);
+    expect(element.shadowRoot.querySelector('table')).toBeNull();
+    expect(element.shadowRoot.querySelectorAll('.equipement')).toHaveLength(3);
+  });
+
+  it('une garantie échue reste signalée dans les deux mises en page', async () => {
+    // Une information d'alerte ne disparaît pas en changeant de disposition :
+    // c'est exactement le genre de perte silencieuse qu'une seconde mise en
+    // page introduit.
+    for (const large of [false, true]) {
+      document.body.innerHTML = '';
+      const { element } = await monterLarge(large);
+      expect(element.shadowRoot.textContent).toContain('garantie terminée depuis');
+      expect(element.shadowRoot.textContent).toContain('garantie non renseignée');
+    }
+  });
+
+  it('ouvre la fiche depuis le tableau, comme depuis une carte', async () => {
+    const { element } = await monterLarge(true);
+    const ligne = element.shadowRoot.querySelectorAll('tbody tr')[0] as HTMLElement;
+    (ligne.querySelector('.ouvrir') as HTMLButtonElement).click();
+    await attendre(element);
+    expect(element.shadowRoot.textContent).toContain('Consommables');
+  });
+});

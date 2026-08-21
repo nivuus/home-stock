@@ -270,3 +270,60 @@ describe('<home-stock-piles>', () => {
     expect(lignes[1]).toContain('01/01/2026');
   });
 });
+
+// --- lot 6 : le tableau au-delà de 1000 px ----------------------------------
+
+const entetes = (element: any): string[] =>
+  Array.from(element.shadowRoot.querySelectorAll('thead th'))
+    .map((th: any) => th.textContent.trim());
+
+async function monterPiles(large: boolean) {
+  const { element, ajouter } = monter({ decouvertes: DECOUVERTES });
+  element.large = large;
+  await attendre(element);
+  return { element, ajouter };
+}
+
+describe('<home-stock-piles> : la vue dense (lot 6)', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('rend un tableau au-delà de 1000 px', async () => {
+    const { element } = await monterPiles(true);
+    expect(element.shadowRoot.querySelector('table')).not.toBeNull();
+    expect(entetes(element)).toEqual(['Pile', 'À faire', 'Niveau', 'Rechange']);
+    expect(element.shadowRoot.querySelectorAll('tbody tr')).toHaveLength(PILES.length);
+  });
+
+  it('reste une liste de cartes en étroit', async () => {
+    const { element } = await monterPiles(false);
+    expect(element.shadowRoot.querySelector('table')).toBeNull();
+    expect(boutons(element, '.pile')).toHaveLength(PILES.length);
+  });
+
+  it('une pile muette ou orpheline reste signalée dans les deux mises en page', async () => {
+    // Le niveau inconnu et la pile disparue sont les deux cas où l'écran a
+    // quelque chose à dire : les perdre en élargissant serait la pire des
+    // régressions silencieuses.
+    for (const large of [false, true]) {
+      document.body.innerHTML = '';
+      const { element } = await monterPiles(large);
+      expect(texte(element)).toContain('Disparue');
+      expect(texte(element)).toContain('Jamais relevée');
+    }
+  });
+
+  it('garde les piles à déclarer visibles en large', async () => {
+    const { element } = await monterPiles(true);
+    expect(texte(element)).toContain('Nouveau capteur');
+  });
+
+  it('ouvre la fiche depuis le tableau, comme depuis une carte', async () => {
+    const { element } = await monterPiles(true);
+    const ouvrir = boutons(element, 'tbody .ouvrir')
+      .find((b) => b.textContent!.includes('Velux')) as HTMLButtonElement;
+    ouvrir.click();
+    await attendre(element);
+    expect(texte(element)).toContain('Velux (CH)');
+    expect(element.shadowRoot.querySelector('table')).toBeNull();
+  });
+});

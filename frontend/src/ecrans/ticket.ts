@@ -277,9 +277,24 @@ export class EcranTicket extends LitElement {
         <button class="reessayer" @click=${this.reessayer}>Réessayer la lecture</button>
       ` : nothing}
 
-      <section class="bloc-principal">
-        ${ticket.lines.map((ligne) => this.rendreLigne(ligne))}
-      </section>
+      ${this.large ? html`
+        <div class="deux-volets">
+          <aside class="volet-ticket">
+            <h2 class="titre-volet">Ticket lu</h2>
+            ${ticket.raw
+              ? html`<pre class="texte-lu">${ticket.raw}</pre>`
+              : html`<p class="pas-encore-lu">Le ticket n’a pas encore été lu :
+                  rien à comparer pour l’instant.</p>`}
+          </aside>
+          <section class="bloc-principal volet-lignes">
+            ${ticket.lines.map((ligne) => this.rendreLigne(ligne))}
+          </section>
+        </div>
+      ` : html`
+        <section class="bloc-principal">
+          ${ticket.lines.map((ligne) => this.rendreLigne(ligne))}
+        </section>
+      `}
 
       ${this.applicationArmee ? html`
         <div class="confirmation">
@@ -319,6 +334,26 @@ export class EcranTicket extends LitElement {
       background: var(--primary-color); color: var(--text-primary-color, #fff);
     }
     .photo { display: block; margin: 8px auto 0; color: inherit; }
+    /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
+       Rapprocher, c'est COMPARER : le texte lu d'un côté, les lignes de
+       l'autre, sans défiler entre les deux. La colonne du ticket est bornée à
+       360 px et jamais à une fraction de la largeur — un ticket de caisse est
+       haut et étroit, et lui donner la moitié d'un 1920 l'étirerait en lignes
+       illisibles tout en écrasant le vrai travail de l'écran, qui est à
+       droite. Elle défile pour elle-même, sans emporter la page. */
+    .deux-volets {
+      display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+      gap: 16px; align-items: start; margin-top: 8px;
+    }
+    .volet-ticket {
+      background: var(--secondary-background-color); border-radius: 8px; padding: 8px 12px;
+      max-height: 70vh; overflow: auto; min-width: 0;
+    }
+    .titre-volet { font-size: 0.9rem; margin: 0 0 8px; color: var(--secondary-text-color); }
+    .texte-lu { margin: 0; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;
+                overflow-wrap: anywhere; }
+    .pas-encore-lu { margin: 0; font-size: 0.9rem; color: var(--secondary-text-color); }
+    .volet-lignes { min-width: 0; }
     .ligne-ticket {
       display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0;
       border-bottom: 1px solid var(--divider-color, #ddd);
