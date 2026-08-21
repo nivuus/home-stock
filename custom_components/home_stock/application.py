@@ -234,34 +234,61 @@ class StockManager:
                     (stored_key,),
                 ).fetchone()
                 return int(row["batch_id"])
-            article = repo.get_article(conn, article_id)
-            if article is None:
-                raise ValueError(f"unknown article {article_id}")
-            batch_id = repo.insert_batch(
-                conn, article_id=article_id, location_id=location_id, quantity=amount,
-                entered_at=moment, best_before=best_before,
-                price_per_base_unit=price_per_base_unit, nutrition=frozen,
+            return self._add_stock_within(
+                conn, article_id=article_id, quantity=amount,
+                location_id=location_id, moment=moment, best_before=best_before,
+                price_per_base_unit=price_per_base_unit, reason=reason,
+                nutrition=frozen, key=stored_key,
+                record_price_observation=record_price_observation)
+
+    def _add_stock_within(self, conn, *, article_id: int, quantity: float,
+                          location_id: int, moment: str,
+                          best_before: str | None = None,
+                          price_per_base_unit: float | None = None,
+                          reason: str = REASON_PURCHASE,
+                          nutrition: Mapping[str, float | None] | None = None,
+                          ref_type: str | None = None, ref_id: int | None = None,
+                          key: str | None = None,
+                          record_price_observation: bool = True) -> int:
+        """`add_stock`'s body, on a connection the caller already owns.
+
+        Extracted so `validate_meal` can write the cooked dish INSIDE its own
+        transaction. `Database._lock` is a plain `threading.Lock`, not a
+        reentrant one: calling `add_stock` from inside another `db.write()`
+        blocks the process forever, with no exception and no traceback.
+
+        `quantity` is already in base units here — the public wrapper does the
+        packaging conversion, the idempotency check and the validation before
+        it ever takes the lock, and none of that may quietly move in here.
+        """
+        article = repo.get_article(conn, article_id)
+        if article is None:
+            raise ValueError(f"unknown article {article_id}")
+        batch_id = repo.insert_batch(
+            conn, article_id=article_id, location_id=location_id, quantity=quantity,
+            entered_at=moment, best_before=best_before,
+            price_per_base_unit=price_per_base_unit, nutrition=nutrition,
+        )
+        # The entry movement is valued with the SAME cascade a later
+        # consumption will read off this batch, so entering a dish and
+        # eating it cannot disagree about what it was worth.
+        kcal_rate = repo.resolve_kcal_rate(conn, article, batch=nutrition)
+        values = movement_values(quantity, kcal_rate, price_per_base_unit,
+                                 macro_rates=repo.batch_macro_rates(nutrition, article))
+        base_unit = repo.product_base_unit(conn, article["product_id"])
+        repo.insert_movement(
+            conn, occurred_at=moment, product_id=article["product_id"],
+            article_id=article_id, batch_id=batch_id, quantity=quantity,
+            reason=reason, base_unit=base_unit,
+            kcal=values.kcal, cost=values.cost, macros=values.macros,
+            ref_type=ref_type, ref_id=ref_id, idempotency_key=key,
+        )
+        if price_per_base_unit is not None and record_price_observation:
+            repo.insert_price(
+                conn, article_id=article_id, observed_on=moment[:10],
+                price_per_base_unit=price_per_base_unit, source="manual",
             )
-            # The entry movement is valued with the SAME cascade a later
-            # consumption will read off this batch, so entering a dish and
-            # eating it cannot disagree about what it was worth.
-            kcal_rate = repo.resolve_kcal_rate(conn, article, batch=frozen)
-            values = movement_values(amount, kcal_rate, price_per_base_unit,
-                                     macro_rates=repo.batch_macro_rates(frozen, article))
-            base_unit = repo.product_base_unit(conn, article["product_id"])
-            repo.insert_movement(
-                conn, occurred_at=moment, product_id=article["product_id"],
-                article_id=article_id, batch_id=batch_id, quantity=amount,
-                reason=reason, base_unit=base_unit,
-                kcal=values.kcal, cost=values.cost, macros=values.macros,
-                idempotency_key=stored_key,
-            )
-            if price_per_base_unit is not None and record_price_observation:
-                repo.insert_price(
-                    conn, article_id=article_id, observed_on=moment[:10],
-                    price_per_base_unit=price_per_base_unit, source="manual",
-                )
-            return batch_id
+        return batch_id
 
     def consume(self, *, product_id: int, quantity: float,
                 reason: str = REASON_CONSUMPTION, occurred_at: str | None = None,
@@ -284,39 +311,63 @@ class StockManager:
                     (stored_key, f"{_escape_like(stored_key)}#%"),
                 ).fetchall()
                 return [int(row["id"]) for row in rows]
-            # Every batch of one product necessarily shares that product's unit:
-            # read it once here rather than once per batch in the loop below.
+            return self._consume_within(
+                conn, product_id=product_id, quantity=quantity, reason=reason,
+                moment=moment, parts_total=parts_total, parts_mine=parts_mine,
+                key=stored_key)
+
+    def _consume_within(self, conn, *, product_id: int, quantity: float,
+                        reason: str, moment: str, base_unit: str | None = None,
+                        parts_total: int | None = None,
+                        parts_mine: int | None = None,
+                        ref_type: str | None = None, ref_id: int | None = None,
+                        key: str | None = None) -> list[int]:
+        """`consume`'s body, on a connection the caller already owns.
+
+        Extracted for `validate_meal`, which takes every ingredient out inside
+        ONE transaction: `Database._lock` is not reentrant, and calling the
+        public `consume` from within another `db.write()` hangs the process
+        silently.
+
+        `parts_total`/`parts_mine` arrive ALREADY validated. The public method
+        checks them before taking the lock — an inconsistent entry must not
+        take the write lock just to be refused inside it — and that check must
+        not quietly migrate in here.
+        """
+        # Every batch of one product necessarily shares that product's unit:
+        # read it once here rather than once per batch in the loop below.
+        if base_unit is None:
             base_unit = repo.product_base_unit(conn, product_id)
-            batches = [as_batch_view(row)
-                       for row in repo.list_batches_for_product(conn, product_id)]
-            allocations = allocate(batches, quantity)   # raises InsufficientStock
-            movement_ids: list[int] = []
-            for index, allocation in enumerate(allocations):
-                article_row = conn.execute(
-                    "SELECT article_id FROM batch WHERE id = ?", (allocation.batch_id,)
-                ).fetchone()
-                values = movement_values(allocation.quantity,
-                                         allocation.kcal_per_base_unit,
-                                         allocation.price_per_base_unit,
-                                         macro_rates=allocation.macros)
-                # One consumption can span several batches, but the key is UNIQUE:
-                # the first movement carries it, the next ones carry "key#1", "key#2".
-                key = None
-                if stored_key:
-                    key = stored_key if index == 0 else f"{stored_key}#{index}"
-                movement_ids.append(repo.insert_movement(
-                    conn, occurred_at=moment, product_id=product_id,
-                    article_id=article_row["article_id"], batch_id=allocation.batch_id,
-                    quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
-                    kcal=values.kcal, cost=values.cost, macros=values.macros,
-                    parts_total=parts_total, parts_mine=parts_mine,
-                    idempotency_key=key,
-                ))
-                repo.set_batch_remaining(
-                    conn, allocation.batch_id, allocation.remaining_after,
-                    closed_at=moment if allocation.closes_batch else None,
-                )
-            return movement_ids
+        batches = [as_batch_view(row)
+                   for row in repo.list_batches_for_product(conn, product_id)]
+        allocations = allocate(batches, quantity)   # raises InsufficientStock
+        movement_ids: list[int] = []
+        for index, allocation in enumerate(allocations):
+            article_row = conn.execute(
+                "SELECT article_id FROM batch WHERE id = ?", (allocation.batch_id,)
+            ).fetchone()
+            values = movement_values(allocation.quantity,
+                                     allocation.kcal_per_base_unit,
+                                     allocation.price_per_base_unit,
+                                     macro_rates=allocation.macros)
+            # One consumption can span several batches, but the key is UNIQUE:
+            # the first movement carries it, the next ones carry "key#1", "key#2".
+            movement_key = None
+            if key:
+                movement_key = key if index == 0 else f"{key}#{index}"
+            movement_ids.append(repo.insert_movement(
+                conn, occurred_at=moment, product_id=product_id,
+                article_id=article_row["article_id"], batch_id=allocation.batch_id,
+                quantity=-allocation.quantity, reason=reason, base_unit=base_unit,
+                kcal=values.kcal, cost=values.cost, macros=values.macros,
+                parts_total=parts_total, parts_mine=parts_mine,
+                ref_type=ref_type, ref_id=ref_id, idempotency_key=movement_key,
+            ))
+            repo.set_batch_remaining(
+                conn, allocation.batch_id, allocation.remaining_after,
+                closed_at=moment if allocation.closes_batch else None,
+            )
+        return movement_ids
 
     def consume_batch(self, batch_id: int, *, product_id: int | None = None,
                       quantity: float | None = None,
@@ -345,53 +396,72 @@ class StockManager:
                     (stored_key,),
                 ).fetchone()
                 return int(row["id"])
-            row = conn.execute(
-                # kcal and macro rates: the same cascade as add_stock() and
-                # consume() — the batch's own values first (lot 3, amendment
-                # A2), then the article's, then the product's reference_kcal
-                # (spec 7.4). Eating a portion of last night's lasagne must
-                # count the lasagne's calories, not the flour's.
-                #
-                # `b.*` is deliberately not used: batch and article now share
-                # those nine column names, and sqlite3.Row keeps the FIRST
-                # match — the raw batch column would shadow the cascade and
-                # every value would read NULL in silence. See
-                # repo.BATCH_COLUMNS_SQL.
-                f"SELECT {repo.BATCH_COLUMNS_SQL}, a.product_id,"
-                f" {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
-                f" {repo.MACRO_RATE_SQL}"
-                " FROM batch b"
-                " JOIN article a ON a.id = b.article_id"
-                " JOIN product p ON p.id = a.product_id"
-                " WHERE b.id = ? AND b.closed_at IS NULL",
-                (batch_id,),
-            ).fetchone()
-            if row is None:
-                raise ValueError(f"unknown or closed batch {batch_id}")
-            if product_id is not None and row["product_id"] != product_id:
-                raise ValueError(
-                    f"batch {batch_id} does not belong to product {product_id}")
-            taken = row["remaining"] if quantity is None else float(quantity)
-            if taken <= 0:
-                raise ValueError(f"quantity must be positive, got {taken}")
-            if taken > row["remaining"] + QUANTITY_EPSILON:
-                raise InsufficientStock(requested=taken, available=row["remaining"])
-            remaining_after = row["remaining"] - taken
-            closes = is_empty(remaining_after)
-            values = movement_values(taken, row["kcal_per_base_unit"],
-                                     row["price_per_base_unit"],
-                                     macro_rates=repo.macro_rates(row))
-            base_unit = repo.product_base_unit(conn, row["product_id"])
-            movement_id = repo.insert_movement(
-                conn, occurred_at=moment, product_id=row["product_id"],
-                article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
-                reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
-                macros=values.macros, parts_total=parts_total, parts_mine=parts_mine,
-                idempotency_key=stored_key,
-            )
-            repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
-                                     closed_at=moment if closes else None)
-            return movement_id
+            return self._consume_batch_within(
+                conn, batch_id, quantity=quantity, reason=reason, moment=moment,
+                product_id=product_id, parts_total=parts_total,
+                parts_mine=parts_mine, key=stored_key)
+
+    def _consume_batch_within(self, conn, batch_id: int, *,
+                              quantity: float | None = None, reason: str,
+                              moment: str, product_id: int | None = None,
+                              parts_total: int | None = None,
+                              parts_mine: int | None = None,
+                              ref_type: str | None = None,
+                              ref_id: int | None = None,
+                              key: str | None = None) -> int:
+        """`consume_batch`'s body, on a connection the caller already owns.
+
+        Extracted for `validate_meal`, which eats its portion out of the very
+        batch it created moments earlier, in the SAME transaction — something
+        the public method cannot do, `Database._lock` being non-reentrant.
+        """
+        row = conn.execute(
+            # kcal and macro rates: the same cascade as add_stock() and
+            # consume() — the batch's own values first (lot 3, amendment
+            # A2), then the article's, then the product's reference_kcal
+            # (spec 7.4). Eating a portion of last night's lasagne must
+            # count the lasagne's calories, not the flour's.
+            #
+            # `b.*` is deliberately not used: batch and article now share
+            # those nine column names, and sqlite3.Row keeps the FIRST
+            # match — the raw batch column would shadow the cascade and
+            # every value would read NULL in silence. See
+            # repo.BATCH_COLUMNS_SQL.
+            f"SELECT {repo.BATCH_COLUMNS_SQL}, a.product_id,"
+            f" {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
+            f" {repo.MACRO_RATE_SQL}"
+            " FROM batch b"
+            " JOIN article a ON a.id = b.article_id"
+            " JOIN product p ON p.id = a.product_id"
+            " WHERE b.id = ? AND b.closed_at IS NULL",
+            (batch_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown or closed batch {batch_id}")
+        if product_id is not None and row["product_id"] != product_id:
+            raise ValueError(
+                f"batch {batch_id} does not belong to product {product_id}")
+        taken = row["remaining"] if quantity is None else float(quantity)
+        if taken <= 0:
+            raise ValueError(f"quantity must be positive, got {taken}")
+        if taken > row["remaining"] + QUANTITY_EPSILON:
+            raise InsufficientStock(requested=taken, available=row["remaining"])
+        remaining_after = row["remaining"] - taken
+        closes = is_empty(remaining_after)
+        values = movement_values(taken, row["kcal_per_base_unit"],
+                                 row["price_per_base_unit"],
+                                 macro_rates=repo.macro_rates(row))
+        base_unit = repo.product_base_unit(conn, row["product_id"])
+        movement_id = repo.insert_movement(
+            conn, occurred_at=moment, product_id=row["product_id"],
+            article_id=row["article_id"], batch_id=batch_id, quantity=-taken,
+            reason=reason, base_unit=base_unit, kcal=values.kcal, cost=values.cost,
+            macros=values.macros, parts_total=parts_total, parts_mine=parts_mine,
+            ref_type=ref_type, ref_id=ref_id, idempotency_key=key,
+        )
+        repo.set_batch_remaining(conn, batch_id, 0.0 if closes else remaining_after,
+                                 closed_at=moment if closes else None)
+        return movement_id
 
     def open_batch(self, batch_id: int, *, occurred_at: str | None = None) -> None:
         """Mark a batch open and, if the product says so, bring its date closer."""
