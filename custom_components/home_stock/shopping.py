@@ -6,12 +6,16 @@ cart. The panel keeps only a replay queue of writes it could not send.
 """
 from __future__ import annotations
 
+import logging
 import statistics
 from datetime import UTC, datetime
 from typing import Any
 
 from .application import StockManager
 from .storage import repositories as repo
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ShoppingError(Exception):
@@ -30,7 +34,8 @@ class ShoppingService:
 
     # --- session ------------------------------------------------------------
 
-    def start(self, *, store: str | None) -> dict[str, Any]:
+    def start(self, *, store: str | None = None,
+              store_id: int | None = None) -> dict[str, Any]:
         """Open a trip. Refuses ANY session that is not `done`.
 
         Not just an open one: the partial unique index only covers
@@ -57,8 +62,54 @@ class ShoppingService:
                     f"Des courses{enseigne} attendent encore d'être rangées : "
                     "rangez-les ou clôturez-les avant d'en ouvrir de nouvelles."
                 )
-            session_id = repo.open_session(conn, started_at=_now(), store=store)
+            # Le magasin est une LIGNE depuis le lot 4 (amendement A4).
+            # `store_id` prime : le panneau envoie une pastille, pas une
+            # chaîne. Un nom sans identifiant crée le magasin s'il n'existe
+            # pas, par égalité EXACTE — deux orthographes restent deux
+            # magasins tant que le propriétaire ne les a pas fusionnés.
+            name = store.strip() if isinstance(store, str) else store
+            if store_id is not None:
+                row = repo.get_store(conn, store_id)
+                if row is None:
+                    raise ShoppingError("Ce magasin n'existe pas.")
+                name = row["name"]
+            elif name:
+                store_id = repo.upsert_store(conn, name=name)
+            else:
+                name = None
+            session_id = repo.open_session(conn, started_at=_now(), store=name,
+                                           store_id=store_id)
             return repo.get_session(conn, session_id)
+
+    def merge_stores(self, *, keep_id: int, merge_id: int) -> dict[str, Any]:
+        """Réunir deux orthographes du même magasin.
+
+        Refusé tant qu'une session est en cours dans l'un des deux : on ne
+        déplace pas le sol sous une session de courses.
+        """
+        if keep_id == merge_id:
+            raise ShoppingError("Ces deux magasins sont le même.")
+        with self.manager.db.write() as conn:
+            current = repo.current_session(conn)
+            if current is not None and current["store_id"] in (keep_id, merge_id):
+                raise ShoppingError(
+                    "Une session de courses est en cours dans ce magasin : "
+                    "clôturez-la avant de fusionner.")
+            for store_id in (keep_id, merge_id):
+                if repo.get_store(conn, store_id) is None:
+                    raise ShoppingError("Ce magasin n'existe pas.")
+            return repo.merge_stores(conn, keep_id=keep_id, merge_id=merge_id)
+
+    def list_stores(self, *, active_only: bool = True) -> list[dict[str, Any]]:
+        return repo.list_stores(self.manager.db.read(), active_only=active_only)
+
+    def upsert_store(self, *, name: str, store_id: int | None = None,
+                     position: int | None = None,
+                     active: int | None = None) -> dict[str, Any]:
+        with self.manager.db.write() as conn:
+            written = repo.upsert_store(conn, name=name, store_id=store_id,
+                                        position=position, active=active)
+            return repo.get_store(conn, written)
 
     def current(self) -> dict[str, Any] | None:
         conn = self.manager.db.read()
@@ -83,13 +134,28 @@ class ShoppingService:
             session = repo.current_session(conn)
             if session is None:
                 raise ShoppingError("Aucune session de courses en cours.")
-            repo.set_session_state(conn, session["id"], "done", closed_at=_now())
+            moment = _now()
+            repo.set_session_state(conn, session["id"], "done", closed_at=moment)
+            # L'apprentissage a lieu ICI, dans la transaction de clôture, et
+            # pas à chaque scan : on n'apprend pas d'un parcours en cours.
+            # `_learn_store_route_within` et non la méthode publique —
+            # `Database._lock` n'est pas réentrant, et un second `db.write()`
+            # figerait la clôture d'une session en plein magasin.
+            if session["store_id"] is not None:
+                try:
+                    self.manager._learn_store_route_within(
+                        conn, int(session["store_id"]), moment=moment)
+                except Exception:               # noqa: BLE001
+                    # Apprendre est accessoire ; clore ne l'est pas.
+                    _LOGGER.debug("apprentissage du parcours ignoré pour le "
+                                  "magasin %s", session["store_id"], exc_info=True)
             return repo.get_session(conn, session["id"])
 
     # --- lines --------------------------------------------------------------
 
     def add_line(self, *, article_id: int, quantity: float, unit_price: float | None,
-                 idempotency_key: str | None) -> dict[str, Any]:
+                 idempotency_key: str | None,
+                 price_source: str | None = None) -> dict[str, Any]:
         with self.manager.db.write() as conn:
             if idempotency_key:
                 # The panel's offline queue replays in order; a replayed scan
@@ -99,10 +165,15 @@ class ShoppingService:
                     return existing
 
             session = self._open_session(conn)
+            # Amendement A3 : d'où vient ce prix. Un appelant qui ne dit rien
+            # décrit un prix tapé — c'est ce que faisait le lot 1, et c'est
+            # le choix qui ne perd rien. Une ligne sans prix n'a pas de
+            # source : il n'y a pas de valeur dont on puisse dire l'origine.
+            source = (price_source or "manual") if unit_price is not None else None
             line_id = repo.add_line(
                 conn, session_id=session["id"], article_id=article_id,
                 quantity=quantity, unit_price=unit_price, scanned_at=_now(),
-                idempotency_key=idempotency_key,
+                idempotency_key=idempotency_key, price_source=source,
             )
             if unit_price is not None:
                 # The observation happens in the aisle, so it is recorded in the
@@ -110,21 +181,69 @@ class ShoppingService:
                 repo.insert_price(
                     conn, article_id=article_id, observed_on=_now()[:10],
                     price_per_base_unit=unit_price, store=session["store"],
-                    source="manual",
+                    source=source,
                 )
+            self._check_list_line(conn, article_id=article_id,
+                                  session_id=session["id"], line_id=line_id)
             # Always hand back the row as the database holds it, whether or
             # not a key was supplied: a caller must not have to guess the
             # shape of the answer from what it sent.
             return repo.get_line(conn, line_id)
 
+    @staticmethod
+    def _check_list_line(conn, *, article_id: int, session_id: int,
+                         line_id: int) -> None:
+        """Le pointage au scan (§ 8), dans la MÊME transaction que la ligne.
+
+        Sur le PRODUIT, jamais sur l'article — même règle qu'au lot 3 pour
+        les ingrédients, et même raison : la liste dit « du lait », le rayon
+        propose une brique de telle marque.
+
+        Le pointage n'est JAMAIS une condition du scan. Liste vide, produit
+        absent, table verrouillée : la ligne de panier s'écrit quand même.
+        Règle générale du composant depuis le lot 1 — ce qui est accessoire
+        ne bloque jamais ce qui est essentiel.
+        """
+        try:
+            article = repo.get_article(conn, article_id)
+            if article is None:
+                return
+            item = repo.open_item_for_product(conn, article["product_id"])
+            if item is None:
+                return
+            repo.check_list_item(conn, int(item["id"]), at=_now(),
+                                 session_id=session_id, line_id=line_id)
+        except Exception:                       # noqa: BLE001 — voir ci-dessus
+            _LOGGER.debug("pointage de la liste ignoré pour l'article %s",
+                          article_id, exc_info=True)
+
+    @staticmethod
+    def _uncheck_list_line(conn, line_id: int) -> None:
+        """Retirer une ligne du panier, c'est reposer l'article sur l'étagère."""
+        try:
+            row = conn.execute(
+                "SELECT id FROM shopping_list_item WHERE line_id = ?",
+                (line_id,)).fetchone()
+            if row is not None:
+                repo.uncheck_list_item(conn, int(row["id"]))
+        except Exception:                       # noqa: BLE001
+            _LOGGER.debug("dépointage de la liste ignoré pour la ligne %s",
+                          line_id, exc_info=True)
+
     def update_line(self, line_id: int, *, quantity: float | None = None,
-                    unit_price: float | None = None) -> dict[str, Any]:
+                    unit_price: float | None = None,
+                    price_source: str | None = None) -> dict[str, Any]:
         with self.manager.db.write() as conn:
             line = self._line(conn, line_id)
             if line["stored_at"]:
                 raise ShoppingError("Cette ligne est déjà rangée.")
-            repo.update_line(conn, line_id, quantity=quantity, unit_price=unit_price)
-            if unit_price is not None and unit_price != line["unit_price"]:
+            changed = unit_price is not None and unit_price != line["unit_price"]
+            # Une valeur qui change ici est une saisie HUMAINE, quelle que
+            # soit la source annoncée : on vient de la corriger devant
+            # l'étiquette. Une valeur inchangée conserve la source déclarée.
+            repo.update_line(conn, line_id, quantity=quantity, unit_price=unit_price,
+                             price_source="manual" if changed else price_source)
+            if changed:
                 # A price corrected at the till has to correct the observation
                 # the scan seeded, and a price typed here for the first time
                 # has to record one. Without this, a suggestion accepted at
@@ -160,6 +279,7 @@ class ShoppingService:
                 raise ShoppingError(
                     "Cette ligne est déjà rangée : corrigez le lot, pas la liste."
                 )
+            self._uncheck_list_line(conn, line_id)
             repo.remove_line(conn, line_id)
 
     def store_line(self, line_id: int, *, location_id: int,

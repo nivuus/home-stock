@@ -1,0 +1,128 @@
+{
+ "store": "Leclerc",
+ "purchased_on": "2026-08-21",
+ "currency": "EUR",
+ "total": 4019.0,
+ "lines": [
+  {
+   "label": "ARTICLE 1",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 2",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 3",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 4",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 5",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 6",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 7",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 8",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 9",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 10",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 11",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 12",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 13",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 14",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 15",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 16",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 17",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 18",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "ARTICLE 19",
+   "quantity": 1,
+   "unit_price": 1.0,
+   "total_price": 1.0
+  },
+  {
+   "label": "TELEVISEUR OLED",
+   "quantity": 1,
+   "unit_price": 4000.0,
+   "total_price": 4000.0
+  }
+ ]
+}

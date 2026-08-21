@@ -17,15 +17,18 @@ import './ecrans/validation';
 import './ecrans/planning';
 import './ecrans/piles';
 import './ecrans/equipements';
+import './ecrans/liste';
+import './ecrans/ticket';
 import type { ResumeDerniereFiche } from './ecrans/scanner';
 import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
+import type { DonneesTicket } from './ecrans/ticket';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
   | 'recettes' | 'recette' | 'planning' | 'validation'
-  | 'piles' | 'equipements';
+  | 'piles' | 'equipements' | 'liste' | 'ticket';
 
 /** Ce que la bannière et la dernière-fiche affichent : un résumé, pas la
  *  réponse brute de `lookup`. */
@@ -138,6 +141,12 @@ export class PanneauGardeManger extends LitElement {
     // `manger-produit` peut venir de la fiche comme du catalogue — deux
     // écrans différents, jamais montés ensemble — donc écouté ici, sur
     // l'hôte, plutôt que câblé à chaque enfant qui pourrait l'émettre.
+    // Écouté sur le panneau lui-même, comme `manger-produit` et
+    // `recette-ouverte` : « Ticket » n'est pas une destination de la barre,
+    // on y entre depuis la session ou depuis un bandeau, et l'émetteur n'est
+    // donc pas toujours un enfant rendu à ce moment-là.
+    this.addEventListener('ticket-ouvert', this.surTicketOuvert as EventListener);
+    this.addEventListener('aller-liste', this.surAllerListe);
     this.addEventListener('manger-produit', this.surMangerProduit as EventListener);
     this.addEventListener('consommation-enregistree', this.surConsommationEnregistree);
   }
@@ -310,6 +319,24 @@ export class PanneauGardeManger extends LitElement {
     this.large = window.innerWidth >= 1000;
   };
 
+  /** Le ticket ouvert, et si une entité de lecture est réglée. « Ticket » ne
+   *  s'atteint pas par un bouton nu : on y entre depuis la session ou depuis
+   *  le bandeau d'un ticket en attente, comme `recette` et `validation` au
+   *  lot 3. */
+  @state() ticketOuvert: DonneesTicket | null = null;
+  @state() agentTicketConfigure = true;
+
+  private surAllerListe = (): void => {
+    this.demanderNavigation('liste');
+  };
+
+  private surTicketOuvert = (e: CustomEvent<{ ticket: DonneesTicket | null;
+                                              agent_configure?: boolean }>): void => {
+    this.ticketOuvert = e.detail.ticket;
+    this.agentTicketConfigure = e.detail.agent_configure ?? true;
+    this.demanderNavigation('ticket');
+  };
+
   @state() recetteOuverte: number | null = null;
   @state() repasDeLaRecette: number | null = null;
   @state() repasAValider: number | null = null;
@@ -398,6 +425,9 @@ export class PanneauGardeManger extends LitElement {
             Équipements
           </button>
         ` : nothing}
+        ${this.ecran !== 'liste' ? html`
+          <button class="nav-bouton" @click=${() => this.demanderNavigation('liste')}>Liste</button>
+        ` : nothing}
         ${this.ecran !== 'reglages' ? html`
           <button class="nav-bouton" @click=${() => this.demanderNavigation('recettes')}>Recettes</button>
           <button class="nav-bouton" @click=${() => this.demanderNavigation('planning')}>Planning</button>
@@ -477,7 +507,8 @@ export class PanneauGardeManger extends LitElement {
       return html`
         <home-stock-session .donnees=${this.session} .connexion=${this.connexion}
           .file=${this.file} .enAttente=${this.enAttente}
-          @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}>
+          @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}
+          >
         </home-stock-session>`;
     }
     if (this.ecran === 'catalogue') {
@@ -500,7 +531,9 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'journal') {
       return html`
-        <home-stock-journal .connexion=${this.connexion}></home-stock-journal>`;
+        <home-stock-journal .connexion=${this.connexion} .file=${this.file}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-journal>`;
     }
     if (this.ecran === 'recettes') {
       return html`
@@ -538,6 +571,20 @@ export class PanneauGardeManger extends LitElement {
         <home-stock-equipements .connexion=${this.connexion} .file=${this.file}
           @file-changee=${this.surFileChangee}>
         </home-stock-equipements>`;
+    }
+    if (this.ecran === 'liste') {
+      return html`
+        <home-stock-liste .connexion=${this.connexion} .file=${this.file}
+          .enAttente=${this.enAttente} @file-changee=${this.surFileChangee}>
+        </home-stock-liste>`;
+    }
+    if (this.ecran === 'ticket') {
+      return html`
+        <home-stock-ticket .connexion=${this.connexion} .file=${this.file}
+          .enAttente=${this.enAttente} .ticket=${this.ticketOuvert}
+          .agentConfigure=${this.agentTicketConfigure}
+          @file-changee=${this.surFileChangee}>
+        </home-stock-ticket>`;
     }
     return html`
       <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}

@@ -133,6 +133,43 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
      lambda m: f"Pile {m.group(1)} inconnue."),
     (re.compile(r"^unknown equipment (\d+)$"), "not_found",
      lambda m: f"Équipement {m.group(1)} inconnu."),
+
+    # --- lot 4 : liste de courses, ticket, correction -----------------------
+    # EN FIN de tuple, jamais au milieu : le PREMIER motif qui correspond
+    # gagne, et une insertion plus haut changerait la phrase d'un message
+    # plus ancien. Un test rejoue les messages des lots antérieurs.
+    (re.compile(r"^unknown movement (\d+)$"), "not_found",
+     lambda m: f"Mouvement {m.group(1)} inconnu."),
+    (re.compile(r"^movement (\d+) is already a correction$"), "invalid_value",
+     lambda m: "Cette ligne est déjà une correction : corriger une correction, "
+               "c'est refaire la saisie."),
+    (re.compile(r"^movement (\d+) has already been corrected$"), "invalid_value",
+     lambda m: "Cette ligne a déjà été corrigée."),
+    (re.compile(r"^a transfer movement cannot be corrected$"), "invalid_value",
+     lambda m: "Un transfert ne se corrige pas : il ne change aucune quantité, "
+               "seulement un emplacement."),
+    (re.compile(r"^a conversion movement cannot be corrected$"), "invalid_value",
+     lambda m: "Une conversion d'unité ne se corrige pas ligne à ligne : "
+               "ses deux écritures vont par paire."),
+    (re.compile(r"^a cooked movement cannot be corrected$"), "invalid_value",
+     lambda m: "Un mouvement de cuisine s'annule en corrigeant le repas entier, "
+               "pas ligne à ligne."),
+    (re.compile(r"^reversing movement (\d+) would leave batch (\d+) negative;"
+                r" only (.+) left$"), "insufficient_stock",
+     lambda m: f"Impossible d'annuler cette ligne : le lot n'a plus que {m.group(3)}. "
+               "Le stock a déjà été repris ailleurs."),
+    (re.compile(r"^meal (\d+) was never validated$"), "invalid_value",
+     lambda m: "Ce repas n'a pas été validé : il n'y a rien à annuler."),
+    (re.compile(r"^a shopping list line needs a product or a text$"), "invalid_field",
+     lambda m: "Une ligne de liste a besoin d'un produit ou d'un libellé."),
+    (re.compile(r"^unknown receipt (\d+)$"), "not_found",
+     lambda m: f"Ticket {m.group(1)} inconnu."),
+    (re.compile(r"^receipt (\d+) was never read$"), "invalid_value",
+     lambda m: "Ce ticket n'a pas été lu : rien à appliquer."),
+    (re.compile(r"^meal (\d+) cannot be corrected: its dish has been started$"),
+     "invalid_value",
+     lambda m: "Ce plat a été entamé depuis : corrigez la consommation fautive, "
+               "ou finissez le plat avant d'annuler le repas."),
 )
 
 GENERIC_CODE: Final = "invalid_value"

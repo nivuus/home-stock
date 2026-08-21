@@ -13,11 +13,14 @@ from typing import Any, Final
 
 from ..const import (
     CONSUME_REASONS,
+    ROUTE_SESSION_WINDOW,
     MACRO_COLUMNS,
     NUTRITION_COLUMNS,
+    OBSERVED_PRICE_SOURCES,
     REASON_CONSUMPTION,
 )
 from ..domain.matching import normalise
+from ..domain.route import is_reliable
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -265,11 +268,28 @@ def insert_packaging(conn, *, scope: str, target_id: int, name: str,
 
 
 def insert_price(conn, *, article_id: int, observed_on: str,
-                 price_per_base_unit: float, source: str, store: str | None = None) -> int:
+                 price_per_base_unit: float, source: str, store: str | None = None,
+                 store_id: int | None = None) -> int:
     return _insert(conn, "price", {
         "article_id": article_id, "observed_on": observed_on,
         "price_per_base_unit": price_per_base_unit, "source": source, "store": store,
+        "store_id": store_id,
     })
+
+
+def set_batch_price(conn, batch_id: int, price_per_base_unit: float | None) -> None:
+    """The current price of one batch in the fridge — an UPDATE, not a journal
+    line. What a batch is worth today is state, not history."""
+    conn.execute("UPDATE batch SET price_per_base_unit = ? WHERE id = ?",
+                 (price_per_base_unit, batch_id))
+
+
+def movements_of_meal(conn, meal_id: int) -> list[dict[str, Any]]:
+    """Every row one meal validation wrote, in writing order."""
+    return _rows(conn.execute(
+        "SELECT m.* FROM movement m"
+        " WHERE m.ref_type = 'meal' AND m.ref_id = ? ORDER BY m.id", (meal_id,)
+    ))
 
 
 def rescale_prices_for_article(conn, article_id: int, factor: float) -> None:
@@ -406,6 +426,7 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
                     macros: Mapping[str, float | None] | None = None,
                     parts_total: int | None = None, parts_mine: int | None = None,
                     ref_type: str | None = None, ref_id: int | None = None,
+                    corrects_id: int | None = None,
                     idempotency_key: str | None = None) -> int:
     values: dict[str, Any] = {
         "occurred_at": occurred_at, "product_id": product_id, "article_id": article_id,
@@ -413,6 +434,7 @@ def insert_movement(conn, *, occurred_at: str, product_id: int, article_id: int,
         "base_unit": base_unit, "kcal": kcal,
         "cost": cost, "ref_type": ref_type, "ref_id": ref_id,
         "parts_total": parts_total, "parts_mine": parts_mine,
+        "corrects_id": corrects_id,
         "idempotency_key": idempotency_key,
     }
     # Always all eight columns, so an absent rate lands as an explicit NULL
@@ -437,6 +459,37 @@ def movement_exists(conn, idempotency_key: str) -> bool:
         "SELECT 1 FROM movement WHERE idempotency_key = ? LIMIT 1", (idempotency_key,)
     ).fetchone()
     return row is not None
+
+
+def get_movement(conn, movement_id: int) -> dict[str, Any] | None:
+    """One journal row, whole.
+
+    `m` as the alias, never `b`: the test that forbids selecting a whole
+    batch row scans this package literally, and does not look at which
+    table is behind the alias.
+    """
+    return _row(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.id = ?", (movement_id,)
+    ).fetchone())
+
+
+def movements_of_batch(conn, batch_id: int) -> list[dict[str, Any]]:
+    """Every row written against one batch, in writing order.
+
+    Ordered by `id` and not by `occurred_at`: a correction is booked on the
+    day it is made, so it sorts BEFORE its target on the date but after it
+    in the story.
+    """
+    return _rows(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.batch_id = ? ORDER BY m.id", (batch_id,)
+    ))
+
+
+def correction_of(conn, movement_id: int) -> dict[str, Any] | None:
+    """The reversal that cancels this row, if one was written."""
+    return _row(conn.execute(
+        "SELECT m.* FROM movement m WHERE m.corrects_id = ?", (movement_id,)
+    ).fetchone())
 
 
 def list_movements(conn, since: str | None = None) -> list[dict[str, Any]]:
@@ -536,7 +589,14 @@ def journal_entries(conn, start: str, end: str) -> list[dict[str, Any]]:
     """What left the stock during a food day, oldest first."""
     return _rows(conn.execute(
         "SELECT m.id, m.occurred_at, m.quantity, m.reason, m.base_unit, m.kcal,"
-        "       m.cost, m.parts_total, m.parts_mine, p.name AS product_name"
+        "       m.cost, m.parts_total, m.parts_mine, m.batch_id, m.corrects_id,"
+        "       p.name AS product_name,"
+        # La contrepassation d'une ligne, si elle existe. Le journal ne cache
+        # JAMAIS une erreur : la ligne fautive reste visible, barrée, avec son
+        # annulation juste en dessous — c'est ce qui permet de comprendre, six
+        # mois plus tard, pourquoi une journée porte une valeur négative.
+        "       (SELECT c.id FROM movement c WHERE c.corrects_id = m.id)"
+        "         AS corrected_by"
         " FROM movement m JOIN product p ON p.id = m.product_id"
         f" WHERE m.reason IN {_reasons_sql(CONSUME_REASONS)}"
         "   AND m.occurred_at >= ? AND m.occurred_at < ?"
@@ -625,10 +685,27 @@ def mark_expiry_announced(conn, batch_id: int, stage: str) -> None:
 
 # --- shopping sessions ------------------------------------------------------
 
-def open_session(conn, *, started_at: str, store: str | None) -> int:
-    """Start a shopping session. The partial unique index refuses a second one."""
+def open_session(conn, *, started_at: str, store: str | None,
+                 store_id: int | None = None) -> int:
+    """Start a shopping session. The partial unique index refuses a second one.
+
+    Both `store` (the free text, as the lot 1 sessions hold it) and
+    `store_id` are written: the text is what was typed that day, the id is
+    the shop it turned out to be.
+    """
     return _insert(conn, "shopping_session",
-                   {"started_at": started_at, "store": store, "state": "shopping"})
+                   {"started_at": started_at, "store": store, "state": "shopping",
+                    "store_id": store_id})
+
+
+def last_closed_session_at(conn) -> str | None:
+    """L'instant où le dernier voyage a été clos, ou `None` s'il n'y en a
+    jamais eu. C'est ce qui rend la règle 4 de la réconciliation décidable
+    ligne par ligne plutôt que globalement."""
+    row = conn.execute(
+        "SELECT MAX(COALESCE(closed_at, started_at)) AS at FROM shopping_session"
+        " WHERE state = 'done'").fetchone()
+    return row["at"] if row else None
 
 
 def current_session(conn) -> dict[str, Any] | None:
@@ -675,16 +752,18 @@ def set_session_state(conn, session_id: int, state: str, *,
 
 def add_line(conn, *, session_id: int, article_id: int, quantity: float,
              unit_price: float | None, scanned_at: str,
-             idempotency_key: str | None) -> int:
+             idempotency_key: str | None,
+             price_source: str | None = None) -> int:
     return _insert(conn, "shopping_line", {
         "session_id": session_id, "article_id": article_id, "quantity": quantity,
         "unit_price": unit_price, "scanned_at": scanned_at,
-        "idempotency_key": idempotency_key,
+        "idempotency_key": idempotency_key, "price_source": price_source,
     })
 
 
 def update_line(conn, line_id: int, *, quantity: float | None = None,
-                unit_price: float | None = None) -> None:
+                unit_price: float | None = None,
+                price_source: str | None = None) -> None:
     """Only the fields actually passed are written: None means "leave it", which
     is not the same as "clear it"."""
     if quantity is not None:
@@ -693,6 +772,9 @@ def update_line(conn, line_id: int, *, quantity: float | None = None,
     if unit_price is not None:
         conn.execute("UPDATE shopping_line SET unit_price = ? WHERE id = ?",
                      (unit_price, line_id))
+    if price_source is not None:
+        conn.execute("UPDATE shopping_line SET price_source = ? WHERE id = ?",
+                     (price_source, line_id))
 
 
 def remove_line(conn, line_id: int) -> None:
@@ -745,26 +827,52 @@ def count_pending_lines_for_product(conn, product_id: int) -> int:
     return int(row["n"])
 
 
+# `sa.position` d'abord : l'ordre appris DE CE MAGASIN. `ai.position`
+# ensuite — on sait où est le rayon en général, on ne sait juste pas où il
+# est ici. 999 enfin, pour un produit sans rayon du tout.
 _LINE_SELECT_SQL = """
 SELECT l.*, p.id AS product_id, p.name AS product_name, p.base_unit,
        p.default_location_id, p.default_shelf_life_days, p.days_after_opening,
        a.label AS article_label, a.brand, a.image, a.net_quantity,
-       ai.name AS aisle_name, COALESCE(ai.position, 999) AS aisle_position
+       ai.name AS aisle_name,
+       COALESCE(sa.position, ai.position, 999) AS aisle_position
 FROM shopping_line l
 JOIN article a ON a.id = l.article_id
 JOIN product p ON p.id = a.product_id
 LEFT JOIN aisle ai ON ai.id = p.aisle_id
+LEFT JOIN store_aisle sa ON sa.aisle_id = ai.id AND sa.store_id = ?
 WHERE l.session_id = ?
 """
 
 
 def list_lines(conn, session_id: int, *, pending_only: bool = False) -> list[dict[str, Any]]:
-    """The cart, in walking order. Scan order is never what a shopper wants."""
+    """The cart, in walking order. Scan order is never what a shopper wants.
+
+    The learned order of THIS shop only applies once the shop is reliable
+    (three closed sessions, § 11.3). Below that, `store_aisle` is filled and
+    visible in the settings, but the display keeps `aisle.position`: one
+    observation would turn an exceptional detour into the law.
+    """
+    store_id = _reliable_store_of(conn, session_id)
     sql = _LINE_SELECT_SQL
     if pending_only:
         sql += " AND l.stored_at IS NULL"
     sql += " ORDER BY aisle_position, p.name, l.id"
-    return _rows(conn.execute(sql, (session_id,)))
+    return _rows(conn.execute(sql, (store_id, session_id)))
+
+
+def _reliable_store_of(conn, session_id: int) -> int | None:
+    """The session's shop, but only once it has taught us enough."""
+    row = conn.execute(
+        "SELECT store_id FROM shopping_session WHERE id = ?", (session_id,)
+    ).fetchone()
+    store_id = row["store_id"] if row else None
+    if store_id is None:
+        return None
+    closed = conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_session"
+        " WHERE store_id = ? AND state = 'done'", (store_id,)).fetchone()["n"]
+    return store_id if is_reliable(int(closed)) else None
 
 
 def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> None:
@@ -773,24 +881,66 @@ def mark_line_stored(conn, line_id: int, *, batch_id: int, stored_at: str) -> No
 
 
 def session_totals(conn, session_id: int) -> dict[str, Any]:
+    """Ce que le chariot vaut, et quelle part de ce chiffre est une supposition.
+
+    Trois catégories, jamais une moyenne (§ 9) : CONSTATÉ (un humain a tapé
+    ou corrigé le prix devant l'étiquette, ou le ticket l'a dit), ESTIMÉ (une
+    suggestion acceptée sans y toucher) et INCONNU (aucun prix — compté zéro
+    dans le total, et SIGNALÉ). `COALESCE` comptait déjà l'inconnu à zéro en
+    silence ; l'écart inexpliqué avec le ticket détruit la confiance dans
+    tout le reste.
+    """
+    observed = _reasons_sql(OBSERVED_PRICE_SOURCES)
     row = conn.execute(
-        """
+        f"""
         SELECT COUNT(*) AS lines,
                SUM(CASE WHEN stored_at IS NULL THEN 1 ELSE 0 END) AS pending,
-               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total
-        FROM shopping_line WHERE session_id = ?
+               COALESCE(SUM(quantity * COALESCE(unit_price, 0)), 0) AS total,
+               COALESCE(SUM(CASE WHEN unit_price IS NOT NULL
+                                  AND price_source IN {observed}
+                            THEN quantity * unit_price END), 0) AS observed,
+               COALESCE(SUM(CASE WHEN unit_price IS NOT NULL
+                                  AND (price_source IS NULL
+                                       OR price_source NOT IN {observed})
+                            THEN quantity * unit_price END), 0) AS estimated,
+               COALESCE(SUM(CASE WHEN unit_price IS NULL THEN 1 END), 0)
+                 AS unpriced_lines,
+               COALESCE(SUM(CASE WHEN NOT EXISTS (
+                   SELECT 1 FROM shopping_list_item sl WHERE sl.line_id = l.id
+               ) THEN 1 END), 0) AS off_list_lines
+        FROM shopping_line l WHERE l.session_id = ?
         """,
         (session_id,),
     ).fetchone()
+    progress = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        "       COALESCE(SUM(CASE WHEN sl.checked_at IS NOT NULL THEN 1 END), 0)"
+        "         AS checked"
+        " FROM shopping_list_item sl WHERE sl.removed_at IS NULL"
+    ).fetchone()
     return {"lines": row["lines"], "pending": row["pending"] or 0,
-            "total": round(row["total"], 4)}
+            "total": round(row["total"], 4),
+            "observed": round(row["observed"], 4),
+            "estimated": round(row["estimated"], 4),
+            "unpriced_lines": int(row["unpriced_lines"]),
+            "off_list_lines": int(row["off_list_lines"]),
+            "checked_items": int(progress["checked"]),
+            "list_items": int(progress["total"])}
 
 
 def latest_price_in_store(conn, article_id: int, store: str) -> float | None:
+    """The last price OBSERVED in this shop — amendment A3.
+
+    A suggestion accepted without being touched (`open_prices`, `last_known`,
+    `store`) is not evidence of anything: counting it here would put rank 1
+    of the cascade at the mercy of its own guesses, and by the second trip
+    the guess would have overwritten the shelf label.
+    """
     row = conn.execute(
-        """
+        f"""
         SELECT price_per_base_unit FROM price
         WHERE article_id = ? AND store = ?
+          AND source IN {_reasons_sql(OBSERVED_PRICE_SOURCES)}
         ORDER BY observed_on DESC, id DESC LIMIT 1
         """,
         (article_id, store),
@@ -816,16 +966,196 @@ def recent_shelf_lives(conn, product_id: int, limit: int = 3) -> list[int]:
     return [row["days"] for row in rows if row["days"] is not None and row["days"] >= 0]
 
 
-def list_stores(conn) -> list[str]:
-    """Shops already used, most recently seen first — the panel shows them as chips."""
-    rows = conn.execute(
-        """
-        SELECT store, MAX(observed_on) AS last_seen FROM price
-        WHERE store IS NOT NULL AND store <> ''
-        GROUP BY store ORDER BY last_seen DESC, store
-        """
-    ).fetchall()
-    return [row["store"] for row in rows]
+# --- lot 4 : le magasin, promu de chaîne libre à ligne (amendement A4) -----
+#
+# Alias `st`, jamais `b` : un test scanne littéralement ce paquet à la
+# recherche d'une ligne de batch entière, sans regarder quelle table est
+# derrière l'alias.
+
+def list_stores(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    """Shops the panel shows as chips, with what is known about each.
+
+    `observed_sessions` counts only `done` trips: a trip still under way
+    has not taught anything about this shop yet, and counting it would make
+    a brand-new shop look experienced for the length of one visit.
+    """
+    where = " WHERE st.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT st.id, st.name, st.position, st.active,"
+        "       COUNT(s.id) AS observed_sessions,"
+        "       MAX(s.started_at) AS last_seen"
+        " FROM store st"
+        " LEFT JOIN shopping_session s"
+        "   ON s.store_id = st.id AND s.state = 'done'"
+        f"{where}"
+        " GROUP BY st.id"
+        " ORDER BY st.position, last_seen DESC, st.name"
+    ))
+
+
+def get_store(conn, store_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT st.* FROM store st WHERE st.id = ?", (store_id,)).fetchone())
+
+
+def find_store_by_name(conn, name: str) -> dict[str, Any] | None:
+    """Exact equality, case included.
+
+    Deciding that « Leclerc » and « leclerc » are the same shop is a guess,
+    and a guess made here would one day merge two shops that really are
+    different, with no trace. The panel merges by hand instead (§ 11.1).
+    """
+    return _row(conn.execute(
+        "SELECT st.* FROM store st WHERE st.name = ?", (name,)).fetchone())
+
+
+def upsert_store(conn, *, name: str, store_id: int | None = None,
+                 position: int | None = None, active: int | None = None) -> int:
+    """Create the shop or update the one named — returns its id."""
+    if store_id is None:
+        existing = find_store_by_name(conn, name)
+        store_id = existing["id"] if existing else None
+    if store_id is None:
+        return _insert(conn, "store", {
+            "name": name,
+            "position": 0 if position is None else position,
+            "active": 1 if active is None else active,
+        })
+    fields: dict[str, Any] = {"name": name}
+    if position is not None:
+        fields["position"] = position
+    if active is not None:
+        fields["active"] = active
+    _update_fields(conn, "store", store_id, fields)
+    return int(store_id)
+
+
+def merge_stores(conn, *, keep_id: int, merge_id: int) -> dict[str, Any]:
+    """Fold one shop into another. `price.store` is NEVER rewritten.
+
+    `price` is a log of observations: each row says what was seen the day it
+    was seen. Rewriting the text to make it tidy is exactly what lot 0
+    refuses to the movement journal.
+    """
+    conn.execute("UPDATE shopping_session SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    conn.execute("UPDATE price SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    # The surviving shop's own order wins: (store_id, aisle_id) is the primary
+    # key, so only one may remain, and the one the owner has been walking is
+    # the one that is right.
+    conn.execute(
+        "DELETE FROM store_aisle WHERE store_id = ? AND aisle_id IN"
+        " (SELECT aisle_id FROM store_aisle WHERE store_id = ?)",
+        (merge_id, keep_id))
+    conn.execute("UPDATE store_aisle SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    conn.execute("DELETE FROM store WHERE id = ?", (merge_id,))
+    return {"keep_id": keep_id, "merged_id": merge_id}
+
+
+def set_store_aisle(conn, *, store_id: int, aisle_id: int, position: int,
+                    source: str, mean_rank: float | None = None,
+                    observed_sessions: int = 0,
+                    updated_at: str | None = None) -> None:
+    """One aisle's place in one shop's walking order."""
+    conn.execute(
+        "INSERT INTO store_aisle (store_id, aisle_id, position, source,"
+        " mean_rank, observed_sessions, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT (store_id, aisle_id) DO UPDATE SET"
+        "   position = excluded.position, source = excluded.source,"
+        "   mean_rank = excluded.mean_rank,"
+        "   observed_sessions = excluded.observed_sessions,"
+        "   updated_at = excluded.updated_at",
+        (store_id, aisle_id, position, source, mean_rank, observed_sessions,
+         updated_at))
+
+
+def store_aisles(conn, store_id: int) -> list[dict[str, Any]]:
+    """This shop's walking order, in it."""
+    return _rows(conn.execute(
+        "SELECT sa.* FROM store_aisle sa WHERE sa.store_id = ? ORDER BY sa.position",
+        (store_id,)))
+
+
+def store_route(conn, store_id: int) -> list[dict[str, Any]]:
+    """The walking order with the aisle names, for the settings screen."""
+    return _rows(conn.execute(
+        "SELECT sa.*, ai.name AS aisle_name, ai.position AS default_position"
+        " FROM store_aisle sa JOIN aisle ai ON ai.id = sa.aisle_id"
+        " WHERE sa.store_id = ? ORDER BY sa.position", (store_id,)))
+
+
+def recent_session_aisle_sequences(conn, store_id: int,
+                                   limit: int = ROUTE_SESSION_WINDOW
+                                   ) -> list[list[int]]:
+    """Les rayons parcourus lors des dernières sessions CLOSES de ce magasin.
+
+    Triées par `scanned_at`, jamais par `id` : c'est l'ordre du PARCOURS
+    qu'on apprend, et deux lignes peuvent être écrites dans un ordre que le
+    chariot n'a pas suivi (rejeu de la file hors ligne).
+
+    Seules les sessions closes : on n'apprend pas d'un parcours en cours.
+    """
+    sessions = _rows(conn.execute(
+        "SELECT s.id FROM shopping_session s"
+        " WHERE s.store_id = ? AND s.state = 'done'"
+        " ORDER BY COALESCE(s.closed_at, s.started_at) DESC, s.id DESC"
+        " LIMIT ?", (store_id, limit)))
+    sequences: list[list[int]] = []
+    for session in sessions:
+        rows = _rows(conn.execute(
+            "SELECT p.aisle_id FROM shopping_line l"
+            " JOIN article a ON a.id = l.article_id"
+            " JOIN product p ON p.id = a.product_id"
+            " WHERE l.session_id = ? AND p.aisle_id IS NOT NULL"
+            " ORDER BY l.scanned_at, l.id", (session["id"],)))
+        if rows:
+            sequences.append([int(row["aisle_id"]) for row in rows])
+    return sequences
+
+
+def save_store_route(conn, store_id: int, entries, *, updated_at: str) -> None:
+    """Écrit l'ordre appris, et n'écrase JAMAIS une ligne `manual`.
+
+    Le rang moyen et le nombre de sessions sont écrits même sur une ligne
+    épinglée : on doit VOIR que l'apprentissage la contredit. Seule
+    `position` reste celle qu'on a choisie.
+    """
+    pinned = {row["aisle_id"] for row in store_aisles(conn, store_id)
+              if row["source"] == "manual"}
+    for entry in entries:
+        if entry.aisle_id in pinned:
+            conn.execute(
+                "UPDATE store_aisle SET mean_rank = ?, observed_sessions = ?,"
+                " updated_at = ? WHERE store_id = ? AND aisle_id = ?",
+                (entry.mean_rank, entry.observed_sessions, updated_at,
+                 store_id, entry.aisle_id))
+            continue
+        set_store_aisle(conn, store_id=store_id, aisle_id=entry.aisle_id,
+                        position=entry.position, source=entry.source,
+                        mean_rank=entry.mean_rank,
+                        observed_sessions=entry.observed_sessions,
+                        updated_at=updated_at)
+
+
+def pin_store_aisles(conn, store_id: int, aisle_ids: Sequence[int]) -> None:
+    """Le propriétaire a rangé ces rayons dans cet ordre : ils y restent."""
+    for position, aisle_id in enumerate(aisle_ids, start=1):
+        conn.execute(
+            "INSERT INTO store_aisle (store_id, aisle_id, position, source)"
+            " VALUES (?, ?, ?, 'manual')"
+            " ON CONFLICT (store_id, aisle_id) DO UPDATE SET"
+            "   position = excluded.position, source = 'manual'",
+            (store_id, aisle_id, position))
+
+
+def unpin_store_aisle(conn, store_id: int, aisle_id: int) -> None:
+    """« Reprendre l'apprentissage » : la ligne redevient automatique."""
+    conn.execute(
+        "UPDATE store_aisle SET source = 'learned'"
+        " WHERE store_id = ? AND aisle_id = ?", (store_id, aisle_id))
 
 
 # =============================================================================
@@ -1439,3 +1769,389 @@ def set_battery_readings(conn, readings) -> None:
         return
     conn.executemany(
         "UPDATE battery SET last_percent = ?, last_reading_at = ? WHERE id = ?", rows)
+
+
+# =============================================================================
+# Lot 4 — la liste de courses, ses revendications et ses récurrences.
+#
+# Alias `sl` (shopping_list_item), `sa` (store_aisle), `ai` (aisle), `st`
+# (store), `sc` (shopping_list_claim) — jamais `b` : le test qui interdit de
+# sélectionner une ligne de lot entière scanne ce paquet LITTÉRALEMENT et ne
+# regarde pas quelle table est derrière l'alias.
+# =============================================================================
+
+LIST_ITEM_FIELDS: Final = ("product_id", "free_text", "quantity", "note")
+
+# 999 : un produit sans rayon marche en dernier. Un rayon inconnu DANS ce
+# magasin garde sa place par défaut (`aisle.position`) plutôt que de tomber
+# à la fin — on sait où il est en général, on ne sait juste pas où il est ici.
+_LIST_ORDER_SQL: Final = "COALESCE(sa.position, ai.position, 999)"
+
+
+def insert_list_item(conn, *, added_at: str, product_id: int | None = None,
+                     free_text: str | None = None, quantity: float | None = None,
+                     note: str | None = None) -> int:
+    return _insert(conn, "shopping_list_item", {
+        "product_id": product_id, "free_text": free_text, "quantity": quantity,
+        "note": note, "added_at": added_at,
+    })
+
+
+def update_list_item(conn, item_id: int, fields: Mapping[str, Any]) -> None:
+    _update_fields(conn, "shopping_list_item", item_id,
+                   _filtered(fields, LIST_ITEM_FIELDS))
+
+
+def check_list_item(conn, item_id: int, *, at: str, session_id: int | None,
+                    line_id: int | None) -> None:
+    """« Je l'ai », jamais « c'est en stock » (§ 7.5).
+
+    `session_id` et `line_id` sont écrits ensemble : c'est le SCAN qui coche,
+    et la ligne de panier doit rester retrouvable pour pouvoir décocher quand
+    on repose l'article dans le rayon.
+    """
+    conn.execute(
+        "UPDATE shopping_list_item SET checked_at = ?, session_id = ?, line_id = ?"
+        " WHERE id = ?", (at, session_id, line_id, item_id))
+
+
+def uncheck_list_item(conn, item_id: int) -> None:
+    """Les trois colonnes ensemble : un item décoché qui garderait un
+    `line_id` mort ferait viser au décochage suivant une ligne disparue."""
+    conn.execute(
+        "UPDATE shopping_list_item SET checked_at = NULL, session_id = NULL,"
+        " line_id = NULL WHERE id = ?", (item_id,))
+
+
+def remove_list_item(conn, item_id: int, *, at: str) -> None:
+    """Un horodatage, jamais un DELETE : la réconciliation doit se SOUVENIR
+    qu'on n'en veut pas, sinon elle remet la ligne un quart d'heure plus tard."""
+    conn.execute("UPDATE shopping_list_item SET removed_at = ? WHERE id = ?",
+                 (at, item_id))
+
+
+def purge_list_item(conn, item_id: int) -> None:
+    """Le seul DELETE de la liste, et il emporte les revendications."""
+    conn.execute("DELETE FROM shopping_list_claim WHERE item_id = ?", (item_id,))
+    conn.execute("DELETE FROM shopping_list_item WHERE id = ?", (item_id,))
+
+
+def open_item_for_product(conn, product_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT sl.* FROM shopping_list_item sl"
+        " WHERE sl.product_id = ? AND sl.checked_at IS NULL AND sl.removed_at IS NULL",
+        (product_id,)).fetchone())
+
+
+def get_list_item(conn, item_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT sl.* FROM shopping_list_item sl WHERE sl.id = ?",
+        (item_id,)).fetchone())
+
+
+def list_items(conn, *, store_id: int | None = None,
+               include_checked: bool = True,
+               include_removed: bool = False) -> list[dict[str, Any]]:
+    """La liste ouverte, dans l'ordre du magasin où l'on est.
+
+    L'ordre appris de CE magasin d'abord, l'ordre par défaut du rayon en
+    repli, 999 pour un produit sans rayon. Sans `store_id`, c'est l'ordre du
+    lot 1, inchangé.
+    """
+    where = ["sl.removed_at IS NULL"] if not include_removed else []
+    if not include_checked:
+        where.append("sl.checked_at IS NULL")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = _rows(conn.execute(
+        "SELECT sl.*, p.name AS product_name, p.base_unit, p.aisle_id,"
+        "       ai.name AS aisle_name,"
+        f"      {_LIST_ORDER_SQL} AS aisle_position"
+        " FROM shopping_list_item sl"
+        " LEFT JOIN product p ON p.id = sl.product_id"
+        " LEFT JOIN aisle ai ON ai.id = p.aisle_id"
+        " LEFT JOIN store_aisle sa ON sa.aisle_id = ai.id AND sa.store_id = ?"
+        f"{clause}"
+        f" ORDER BY {_LIST_ORDER_SQL}, p.name, sl.id",
+        (store_id,)))
+    claims = _claims_by_item(conn)
+    for row in rows:
+        row["claims"] = claims.get(row["id"], [])
+    return rows
+
+
+def _claims_by_item(conn) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in _rows(conn.execute(
+            "SELECT sc.* FROM shopping_list_claim sc ORDER BY sc.item_id, sc.origin")):
+        grouped.setdefault(row["item_id"], []).append(row)
+    return grouped
+
+
+def set_claim(conn, *, item_id: int, origin: str, quantity: float | None,
+              detail: str | None, claimed_at: str) -> None:
+    """Au plus une revendication par origine : deux passages de la même
+    origine mettent à jour, ils n'empilent pas."""
+    conn.execute(
+        "INSERT INTO shopping_list_claim (item_id, origin, quantity, detail, claimed_at)"
+        " VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT (item_id, origin) DO UPDATE SET"
+        "   quantity = excluded.quantity, detail = excluded.detail,"
+        "   claimed_at = excluded.claimed_at",
+        (item_id, origin, quantity, detail, claimed_at))
+
+
+def drop_claim(conn, *, item_id: int, origin: str) -> None:
+    conn.execute("DELETE FROM shopping_list_claim WHERE item_id = ? AND origin = ?",
+                 (item_id, origin))
+
+
+def claims_of(conn, item_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT sc.* FROM shopping_list_claim sc WHERE sc.item_id = ? ORDER BY sc.origin",
+        (item_id,)))
+
+
+# --- les récurrences --------------------------------------------------------
+
+RECURRING_FIELDS: Final = ("product_id", "free_text", "quantity", "every_days",
+                           "last_added_on", "active")
+
+
+def upsert_recurring(conn, *, recurring_id: int | None = None,
+                     product_id: int | None = None, free_text: str | None = None,
+                     quantity: float | None = None, every_days: int,
+                     last_added_on: str | None = None,
+                     active: int = 1) -> int:
+    values = {
+        "product_id": product_id, "free_text": free_text, "quantity": quantity,
+        "every_days": every_days, "last_added_on": last_added_on, "active": active,
+    }
+    if recurring_id is None:
+        return _insert(conn, "shopping_recurring", values)
+    _update_fields(conn, "shopping_recurring", recurring_id, values)
+    return int(recurring_id)
+
+
+def delete_recurring(conn, recurring_id: int) -> None:
+    conn.execute("DELETE FROM shopping_recurring WHERE id = ?", (recurring_id,))
+
+
+def list_recurring(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    where = " WHERE sr.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT sr.*, p.name AS product_name, p.base_unit"
+        " FROM shopping_recurring sr"
+        " LEFT JOIN product p ON p.id = sr.product_id"
+        f"{where}"
+        " ORDER BY COALESCE(p.name, sr.free_text), sr.id"))
+
+
+def due_recurring(conn, today: str) -> list[dict[str, Any]]:
+    """Ce qu'on rachète sans que rien ne le réclame, arrivé à échéance.
+
+    Jamais ajoutée = due tout de suite : déclarer « le café, toutes les trois
+    semaines » et attendre trois semaines avant de le voir apparaître est le
+    genre de silence qui fait croire que la fonction ne marche pas.
+    """
+    return _rows(conn.execute(
+        "SELECT sr.*, p.name AS product_name, p.base_unit"
+        " FROM shopping_recurring sr"
+        " LEFT JOIN product p ON p.id = sr.product_id"
+        " WHERE sr.active = 1"
+        "   AND (sr.last_added_on IS NULL"
+        "        OR DATE(sr.last_added_on, '+' || sr.every_days || ' days') <= DATE(?))"
+        " ORDER BY sr.id", (today,)))
+
+
+def mark_recurring_added(conn, recurring_id: int, on: str) -> None:
+    conn.execute("UPDATE shopping_recurring SET last_added_on = ? WHERE id = ?",
+                 (on, recurring_id))
+
+
+# --- l'estimation du panier -------------------------------------------------
+
+def levels_for_products(conn, product_ids: Sequence[int]) -> list[dict[str, Any]]:
+    """Le seuil et le stock de ces produits, seuil franchi ou non.
+
+    `shortage_rows` ne rend que ce qui est SOUS le seuil : appliquer une
+    hystérésis demande de revoir aussi ce qui vient de repasser au-dessus.
+    Un produit disparu ou désactivé n'est simplement pas dans la réponse —
+    et une revendication sans mesure se MAINTIENT (§ 7.3).
+    """
+    if not product_ids:
+        return []
+    marks = ", ".join("?" for _ in product_ids)
+    return _rows(conn.execute(
+        "SELECT p.id AS product_id, p.name AS product_name, p.base_unit,"
+        "       p.min_quantity, COALESCE(SUM(bt.remaining), 0) AS quantity"
+        " FROM product p"
+        " LEFT JOIN article a ON a.product_id = p.id"
+        " LEFT JOIN batch bt ON bt.article_id = a.id AND bt.closed_at IS NULL"
+        f" WHERE p.id IN ({marks}) AND p.active = 1"
+        " GROUP BY p.id", tuple(product_ids)))
+
+
+def _estimate_articles(conn, product_id: int) -> list[dict[str, Any]]:
+    """Les articles de ce produit, du plus habituel au moins habituel.
+
+    Le dernier acheté d'abord, l'article générique ensuite, le reste après.
+    """
+    return _rows(conn.execute(
+        "SELECT a.id, a.net_quantity,"
+        "       (SELECT MAX(bt.entered_at) FROM batch bt WHERE bt.article_id = a.id)"
+        "         AS last_bought"
+        " FROM article a WHERE a.product_id = ?"
+        " ORDER BY last_bought IS NULL, last_bought DESC, a.is_generic DESC, a.id",
+        (product_id,)))
+
+
+def list_estimate_rows(conn) -> list[dict[str, Any]]:
+    """Pour chaque ligne ouverte, l'article qu'on achète d'habitude et son prix.
+
+    « L'article qu'on achète d'habitude » = le dernier entré en stock pour ce
+    produit, à défaut son article générique. Répondre « ça va faire combien ? »
+    avec le moins cher du catalogue donnerait un total que la caisse
+    démentirait à chaque voyage.
+
+    Un article sans prix connu ne fait pas taire la ligne : on descend la
+    liste des candidats jusqu'au premier qui en a un. Une estimation muette
+    alors qu'un prix existe sur le même produit n'aide personne.
+
+    Sans quantité (« ce qu'il faut »), on estime UN conditionnement : zéro
+    afficherait moins que la réalité, et personne ne s'en méfierait.
+    """
+    rows = _rows(conn.execute(
+        "SELECT sl.id AS item_id, sl.product_id, sl.free_text, sl.quantity,"
+        "       sl.checked_at, p.name AS product_name, p.base_unit"
+        " FROM shopping_list_item sl"
+        " LEFT JOIN product p ON p.id = sl.product_id"
+        " WHERE sl.removed_at IS NULL"
+        " ORDER BY sl.id"))
+    for row in rows:
+        row["article_id"] = None
+        row["price_per_base_unit"] = None
+        row["estimate"] = None
+        if row["product_id"] is None:
+            continue
+        candidates = _estimate_articles(conn, row["product_id"])
+        if candidates:
+            row["article_id"] = candidates[0]["id"]
+        for article in candidates:
+            price = latest_price(conn, article["id"])
+            if price is None:
+                continue
+            quantity = row["quantity"]
+            if quantity is None:
+                quantity = article["net_quantity"]
+            row["article_id"] = article["id"]
+            row["price_per_base_unit"] = price
+            if quantity is not None:
+                row["estimate"] = round(quantity * price, 4)
+            break
+    return rows
+
+
+# =============================================================================
+# Lot 4 — le ticket de caisse.
+#
+# Alias `br` (receipt) et `rl` (receipt_line) — jamais `b` : le test qui
+# interdit de sélectionner une ligne de lot entière scanne ce paquet
+# littéralement et ne distingue pas les tables.
+# =============================================================================
+
+def insert_receipt(conn, *, media_content_id: str, captured_at: str,
+                   session_id: int | None = None,
+                   store_id: int | None = None,
+                   agent_entity_id: str | None = None,
+                   state: str = "pending") -> int:
+    return _insert(conn, "receipt", {
+        "session_id": session_id, "media_content_id": media_content_id,
+        "captured_at": captured_at, "state": state, "store_id": store_id,
+        "agent_entity_id": agent_entity_id, "attempts": 0,
+    })
+
+
+def get_receipt(conn, receipt_id: int) -> dict[str, Any] | None:
+    row = _row(conn.execute(
+        "SELECT br.* FROM receipt br WHERE br.id = ?", (receipt_id,)).fetchone())
+    if row is None:
+        return None
+    row["lines"] = receipt_lines(conn, receipt_id)
+    return row
+
+
+def receipt_lines(conn, receipt_id: int) -> list[dict[str, Any]]:
+    return _rows(conn.execute(
+        "SELECT rl.* FROM receipt_line rl WHERE rl.receipt_id = ?"
+        " ORDER BY rl.position, rl.id", (receipt_id,)))
+
+
+def list_receipts(conn, *, states: Sequence[str] | None = None,
+                  limit: int = 50) -> list[dict[str, Any]]:
+    where, params = "", []
+    if states:
+        where = f" WHERE br.state IN {_reasons_sql(states)}"
+    return _rows(conn.execute(
+        "SELECT br.*, st.name AS store_name FROM receipt br"
+        " LEFT JOIN store st ON st.id = br.store_id"
+        f"{where}"
+        " ORDER BY br.captured_at DESC, br.id DESC LIMIT ?",
+        (*params, limit)))
+
+
+def pending_receipts(conn) -> list[dict[str, Any]]:
+    """Ceux qui doivent encore une réponse : à lire, ou dont la lecture a
+    échoué. La photo reste, `home_stock.read_receipt` réessaie."""
+    return list_receipts(conn, states=("pending", "failed"))
+
+
+def set_receipt_state(conn, receipt_id: int, state: str, *,
+                      error: str | None = None, attempts: int | None = None,
+                      read_at: str | None = None, store_id: int | None = None,
+                      purchased_on: str | None = None,
+                      total: float | None = None,
+                      agent_entity_id: str | None = None,
+                      raw: str | None = None) -> None:
+    fields: dict[str, Any] = {"state": state, "error": error}
+    for name, value in (("attempts", attempts), ("read_at", read_at),
+                        ("store_id", store_id), ("purchased_on", purchased_on),
+                        ("total", total), ("agent_entity_id", agent_entity_id),
+                        ("raw", raw)):
+        if value is not None:
+            fields[name] = value
+    _update_fields(conn, "receipt", receipt_id, fields)
+
+
+def replace_receipt_lines(conn, receipt_id: int,
+                          lines: Sequence[Mapping[str, Any]]) -> None:
+    """Une relecture REMPLACE ce qu'on avait lu.
+
+    Garder les deux ferait une liste où la moitié des lignes vient d'une
+    lecture ratée, et rien à l'écran ne dirait laquelle.
+    """
+    conn.execute("DELETE FROM receipt_line WHERE receipt_id = ?", (receipt_id,))
+    for line in lines:
+        _insert(conn, "receipt_line", {
+            "receipt_id": receipt_id,
+            "position": line["position"],
+            "label": line["label"],
+            "quantity": line.get("quantity"),
+            "unit_price": line.get("unit_price"),
+            "total_price": line.get("total_price"),
+            "line_id": line.get("line_id"),
+            "article_id": line.get("article_id"),
+            "match_state": line.get("match_state", "unmatched"),
+        })
+
+
+def set_receipt_line_match(conn, receipt_line_id: int, *, line_id: int | None,
+                           state: str) -> None:
+    conn.execute(
+        "UPDATE receipt_line SET line_id = ?, match_state = ? WHERE id = ?",
+        (line_id, state, receipt_line_id))
+
+
+def mark_receipt_line_applied(conn, receipt_line_id: int, *, at: str) -> None:
+    """Ce qui rend une seconde application sans effet."""
+    conn.execute("UPDATE receipt_line SET applied_at = ? WHERE id = ?",
+                 (at, receipt_line_id))

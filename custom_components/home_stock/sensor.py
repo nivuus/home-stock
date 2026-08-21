@@ -63,7 +63,11 @@ class KcalTotalSensor(HomeStockEntity, SensorEntity):
     """
 
     _attr_native_unit_of_measurement = "kcal"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL et non TOTAL_INCREASING depuis le lot 4 : une correction fait
+    # BAISSER ce cumul, et TOTAL_INCREASING lirait cette baisse comme la
+    # remise à zéro d'un compteur d'appareil — HA ajouterait alors la
+    # nouvelle valeur au lieu de la soustraire.
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "kcal_total", ENTITY_ID_FORMAT)
@@ -77,7 +81,8 @@ class CostTotalSensor(HomeStockEntity, SensorEntity):
     """Cumulative cost of what left the stock, purchases excluded."""
 
     _attr_native_unit_of_measurement = "EUR"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL depuis le lot 4 : une correction fait baisser ce cumul (§ A2).
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "cost_total", ENTITY_ID_FORMAT)
@@ -102,10 +107,20 @@ class CartTotalSensor(HomeStockEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data
         return {
-            "store": self.coordinator.data["cart_store"],
-            "lines": self.coordinator.data["cart_lines"],
-            "pending": self.coordinator.data["cart_pending"],
+            "store": data["cart_store"],
+            "lines": data["cart_lines"],
+            "pending": data["cart_pending"],
+            # « 47,20 € — dont 12,30 € estimés, 2 lignes sans prix ». Une
+            # ligne, trois faits : c'est le chiffre qu'on compare mentalement
+            # au ticket, et un écart inexpliqué détruit la confiance dans
+            # tout le reste.
+            "estimated": data["cart_estimated"],
+            "observed": data["cart_observed"],
+            "unpriced_lines": data["cart_unpriced_lines"],
+            "off_list_lines": data["cart_off_list_lines"],
+            "list_progress": data["cart_list_progress"],
         }
 
 
@@ -200,7 +215,8 @@ class CostWasteTotalSensor(HomeStockEntity, SensorEntity):
     """
 
     _attr_native_unit_of_measurement = "EUR"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL depuis le lot 4 : une correction fait baisser ce cumul (§ A2).
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "cost_waste_total", ENTITY_ID_FORMAT)
@@ -414,6 +430,104 @@ class WarrantyNextSensor(HomeStockEntity, SensorEntity):
             for row in self.coordinator.data["warranties"]]}
 
 
+class ShoppingListSensor(HomeStockEntity, SensorEntity):
+    """Le nombre de lignes ouvertes, et d'où elles viennent."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "shopping_list", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data["shopping_list"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self.coordinator.data["shopping_list"]
+        by_origin: dict[str, int] = {}
+        by_aisle: dict[str, int] = {}
+        for row in rows:
+            for claim in row.get("claims") or ():
+                by_origin[claim["origin"]] = by_origin.get(claim["origin"], 0) + 1
+            aisle = row.get("aisle_name") or "Sans rayon"
+            by_aisle[aisle] = by_aisle.get(aisle, 0) + 1
+        return {
+            "by_origin": by_origin,
+            "by_aisle": by_aisle,
+            # Le libellé, la quantité et l'état de chaque ligne : de quoi
+            # écrire une automation ou une annonce vocale sans repasser par
+            # le websocket.
+            "items": [
+                {"id": row["id"],
+                 "name": row["product_name"] or row["free_text"],
+                 "quantity": row["quantity"],
+                 "base_unit": row["base_unit"],
+                 "aisle": row.get("aisle_name"),
+                 "checked": row["checked_at"] is not None}
+                for row in rows
+            ],
+        }
+
+
+class ListEstimateSensor(HomeStockEntity, SensorEntity):
+    """« Ça va faire combien ? », et rien d'autre.
+
+    MEASUREMENT et jamais un TOTAL : ce n'est pas de l'argent dépensé, c'est
+    une prévision. Elle n'entre dans aucune comptabilité, et `confidence` dit
+    quelle proportion de la liste a réellement pu être chiffrée — en clair,
+    plutôt que noyée dans le total.
+    """
+
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "list_estimate", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.data["list_estimate"]["amount"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        estimate = self.coordinator.data["list_estimate"]
+        return {
+            "confidence": estimate["confidence"],
+            "priced": estimate["priced"],
+            "total": estimate["total"],
+        }
+
+
+class ReceiptsPendingSensor(HomeStockEntity, SensorEntity):
+    """Les tickets qui doivent encore une réponse : à lire, ou dont la
+    lecture a échoué. La dernière erreur est en français, affichable telle
+    quelle — « Unknown error » sur un parking n'aide personne."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "receipts_pending", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data["receipts"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self.coordinator.data["receipts"]
+        failed = [row for row in rows if row["error"]]
+        return {
+            "last_error": failed[0]["error"] if failed else None,
+            "failed": len(failed),
+            "receipts": [
+                {"id": row["id"], "state": row["state"],
+                 "captured_at": row["captured_at"], "error": row["error"]}
+                for row in rows
+            ],
+        }
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -434,4 +548,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
         BatteriesLowSensor(coordinator),
         BatteriesUndeclaredSensor(coordinator),
         WarrantyNextSensor(coordinator),
+        ShoppingListSensor(coordinator),
+        ListEstimateSensor(coordinator),
+        ReceiptsPendingSensor(coordinator),
     ])

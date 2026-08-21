@@ -120,3 +120,70 @@ def preselect(found: Sequence[Candidate]) -> Candidate | None:
     if len(found) > 1 and best.score - found[1].score <= PRESELECT_MARGIN:
         return None
     return best
+
+
+# --- lot 4 : rapprocher une ligne de caisse d'une ligne de panier -----------
+#
+# Les seuils du lot 1 sont INCHANGÉS : `preselect` reste le seul arbitre, et
+# un ajustement fait ici déplacerait aussi l'appariement d'ingrédients du
+# lot 3, qui lit les mêmes constantes.
+
+# Deux prix qui coïncident à 1 % près décrivent probablement le même article.
+# Au-delà, ils ne disent plus rien : les rayons sont pleins d'articles au
+# même prix.
+PRICE_BONUS_TOLERANCE: Final = 0.01
+# La prime AIDE, elle ne décide pas. 0,10 est le tiers de l'écart qui sépare
+# une similarité passable d'un `auto` : assez pour départager deux candidats
+# proches, jamais assez pour porter seul un libellé qui ne ressemble à rien.
+PRICE_BONUS: Final = 0.10
+
+
+@dataclass(frozen=True)
+class LineMatch:
+    """Une ligne de panier candidate au rapprochement d'une ligne de caisse.
+
+    Un type distinct de `Candidate`, et pas le même avec `product_id` détourné
+    en `line_id` : un champ qui ment sur ce qu'il porte est exactement le
+    genre de piège que ce dépôt passe son temps à désamorcer. `preselect` ne
+    lit que `.score`, donc il arbitre les deux sans rien savoir de plus.
+    """
+
+    line_id: int
+    label: str
+    score: float
+
+
+def receipt_candidates(*, label: str, lines: Sequence[dict[str, Any]],
+                       unit_price: float | None) -> list[LineMatch]:
+    """Classer les lignes du panier face à un libellé de caisse.
+
+    Similarité de chaîne, marque comprise puis marque retirée — un libellé de
+    caisse nomme parfois la marque et pas le produit (« PANZANI COQ »), et
+    parfois l'inverse. Plus une prime de proximité de prix : deux lignes dont
+    les prix unitaires coïncident à 1 % près se rapprochent même quand les
+    libellés divergent, cas normal des abréviations de caisse.
+    """
+    wanted = normalise(label)
+    if not wanted or not lines:
+        return []
+    found: list[LineMatch] = []
+    for line in lines:
+        raw_label = line.get("article_label") or ""
+        names = [raw_label, strip_brand(raw_label, line.get("brand")),
+                 line.get("brand") or ""]
+        score = max(
+            (_score(wanted, normalise(name)) for name in names if name),
+            default=0.0)
+        score += _price_bonus(unit_price, line.get("unit_price"))
+        found.append(LineMatch(line_id=int(line["id"]), label=raw_label,
+                               score=round(min(score, 1.0), 4)))
+    found.sort(key=lambda match: (-match.score, match.line_id))
+    return [match for match in found if match.score > 0]
+
+
+def _price_bonus(observed: float | None, expected: float | None) -> float:
+    if observed is None or expected is None or expected <= 0:
+        return 0.0
+    if abs(observed - expected) <= expected * PRICE_BONUS_TOLERANCE:
+        return PRICE_BONUS
+    return 0.0

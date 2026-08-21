@@ -20,7 +20,7 @@ import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
-import type { DonneesSession } from './panier';
+import type { DonneesSession, Magasin } from './panier';
 
 function formaterEuros(valeur: number): string {
   return `${valeur.toFixed(2).replace('.', ',')} €`;
@@ -38,8 +38,12 @@ export class EcranSession extends LitElement {
   @property({ attribute: false }) file?: FileAttente;
   @property({ attribute: false }) enAttente = 0;
 
-  @state() private magasins: string[] = [];
-  @state() private magasinChoisi: string | null = null;
+  /** Depuis le lot 4, un magasin est une LIGNE : le panneau envoie un
+   *  identifiant, pas une chaîne. La saisie libre reste ouverte — elle crée
+   *  le magasin s'il n'existe pas, par égalité exacte — parce que c'est le
+   *  seul chemin quand on entre dans une enseigne pour la première fois. */
+  @state() private magasins: Magasin[] = [];
+  @state() private magasinChoisi: Magasin | null = null;
   @state() private magasinSaisi = '';
   @state() private erreurMagasins: string | null = null;
   /** Vrai après le premier appui sur « Clore la session » : le second, sur
@@ -75,7 +79,7 @@ export class EcranSession extends LitElement {
     if (this.donnees?.stores?.length) this.magasins = this.donnees.stores;
     if (!this.connexion) return;
     try {
-      const reponse = await this.connexion.appeler<{ stores: string[] }>('home_stock/stores/list');
+      const reponse = await this.connexion.appeler<{ stores: Magasin[] }>('home_stock/stores/list');
       this.magasins = reponse.stores;
     } catch {
       // Hors ligne : on garde les pastilles déjà connues (souvent aucune) et
@@ -99,19 +103,26 @@ export class EcranSession extends LitElement {
     this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
   }
 
+  /** Ce qui sera envoyé : un identifiant de pastille, ou un nom saisi. Le
+   *  nom saisi gagne, parce qu'on vient de le taper. */
+  private get chargeMagasin(): Record<string, unknown> {
+    const saisi = this.magasinSaisi.trim();
+    if (saisi) return { store: saisi };
+    if (this.magasinChoisi) return { store_id: this.magasinChoisi.id };
+    return {};
+  }
+
   private get magasinRetenu(): string | null {
     const saisi = this.magasinSaisi.trim();
     if (saisi) return saisi;
-    return this.magasinChoisi;
+    return this.magasinChoisi?.name ?? null;
   }
 
   private async ouvrir(): Promise<void> {
     if (this.enCours) return;
     this.enCours = true;
     this.message = null;
-    const magasin = this.magasinRetenu;
-    const partie = await this.ecrire('home_stock/session/start',
-                                     magasin ? { store: magasin } : {});
+    const partie = await this.ecrire('home_stock/session/start', this.chargeMagasin);
     this.enCours = false;
     if (partie) {
       this.dispatchEvent(new CustomEvent('session-changee', {
@@ -154,10 +165,10 @@ export class EcranSession extends LitElement {
       ${this.magasins.length ? html`
         <div class="pastilles">
           ${this.magasins.map((magasin) => html`
-            <button class="pastille ${this.magasinRetenu === magasin ? 'choisie' : ''}"
-              aria-pressed=${this.magasinRetenu === magasin ? 'true' : 'false'}
+            <button class="pastille ${this.magasinChoisi?.id === magasin.id ? 'choisie' : ''}"
+              aria-pressed=${this.magasinChoisi?.id === magasin.id ? 'true' : 'false'}
               @click=${() => { this.magasinChoisi = magasin; this.magasinSaisi = ''; }}>
-              ${magasin}
+              ${magasin.name}
             </button>
           `)}
         </div>` : nothing}
@@ -193,6 +204,23 @@ export class EcranSession extends LitElement {
         ${donnees.totals.lines} ligne${donnees.totals.lines > 1 ? 's' : ''} —
         ${formaterEuros(donnees.totals.total)}
       </p>
+      ${enCourses && (donnees.totals.list_items ?? 0) > 0 ? html`
+        <button class="emporter-liste" @click=${() => this.dispatchEvent(
+          new CustomEvent('aller-liste', { bubbles: true, composed: true }))}>
+          ${`Emporter la liste (${donnees.totals.list_items})`}
+        </button>
+      ` : nothing}
+
+      ${!enCourses ? html`
+        <button class="photographier" @click=${() => this.dispatchEvent(
+          new CustomEvent('ticket-ouvert', {
+            detail: { ticket: null, agent_configure: true },
+            bubbles: true, composed: true,
+          }))}>
+          Photographier le ticket
+        </button>
+      ` : nothing}
+
       ${restantes > 0 ? html`
         <p class="restantes">
           ${restantes} ligne${restantes > 1 ? 's' : ''} pas encore rangée${restantes > 1 ? 's' : ''}.
@@ -237,6 +265,11 @@ export class EcranSession extends LitElement {
       font-size: 1rem; background: var(--secondary-background-color); color: var(--primary-text-color);
     }
     .pastille.choisie { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .emporter-liste, .photographier {
+      display: block; width: 100%; min-height: 62px; font-size: 1.05rem; border-radius: 12px;
+      border: none; margin: 8px 0; background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+    }
     .magasin-label { display: block; margin: 8px 0; }
     .champ-magasin {
       min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px;

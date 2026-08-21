@@ -16,8 +16,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .application import StockManager
-from .const import CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS, DOMAIN
+from .const import (
+    CONF_EXPIRATION_ALERT_DAYS,
+    CONF_SHOPPING_LIST_HORIZON_DAYS,
+    DEFAULT_EXPIRATION_ALERT_DAYS,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
+    DOMAIN,
+)
 from .domain.foodday import food_day_bounds
+from .storage import repositories as repo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -176,9 +183,22 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Both reads happen in ONE executor job. A refresh runs every fifteen
         # minutes; two round trips to the executor for it would be exactly
         # twice as many as it needs.
+        horizon = self.config_entry.options.get(
+            CONF_SHOPPING_LIST_HORIZON_DAYS, DEFAULT_SHOPPING_LIST_HORIZON_DAYS
+        )
+
         def _read() -> dict[str, Any]:
             data = self.manager.summary(expiration_alert_days=days, tz=tz)
             data["meals"] = self.manager.meal_summary(tz=tz)
+            # La réconciliation tourne sur le tic de quinze minutes, APRÈS
+            # les lectures et AVANT le rendu : la liste que les entités
+            # publient est celle que cette passe vient d'écrire, jamais
+            # celle d'il y a un quart d'heure.
+            self.manager.reconcile_shopping_list(
+                today=datetime.now(tz).date(), horizon_days=horizon)
+            data["shopping_list"] = self.manager.shopping_list()
+            data["list_estimate"] = self.manager.list_estimate()
+            data["receipts"] = repo.pending_receipts(self.manager.db.read())
             return data
 
         data = await self.hass.async_add_executor_job(_read)

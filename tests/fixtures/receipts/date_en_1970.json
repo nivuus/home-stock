@@ -1,0 +1,14 @@
+{
+ "store": "Leclerc",
+ "purchased_on": "1970-01-01",
+ "currency": "EUR",
+ "total": 1.05,
+ "lines": [
+  {
+   "label": "LT DEMI ECR 1L",
+   "quantity": 1,
+   "unit_price": 1.05,
+   "total_price": 1.05
+  }
+ ]
+}

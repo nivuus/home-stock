@@ -168,3 +168,149 @@ describe('<home-stock-journal>', () => {
     expect(element.shadowRoot.textContent).toContain('Rien de déclaré');
   });
 });
+
+describe('<home-stock-journal> : corriger une ligne (lot 4)', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  const APERCU = {
+    movement_id: 1, product_name: 'Pâtes', base_unit: 'g', quantity: 200,
+    kcal: 310, cost: 0.42, reason: 'consumption',
+    occurred_at: '2026-08-14T18:00:00', batch_id: 5,
+    batch_entered_at: '2026-08-14T10:00:00', correctable: true, refusal: null,
+  };
+
+  function jourAvec(entrees: unknown[]) {
+    return { ...JOUR, entries: entrees };
+  }
+
+  function monterAvec(entrees: unknown[], apercu: unknown = APERCU) {
+    const element = document.createElement('home-stock-journal') as any;
+    const file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
+                   rejouer: vi.fn().mockResolvedValue(undefined) };
+    element.connexion = { appeler: vi.fn(async (type: string) => {
+      if (type === 'home_stock/journal/day') return jourAvec(entrees);
+      if (type === 'home_stock/movement/correction_preview') return apercu;
+      return SERIE;
+    }) };
+    element.file = file;
+    document.body.append(element);
+    return { element, file };
+  }
+
+  const LIGNE = { id: 1, occurred_at: '2026-08-14T18:00:00', product_name: 'Pâtes',
+                  quantity: -200, base_unit: 'g', reason: 'consumption', kcal: 310,
+                  parts_total: null, parts_mine: null, batch_id: 5,
+                  corrects_id: null, corrected_by: null };
+
+  async function stabiliser(element: any) {
+    await element.updateComplete;
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    await element.updateComplete;
+  }
+
+  it('ouvre le détail d’une ligne en un appui', async () => {
+    const { element } = monterAvec([LIGNE]);
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.detail')).not.toBeNull();
+  });
+
+  it('annonce exactement ce que la correction va faire', async () => {
+    const { element } = monterAvec([LIGNE]);
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    const texte = element.shadowRoot.querySelector('.detail').textContent;
+    expect(texte).toContain('Annule 200 g de Pâtes');
+    expect(texte).toContain('310 kcal');
+    expect(texte).toContain('0,42 €');
+    expect(texte).toContain('2026-08-14');
+  });
+
+  it('demande deux appuis pour corriger', async () => {
+    const { element, file } = monterAvec([LIGNE]);
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelector('.corriger') as HTMLButtonElement).click();
+    await stabiliser(element);
+    expect(file.ajouter).not.toHaveBeenCalled();
+
+    (element.shadowRoot.querySelector('.confirmer-correction') as HTMLButtonElement).click();
+    expect(file.ajouter).toHaveBeenCalledWith('home_stock/movement/correct',
+      { movement_id: 1 });
+  });
+
+  it('laisse la ligne corrigée visible et barrée', async () => {
+    const { element } = monterAvec([
+      { ...LIGNE, corrected_by: 9 },
+      { ...LIGNE, id: 9, quantity: 200, kcal: -310, corrects_id: 1 },
+    ]);
+    await stabiliser(element);
+
+    const lignes = Array.from(element.shadowRoot.querySelectorAll('.entree'));
+    expect(lignes.length).toBe(2);
+    expect((lignes[0] as HTMLElement).classList.contains('corrigee')).toBe(true);
+  });
+
+  it('affiche la contrepassation juste en dessous', async () => {
+    const { element } = monterAvec([
+      { ...LIGNE, corrected_by: 9 },
+      { ...LIGNE, id: 9, quantity: 200, kcal: -310, corrects_id: 1 },
+    ]);
+    await stabiliser(element);
+
+    const lignes = Array.from(element.shadowRoot.querySelectorAll('.entree'));
+    expect((lignes[1] as HTMLElement).classList.contains('contrepassation')).toBe(true);
+  });
+
+  it('refuse de proposer « Corriger » sur une ligne déjà corrigée', async () => {
+    const { element } = monterAvec([{ ...LIGNE, corrected_by: 9 }],
+                                   { ...APERCU, correctable: false,
+                                     refusal: 'Cette ligne a déjà été corrigée.' });
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.corriger')).toBeNull();
+    expect(element.shadowRoot.querySelector('.detail').textContent)
+      .toContain('déjà été corrigée');
+  });
+
+  it('refuse de proposer « Corriger » sur un transfert', async () => {
+    const { element } = monterAvec(
+      [{ ...LIGNE, reason: 'transfer' }],
+      { ...APERCU, correctable: false, reason: 'transfer',
+        refusal: 'Un transfert ne se corrige pas : il ne change aucune quantité, '
+                 + 'seulement un emplacement.' });
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    expect(element.shadowRoot.querySelector('.corriger')).toBeNull();
+    expect(element.shadowRoot.querySelector('.detail').textContent)
+      .toContain('Un transfert ne se corrige pas');
+  });
+
+  it('propose « corriger le repas » sur un mouvement cuisiné', async () => {
+    const { element, file } = monterAvec(
+      [{ ...LIGNE, reason: 'cooked', ref_type: 'meal', ref_id: 42 }],
+      { ...APERCU, correctable: false, reason: 'cooked',
+        refusal: 'Un mouvement de cuisine s’annule en corrigeant le repas entier, '
+                 + 'pas ligne à ligne.', meal_id: 42 });
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.entree-ouvrir') as HTMLButtonElement).click();
+    await stabiliser(element);
+
+    (element.shadowRoot.querySelector('.corriger-repas') as HTMLButtonElement).click();
+    await stabiliser(element);
+    (element.shadowRoot.querySelector('.confirmer-correction') as HTMLButtonElement).click();
+
+    expect(file.ajouter).toHaveBeenCalledWith('home_stock/meal/correct', { meal_id: 42 });
+  });
+});

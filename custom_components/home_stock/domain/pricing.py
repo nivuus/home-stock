@@ -12,6 +12,11 @@ class PriceSuggestion:
     price_per_base_unit: float | None = None
     source: str | None = None
     store: str | None = None
+    # Amendement A3 : une SUGGESTION n'est pas une OBSERVATION. Seule la
+    # branche « ce magasin » repose sur un prix que quelqu'un a réellement
+    # vu ici. Écrire les deux autres comme observées ferait que la cascade
+    # se nourrit de ses propres suppositions dès le deuxième voyage.
+    observed: bool = False
 
 
 def suggest_price(*, in_store: float | None, open_prices: float | None,
@@ -23,7 +28,7 @@ def suggest_price(*, in_store: float | None, open_prices: float | None,
     price from another shop.
     """
     if in_store is not None:
-        return PriceSuggestion(in_store, "store", store)
+        return PriceSuggestion(in_store, "store", store, observed=True)
     if open_prices is not None:
         return PriceSuggestion(open_prices, "open_prices", store)
     if last_known is not None:

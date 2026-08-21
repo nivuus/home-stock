@@ -1,0 +1,20 @@
+{
+ "store": "Leclerc",
+ "purchased_on": "2026-08-21",
+ "currency": "EUR",
+ "total": 1.05,
+ "lines": [
+  {
+   "label": "LT DEMI ECR 1L",
+   "quantity": 1,
+   "unit_price": 1.05,
+   "total_price": 1.05
+  },
+  {
+   "label": "REMISE",
+   "quantity": 0,
+   "unit_price": 0.0,
+   "total_price": 0.0
+  }
+ ]
+}

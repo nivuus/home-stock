@@ -28,6 +28,7 @@ from .const import (
     LEFTOVER_NAME_PREFIX,
     LEFTOVER_SHELF_LIFE_DAYS,
     MATCH_STATES,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     MEAL_HORIZON_DAYS,
     MEAL_SLOT_KEYS,
     MAX_PARTS,
@@ -45,6 +46,21 @@ from .const import (
     RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.route import RouteEntry, learn_route
+from .domain.shoppinglist import (
+    Claim,
+    WantedItem,
+    item_quantity,
+    reconcile,
+    shortage_claim,
+)
+from .domain.correction import (
+    CorrectionError,
+    check_correctable,
+    correction_key,
+    reprice,
+    reversal,
+)
 from .domain.matching import Candidate, candidates, normalise, preselect
 from .domain.recipes import (
     IngredientLine,
@@ -830,6 +846,17 @@ class StockManager:
             "cart_pending": cart_totals["pending"] if cart_totals else 0,
             "cart_store": session["store"] if session else None,
             "cart_to_store": awaiting_storage,
+            # Lot 4, § 9 : la même somme, dite en trois faits. Aucun capteur
+            # de plus — une synthèse s'enrichit d'attributs plutôt que de se
+            # dupliquer (lot 0).
+            "cart_estimated": round(cart_totals["estimated"], 2) if cart_totals else 0.0,
+            "cart_observed": round(cart_totals["observed"], 2) if cart_totals else 0.0,
+            "cart_unpriced_lines": cart_totals["unpriced_lines"] if cart_totals else 0,
+            "cart_off_list_lines": cart_totals["off_list_lines"] if cart_totals else 0,
+            "cart_list_progress": {
+                "checked": cart_totals["checked_items"] if cart_totals else 0,
+                "total": cart_totals["list_items"] if cart_totals else 0,
+            },
         }
 
     def claim_expiry_announcements(
@@ -1837,6 +1864,665 @@ class StockManager:
         with self.db.write() as conn:
             repo.set_battery_readings(conn, rows)
 
+    # --- lot 4 : corriger une ligne déjà écrite ---------------------------
+
+    def preview_correction(self, movement_id: int) -> dict[str, Any]:
+        """Ce que la correction fera, AVANT de la faire.
+
+        Une opération irréversible qui ne s'annonce pas est une opération
+        qu'on déclenche par erreur (§ 12.6).
+        """
+        conn = self.db.read()
+        movement = repo.get_movement(conn, movement_id)
+        if movement is None:
+            raise LookupError(f"unknown movement {movement_id}")
+        row = conn.execute(
+            "SELECT p.name AS product_name, p.base_unit FROM product p WHERE p.id = ?",
+            (movement["product_id"],),
+        ).fetchone()
+        batch = None
+        if movement["batch_id"] is not None:
+            batch = conn.execute(
+                "SELECT entered_at FROM batch WHERE id = ?", (movement["batch_id"],)
+            ).fetchone()
+        preview: dict[str, Any] = {
+            "movement_id": movement_id,
+            "product_name": row["product_name"] if row else None,
+            "base_unit": movement["base_unit"] or (row["base_unit"] if row else None),
+            # Ce que la correction ANNULE, dit positivement : « annule 200 g
+            # de Pâtes — 700 kcal, 0,80 € ». Le signe vit dans l'écriture,
+            # pas dans la phrase qu'on lit avant d'appuyer.
+            "quantity": abs(movement["quantity"]),
+            "kcal": movement["kcal"],
+            "cost": movement["cost"],
+            "reason": movement["reason"],
+            "occurred_at": movement["occurred_at"],
+            "batch_id": movement["batch_id"],
+            "batch_entered_at": batch["entered_at"] if batch else None,
+            # Le repas d'où vient ce mouvement, quand il en vient un : le
+            # journal propose alors « corriger le repas », qui est le SEUL
+            # geste possible sur une ligne cuisinée.
+            "meal_id": (int(movement["ref_id"])
+                        if movement["ref_type"] == "meal" and movement["ref_id"]
+                        else None),
+            "correctable": True,
+            "refusal": None,
+        }
+        existing = repo.correction_of(conn, movement_id)
+        if existing is not None:
+            return {**preview, "correctable": False,
+                    "refusal": french_message(
+                        CorrectionError(f"movement {movement_id} has already been corrected"))}
+        try:
+            check_correctable(movement)
+        except CorrectionError as err:
+            return {**preview, "correctable": False, "refusal": french_message(err)}
+        return preview
+
+    def correct_movement(self, movement_id: int, *,
+                         occurred_at: str | None = None) -> dict[str, Any]:
+        """Contrepasser une ligne du journal : une écriture DE PLUS.
+
+        `movement` est en ajout seul depuis le lot 0 ; la correction n'est
+        donc jamais un `UPDATE`. Elle porte le motif de la ligne qu'elle
+        annule — `reason` est le compte comptable — et le lien vit dans
+        `movement.corrects_id` (amendement A1).
+        """
+        moment = occurred_at or _now()
+        with self.db.write() as conn:
+            movement = repo.get_movement(conn, movement_id)
+            if movement is None:
+                raise LookupError(f"unknown movement {movement_id}")
+            batch_id = movement["batch_id"]
+            restored = batch_id is not None and conn.execute(
+                "SELECT 1 FROM batch WHERE id = ?", (batch_id,)).fetchone() is not None
+            existing = repo.correction_of(conn, movement_id)
+            if existing is not None:
+                # Rejeu de la file hors ligne : la même clé, le même résultat,
+                # et surtout AUCUNE seconde remise en stock. La garantie
+                # « une seule annulation » est tenue par l'index UNIQUE,
+                # cette lecture ne fait qu'éviter de la faire lever.
+                return {
+                    "movement_id": movement_id,
+                    "correction_id": int(existing["id"]),
+                    "batch_id": batch_id,
+                    "restored": restored,
+                }
+            correction_id = self._correct_movement_within(
+                conn, movement, moment=moment)
+            return {
+                "movement_id": movement_id,
+                "correction_id": correction_id,
+                "batch_id": batch_id,
+                "restored": restored,
+            }
+
+    def _correct_movement_within(self, conn, movement: Mapping[str, Any], *,
+                                 moment: str,
+                                 allow_cooked: bool = False,
+                                 adjust_stock: bool = True) -> int:
+        """Le corps d'une contrepassation, sur une connexion déjà tenue.
+
+        Extrait pour `correct_price` et `correct_meal`, qui en écrivent
+        plusieurs dans UNE transaction. `Database._lock` n'est pas réentrant :
+        appeler `correct_movement` depuis l'intérieur d'un `db.write()` fige le
+        processus, sans exception et sans trace.
+
+        `adjust_stock=False` sert à `correct_price`, dont la paire
+        contrepassation + réécriture est de solde NUL sur la quantité :
+        ajuster le lot entre les deux le ferait passer par un état négatif
+        et déclencherait un refus sur une correction pourtant légitime.
+        """
+        check_correctable(movement, allow_cooked=allow_cooked)
+        line = reversal(movement, moment=moment)
+        batch_id = line.pop("batch_id")
+        if batch_id is not None and adjust_stock:
+            batch = conn.execute(
+                "SELECT remaining FROM batch WHERE id = ?", (batch_id,)
+            ).fetchone()
+            if batch is not None:
+                after = batch["remaining"] + line["quantity"]
+                if after < -QUANTITY_EPSILON:
+                    # Le stock a déjà été repris ailleurs : un lot à quantité
+                    # négative serait pire que le refus.
+                    raise ValueError(
+                        f"reversing movement {movement['id']} would leave batch"
+                        f" {batch_id} negative; only {batch['remaining']} left")
+                # Un lot PEUT dépasser sa quantité initiale : c'est le seul
+                # cas où la correction est vraiment utile (§ 12.2).
+                closes = is_empty(after)
+                repo.set_batch_remaining(
+                    conn, batch_id, 0.0 if closes else after,
+                    closed_at=moment if closes else None)
+        return repo.insert_movement(conn, batch_id=batch_id, **line)
+
+    # --- § 7 : la liste de courses ----------------------------------------
+
+    def shopping_list(self, *, store_id: int | None = None,
+                      include_checked: bool = True) -> list[dict[str, Any]]:
+        """La liste ouverte, dans l'ordre du magasin où l'on est."""
+        return repo.list_items(self.db.read(), store_id=store_id,
+                               include_checked=include_checked)
+
+    def list_estimate(self) -> dict[str, Any]:
+        """« Ça va faire combien ? », et rien d'autre.
+
+        `confidence` est la proportion de lignes réellement chiffrées, dite
+        en clair plutôt que noyée dans un total. Ce chiffre n'entre dans
+        aucune comptabilité : il n'est pas un prix, c'est une prévision.
+        """
+        rows = repo.list_estimate_rows(self.db.read())
+        priced = [row for row in rows if row["estimate"] is not None]
+        total = len(rows)
+        return {
+            "amount": round(sum(row["estimate"] for row in priced), 2),
+            "confidence": 1.0 if not total else round(len(priced) / total, 4),
+            "priced": len(priced),
+            "total": total,
+        }
+
+    def add_to_shopping_list(self, *, product_id: int | None = None,
+                             free_text: str | None = None,
+                             quantity: float | None = None,
+                             note: str | None = None,
+                             detail: str | None = None,
+                             idempotency_key: str | None = None,
+                             moment: str | None = None) -> dict[str, Any]:
+        """Poser une ligne à la main. La seule origine humaine des quatre.
+
+        Un produit déjà sur la liste gagne une revendication `manual`, il ne
+        gagne pas une deuxième ligne : l'index UNIQUE partiel de
+        `shopping_list_item` la refuserait de toute façon, et une ligne en
+        double est ce qui a produit 35 doublons dans Grocy en avril 2026.
+        """
+        if product_id is None and not free_text:
+            raise ValueError("a shopping list line needs a product or a text")
+        when = moment or _now()
+        with self.db.write() as conn:
+            if idempotency_key:
+                existing = conn.execute(
+                    "SELECT id FROM shopping_list_item WHERE note = ?",
+                    (f"key:{idempotency_key}",)).fetchone()
+                if existing is not None:
+                    return {"item_id": int(existing["id"]), "created": False}
+            item = (repo.open_item_for_product(conn, product_id)
+                    if product_id is not None else None)
+            created = item is None
+            if created:
+                item_id = repo.insert_list_item(
+                    conn, added_at=when, product_id=product_id,
+                    free_text=free_text, quantity=quantity,
+                    note=note or (f"key:{idempotency_key}" if idempotency_key else None))
+            else:
+                item_id = int(item["id"])
+                if quantity is not None:
+                    repo.update_list_item(conn, item_id, {"quantity": quantity})
+            repo.set_claim(conn, item_id=item_id, origin="manual",
+                           quantity=quantity, detail=detail or "ajouté à la main",
+                           claimed_at=when)
+            if not created and quantity is not None:
+                claims = [Claim(row["origin"], row["quantity"], row["detail"])
+                          for row in repo.claims_of(conn, item_id)]
+                repo.update_list_item(conn, item_id,
+                                      {"quantity": item_quantity(claims)})
+            return {"item_id": item_id, "created": created}
+
+    def check_list_item(self, item_id: int, *, at: str | None = None,
+                        session_id: int | None = None,
+                        line_id: int | None = None) -> None:
+        """« Je l'ai », jamais « c'est en stock » (§ 7.5)."""
+        with self.db.write() as conn:
+            repo.check_list_item(conn, item_id, at=at or _now(),
+                                 session_id=session_id, line_id=line_id)
+
+    def uncheck_list_item(self, item_id: int) -> None:
+        with self.db.write() as conn:
+            repo.uncheck_list_item(conn, item_id)
+
+    def remove_list_item(self, item_id: int, *, at: str | None = None) -> None:
+        with self.db.write() as conn:
+            repo.remove_list_item(conn, item_id, at=at or _now())
+
+    def update_list_item(self, item_id: int, fields: Mapping[str, Any]) -> None:
+        with self.db.write() as conn:
+            repo.update_list_item(conn, item_id, fields)
+
+    def reconcile_shopping_list(
+            self, *, today: date,
+            horizon_days: int = DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
+            moment: str | None = None) -> dict[str, Any]:
+        """Les quatre origines contre la liste réelle, en UNE transaction.
+
+        Les lectures et `reconcile()` se font HORS verrou ; un seul
+        `db.write()` applique le `Plan`. `Database._lock` n'est pas
+        réentrant : aucune des méthodes appelées ici ne peut ouvrir sa
+        propre transaction.
+
+        Aucune ligne de ce code ne connaît le mot « pile ». Le lot 5 a fait
+        de la CR2032 de rechange un `product` avec `edible = 0` : une
+        rechange sous son seuil est un produit sous son seuil, et sa ligne
+        ne se distingue que par son rayon.
+        """
+        when = moment or _now()
+        conn = self.db.read()
+        existing = repo.list_items(conn, include_removed=True)
+        session = repo.current_session(conn)
+        session_open = session is not None and session["state"] != "done"
+        # « Une session a-t-elle été close DEPUIS que cette ligne a été
+        # cochée ? » — la question de la règle 4, posée ligne par ligne.
+        # Sans elle, cocher depuis une carte hors de tout voyage ferait
+        # disparaître la ligne au tic suivant pour la recréer aussitôt.
+        last_closed = repo.last_closed_session_at(conn)
+        for row in existing:
+            row["purgeable"] = bool(
+                not session_open and row["checked_at"] and last_closed
+                and row["checked_at"] <= last_closed)
+        wanted = self._wanted_items(conn, today=today, horizon_days=horizon_days,
+                                    existing=existing)
+        plan = reconcile(wanted=wanted, existing=existing,
+                         session_open=session_open)
+        due = [] if session_open else repo.due_recurring(conn, today.isoformat())
+
+        with self.db.write() as write_conn:
+            for item_id in plan.to_remove:
+                repo.remove_list_item(write_conn, item_id, at=when)
+            for change in plan.to_update:
+                repo.update_list_item(write_conn, change["item_id"],
+                                      {"quantity": change["quantity"]})
+            for drop in plan.claims_to_drop:
+                repo.drop_claim(write_conn, item_id=drop["item_id"],
+                                origin=drop["origin"])
+            for addition in plan.claims_to_add:
+                claim = addition["claim"]
+                repo.set_claim(write_conn, item_id=addition["item_id"],
+                               origin=claim.origin, quantity=claim.quantity,
+                               detail=claim.detail, claimed_at=when)
+            for item in plan.to_create:
+                item_id = repo.insert_list_item(
+                    write_conn, added_at=when, product_id=item.product_id,
+                    free_text=item.free_text,
+                    quantity=item_quantity(item.claims))
+                for claim in item.claims:
+                    repo.set_claim(write_conn, item_id=item_id, origin=claim.origin,
+                                   quantity=claim.quantity, detail=claim.detail,
+                                   claimed_at=when)
+            # Une récurrence n'est repoussée qu'une fois sa ligne réellement
+            # posée : marquer avant l'écriture perdrait le café pour trois
+            # semaines si la transaction échouait.
+            for row in due:
+                repo.mark_recurring_added(write_conn, row["id"], today.isoformat())
+            open_lines = len(repo.list_items(write_conn, include_checked=True))
+
+        return {"created": len(plan.to_create), "updated": len(plan.to_update),
+                "removed": len(plan.to_remove), "open": open_lines}
+
+    def _wanted_items(self, conn, *, today: date, horizon_days: int,
+                      existing: Sequence[Mapping[str, Any]]) -> list[WantedItem]:
+        """Les quatre origines, fusionnées par produit puis par texte libre."""
+        claimed: dict[int, set[str]] = {}
+        for row in existing:
+            if row["product_id"] is None or row["removed_at"] is not None:
+                continue
+            claimed.setdefault(int(row["product_id"]), set()).update(
+                claim["origin"] for claim in row.get("claims") or ())
+
+        by_product: dict[int, list[Claim]] = {}
+        by_text: dict[str, list[Claim]] = {}
+
+        # 1. les ruptures, hystérésis comprise — et les produits qui avaient
+        #    une revendication, pour savoir si elle se maintient.
+        rows = {int(row["product_id"]): row for row in repo.shortage_rows(conn)}
+        previously = [product_id for product_id, origins in claimed.items()
+                      if "shortage" in origins and product_id not in rows]
+        for row in repo.levels_for_products(conn, previously):
+            rows.setdefault(int(row["product_id"]), row)
+        for product_id, row in rows.items():
+            claim = shortage_claim(
+                row, already_claimed="shortage" in claimed.get(product_id, set()))
+            if claim is not None:
+                by_product.setdefault(product_id, []).append(claim)
+
+        # 2. le planning, déjà mis à l'échelle des convives.
+        end = (today + timedelta(days=horizon_days)).isoformat()
+        for row in repo.missing_products_between(conn, today.isoformat(), end):
+            missing = (row["needed"] or 0.0) - (row["available"] or 0.0)
+            by_product.setdefault(int(row["product_id"]), []).append(
+                Claim("meal_plan", missing if missing > 0 else None,
+                      "repas prévus"))
+
+        # 3. les récurrences arrivées à échéance.
+        for row in repo.due_recurring(conn, today.isoformat()):
+            claim = Claim("recurring", row["quantity"],
+                          f"tous les {row['every_days']} j")
+            if row["product_id"] is not None:
+                by_product.setdefault(int(row["product_id"]), []).append(claim)
+            else:
+                by_text.setdefault(row["free_text"], []).append(claim)
+
+        # 4. `manual` ne se déduit de rien : elle vit en base, et
+        #    `reconcile()` ne la retire jamais (règle 5).
+        for row in existing:
+            if row["removed_at"] is not None or row["checked_at"] is not None:
+                continue
+            for claim in row.get("claims") or ():
+                if claim["origin"] != "manual":
+                    continue
+                kept = Claim("manual", claim["quantity"], claim["detail"])
+                if row["product_id"] is not None:
+                    by_product.setdefault(int(row["product_id"]), []).append(kept)
+                elif row["free_text"]:
+                    by_text.setdefault(row["free_text"], []).append(kept)
+
+        wanted = [WantedItem(product_id=product_id, claims=tuple(claims))
+                  for product_id, claims in by_product.items()]
+        wanted += [WantedItem(free_text=text, claims=tuple(claims))
+                   for text, claims in by_text.items()]
+        return wanted
+
+    # --- § 10.4 : le ticket relit des prix --------------------------------
+
+    @staticmethod
+    def _receipt_price_per_base_unit(conn, line: Mapping[str, Any],
+                                     unit_price: float | None) -> float | None:
+        """Le prix du ticket ramené à l'unité de base — règle du lot 1.
+
+        Division par le poids net en `g`/`ml`, AUCUN diviseur en `piece` :
+        une éponge coûte 2,40 € la pièce, pas 0,80 € le gramme d'éponge.
+        """
+        if unit_price is None:
+            return None
+        article = repo.get_article(conn, line["article_id"])
+        if article is None:
+            return None
+        base_unit = repo.product_base_unit(conn, article["product_id"])
+        net = article.get("net_quantity")
+        if base_unit == "piece" or not net:
+            return unit_price
+        return unit_price / net
+
+    def _receipt_plan(self, conn, receipt_id: int) -> dict[str, Any]:
+        """Ce que l'application ferait : les lignes visées, et ce qu'elles
+        corrigeraient. Lecture seule — `preview_receipt` s'en sert tel quel."""
+        receipt = repo.get_receipt(conn, receipt_id)
+        if receipt is None:
+            raise LookupError(f"unknown receipt {receipt_id}")
+        if receipt["state"] not in ("read", "applied"):
+            raise ValueError(f"receipt {receipt_id} was never read")
+        targets: list[dict[str, Any]] = []
+        skipped = 0
+        corrected = 0
+        for line in receipt["lines"]:
+            if line["applied_at"] is not None:
+                continue
+            if line["match_state"] == "ignored" or line["line_id"] is None:
+                # Aucune ligne de panier ne la porte : elle reste VISIBLE et
+                # `unmatched`. Fabriquer un article depuis un libellé abrégé
+                # produirait des doublons de catalogue à chaque voyage — le
+                # ré-appariement par nom qui a créé 35 doublons dans Grocy en
+                # avril 2026. Le ticket relit des prix ; ce n'est pas une
+                # seconde source d'entrée en stock.
+                skipped += 1
+                continue
+            cart = repo.get_line(conn, line["line_id"])
+            if cart is None:
+                skipped += 1
+                continue
+            price = self._receipt_price_per_base_unit(conn, cart, line["unit_price"])
+            movements = 0
+            if cart["stored_at"] and cart["batch_id"] is not None:
+                movements = len(self._movements_to_reprice(conn, cart["batch_id"]))
+            corrected += movements
+            targets.append({"receipt_line": line, "cart": cart, "price": price,
+                            "movements": movements})
+        return {"receipt": receipt, "targets": targets, "skipped": skipped,
+                "corrected_movements": corrected}
+
+    def preview_receipt(self, receipt_id: int) -> dict[str, Any]:
+        """« 3 mouvements déjà écrits seront corrigés », ou rien. N'écrit rien."""
+        plan = self._receipt_plan(self.db.read(), receipt_id)
+        return {"receipt_id": receipt_id, "applied": len(plan["targets"]),
+                "skipped": plan["skipped"],
+                "corrected_movements": plan["corrected_movements"]}
+
+    def match_receipt_line(self, receipt_line_id: int, *, line_id: int | None,
+                           state: str) -> None:
+        """Rapprocher à la main. Même vocabulaire qu'au lot 3 : quatre mots,
+        la même signification."""
+        if state not in MATCH_STATES:
+            raise ValueError(
+                f"unknown match state '{state}'; expected one of {MATCH_STATES}")
+        with self.db.write() as conn:
+            repo.set_receipt_line_match(conn, receipt_line_id, line_id=line_id,
+                                        state=state)
+
+    def apply_receipt(self, receipt_id: int, *,
+                      moment: str | None = None) -> dict[str, Any]:
+        """Appliquer un ticket : trois choses, et jamais une quatrième.
+
+        1. `shopping_line.unit_price` prend le prix du ticket ramené à
+           l'unité de base ; `price_source` passe à `receipt`.
+        2. Une observation `price` par ligne corrigée, avec le magasin de la
+           session et la date du TICKET — c'est ce qui a été payé, le jour où
+           ça l'a été, et c'est elle qui alimentera le rang 1 de la cascade au
+           voyage suivant.
+        3. Si la ligne est déjà rangée, la correction passe par le § 12.4 : le
+           lot existe, une partie a peut-être été consommée, et le journal est
+           en ajout seul.
+
+        UNE seule transaction, et `_correct_price_within` par ligne rangée :
+        `Database._lock` n'est pas réentrant.
+        """
+        when = moment or _now()
+        with self.db.write() as conn:
+            plan = self._receipt_plan(conn, receipt_id)
+            receipt = plan["receipt"]
+            observed_on = receipt["purchased_on"] or when[:10]
+            # `price.store` reste renseignée à côté de `store_id` : c'est la
+            # colonne que lit `latest_price_in_store`, et le journal des
+            # observations dit ce qui a été vu, sous le nom qu'il portait.
+            store = repo.get_store(conn, receipt["store_id"]) \
+                if receipt["store_id"] else None
+            store_name = store["name"] if store else None
+            applied = 0
+            corrected = 0
+            for target in plan["targets"]:
+                cart, price = target["cart"], target["price"]
+                repo.update_line(conn, cart["id"], unit_price=price,
+                                 price_source="receipt")
+                if price is not None:
+                    repo.insert_price(
+                        conn, article_id=cart["article_id"],
+                        observed_on=observed_on, price_per_base_unit=price,
+                        source="receipt", store=store_name,
+                        store_id=receipt["store_id"])
+                if cart["stored_at"] and cart["batch_id"] is not None:
+                    corrected += self._correct_price_within(
+                        conn, cart["batch_id"], price_per_base_unit=price,
+                        moment=when)
+                repo.mark_receipt_line_applied(conn, target["receipt_line"]["id"],
+                                               at=when)
+                applied += 1
+            repo.set_receipt_state(conn, receipt_id, "applied")
+            return {"receipt_id": receipt_id, "applied": applied,
+                    "skipped": plan["skipped"], "corrected_movements": corrected}
+
+    def _correct_price_within(self, conn, batch_id: int, *,
+                              price_per_base_unit: float | None,
+                              moment: str) -> int:
+        """Le corps de `correct_price` sans son observation `price`.
+
+        `apply_receipt` en écrit une lui-même, avec la date du ticket et le
+        magasin de la session — deux informations que `correct_price` n'a
+        pas. Extrait pour que les deux chemins partagent la seule chose qui
+        compte : contrepassation puis réécriture, en une transaction.
+        """
+        affected = self._movements_to_reprice(conn, batch_id)
+        repo.set_batch_price(conn, batch_id, price_per_base_unit)
+        for movement in affected:
+            self._correct_movement_within(conn, movement, moment=moment,
+                                          adjust_stock=False)
+            line = reprice(movement, price_per_base_unit=price_per_base_unit,
+                           moment=moment)
+            line["idempotency_key"] = f"reprice:{movement['id']}"
+            repo.insert_movement(conn, **line)
+        return len(affected)
+
+    # --- § 11 : l'ordre des rayons d'un magasin ---------------------------
+
+    def learn_store_route(self, store_id: int, *,
+                          moment: str | None = None) -> dict[str, Any]:
+        """Recalculer l'ordre d'un magasin. Ouvre sa propre transaction."""
+        when = moment or _now()
+        with self.db.write() as conn:
+            return self._learn_store_route_within(conn, store_id, moment=when)
+
+    def _learn_store_route_within(self, conn, store_id: int, *,
+                                  moment: str) -> dict[str, Any]:
+        """Le corps, sur une connexion déjà tenue.
+
+        Extrait pour `ShoppingService.close`, qui apprend DANS la transaction
+        de clôture : un second `db.write()` y figerait la clôture d'une
+        session en plein magasin, sans exception et sans trace.
+        """
+        sessions = repo.recent_session_aisle_sequences(conn, store_id)
+        defaults = {int(row["id"]): int(row["position"])
+                    for row in repo.list_aisles(conn)}
+        pinned = {int(row["aisle_id"]): int(row["position"])
+                  for row in repo.store_aisles(conn, store_id)
+                  if row["source"] == "manual"}
+        entries = learn_route(sessions, default_positions=defaults, pinned=pinned)
+        repo.save_store_route(conn, store_id, entries, updated_at=moment)
+        return {"store_id": store_id, "sessions": len(sessions),
+                "aisles": len(entries)}
+
+    def store_route(self, store_id: int) -> list[dict[str, Any]]:
+        return repo.store_route(self.db.read(), store_id)
+
+    def pin_store_aisles(self, store_id: int, aisle_ids) -> None:
+        with self.db.write() as conn:
+            repo.pin_store_aisles(conn, store_id, list(aisle_ids))
+
+    def unpin_store_aisle(self, store_id: int, aisle_id: int) -> None:
+        with self.db.write() as conn:
+            repo.unpin_store_aisle(conn, store_id, aisle_id)
+
+    # --- § 12.4 : corriger un prix ----------------------------------------
+
+    @staticmethod
+    def _movements_to_reprice(conn, batch_id: int) -> list[dict[str, Any]]:
+        """Les lignes de ce lot qui ne sont ni des annulations ni annulées.
+
+        Une ligne déjà contrepassée ne se contrepasse pas deux fois (index
+        UNIQUE), et une contrepassation ne se corrige pas : ce sont les
+        réécritures qui portent le coût courant.
+        """
+        return [
+            row for row in repo.movements_of_batch(conn, batch_id)
+            if row["corrects_id"] is None
+            and repo.correction_of(conn, row["id"]) is None
+        ]
+
+    def preview_price_correction(self, batch_id: int, *,
+                                 price_per_base_unit: float | None) -> dict[str, Any]:
+        """« 3 mouvements déjà écrits seront corrigés », ou zéro. N'écrit rien."""
+        conn = self.db.read()
+        batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
+        if batch is None:
+            raise LookupError(f"unknown batch {batch_id}")
+        affected = self._movements_to_reprice(conn, batch_id)
+        return {
+            "batch_id": batch_id,
+            "price_per_base_unit": price_per_base_unit,
+            "previous_price_per_base_unit": batch["price_per_base_unit"],
+            "corrected_movements": len(affected),
+        }
+
+    def correct_price(self, batch_id: int, *, price_per_base_unit: float | None,
+                      observed_on: str | None = None,
+                      store_id: int | None = None,
+                      source: str = "manual",
+                      moment: str | None = None) -> dict[str, Any]:
+        """Corriger le prix d'un lot, des deux côtés (§ 12.4), en UNE transaction.
+
+        En avant : le lot porte désormais le bon prix, et une observation
+        `price` le dit. Toutes les sorties futures seront chiffrées juste
+        sans rien réécrire.
+
+        En arrière : chaque mouvement déjà pris sur ce lot est contrepassé
+        PUIS réécrit au coût corrigé. Deux lignes par mouvement, `corrects_id`
+        sur la première seulement. Les nutriments sont recopiés à l'identique :
+        un prix faux n'a jamais faussé des calories.
+
+        Le cas normal ne produit aucune écriture arrière hors l'achat : un
+        ticket lu le soir même corrige des lots dont rien n'est sorti.
+        """
+        when = moment or _now()
+        with self.db.write() as conn:
+            batch = conn.execute("SELECT * FROM batch WHERE id = ?",
+                                 (batch_id,)).fetchone()
+            if batch is None:
+                raise LookupError(f"unknown batch {batch_id}")
+            affected = self._movements_to_reprice(conn, batch_id)
+            price_id = None
+            if price_per_base_unit is not None:
+                price_id = repo.insert_price(
+                    conn, article_id=batch["article_id"],
+                    observed_on=observed_on or when[:10],
+                    price_per_base_unit=price_per_base_unit,
+                    source=source, store_id=store_id)
+            self._correct_price_within(conn, batch_id,
+                                       price_per_base_unit=price_per_base_unit,
+                                       moment=when)
+            return {
+                "batch_id": batch_id,
+                "corrected_movements": len(affected),
+                "price_id": price_id,
+            }
+
+    # --- § 12.5 : corriger un repas validé ---------------------------------
+
+    def correct_meal(self, meal_id: int, *,
+                     occurred_at: str | None = None) -> dict[str, Any]:
+        """Annuler un repas validé : le bloc entier, dans l'ordre INVERSE.
+
+        Une validation écrit N sorties `cooked`, une entrée `cooked` (le plat)
+        et une `consumption`. Les contrepasser dans l'ordre où elles ont été
+        écrites remettrait le plat en stock avant d'avoir annulé ce qu'on en a
+        mangé — d'où l'ordre inverse, et une seule transaction.
+        """
+        when = occurred_at or _now()
+        with self.db.write() as conn:
+            meal = repo.get_meal(conn, meal_id)
+            if meal is None:
+                raise LookupError(f"unknown meal {meal_id}")
+            movements = repo.movements_of_meal(conn, meal_id)
+            already = [row for row in movements
+                       if repo.correction_of(conn, row["id"]) is not None]
+            if len(already) == len(movements) and movements:
+                # Rejeu : la file hors ligne rejoue, et le résultat ne change pas.
+                return {"meal_id": meal_id,
+                        "reversed_movements": [row["id"] for row in reversed(movements)],
+                        "state": meal["state"]}
+            if meal["state"] != "done" or not movements:
+                raise ValueError(f"meal {meal_id} was never validated")
+            dish_batches = {row["batch_id"] for row in movements
+                            if row["reason"] == REASON_COOKED and row["quantity"] > 0}
+            for dish_batch_id in dish_batches:
+                foreign = [row for row in repo.movements_of_batch(conn, dish_batch_id)
+                           if (row["ref_type"], row["ref_id"]) != ("meal", meal_id)]
+                if foreign:
+                    raise ValueError(
+                        f"meal {meal_id} cannot be corrected: its dish has been started")
+            reversed_ids: list[int] = []
+            for movement in reversed(movements):
+                self._correct_movement_within(conn, movement, moment=when,
+                                              allow_cooked=True)
+                reversed_ids.append(movement["id"])
+            repo.update_meal_fields(conn, meal_id, {
+                "state": "planned", "validated_at": None, "portions_eaten": None,
+            })
+            return {"meal_id": meal_id, "reversed_movements": reversed_ids,
+                    "state": "planned"}
 
 
 # =============================================================================

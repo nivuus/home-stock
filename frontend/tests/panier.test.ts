@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import '../src/ecrans/panier';
-import { grouperParRayon, type DonneesSession, type LigneSession } from '../src/ecrans/panier';
+import { grouperParRayon, type DonneesSession, type LigneSession,
+         type Totaux as Totaux4 } from '../src/ecrans/panier';
 import type { Connexion } from '../src/connexion';
 
 function ligne(partiel: Partial<LigneSession> & { id: number }): LigneSession {
@@ -19,7 +20,8 @@ function donnees(lignes: LigneSession[], total: number): DonneesSession {
     session: { id: 1, state: 'shopping', store: 'Leclerc', started_at: '2026-08-19T10:00:00', closed_at: null },
     lines: lignes,
     totals: { lines: lignes.length, pending: lignes.length, total },
-    stores: ['Leclerc'],
+    stores: [{ id: 1, name: 'Leclerc', position: 0, active: 1,
+               observed_sessions: 0, last_seen: null }],
   };
 }
 
@@ -329,5 +331,77 @@ describe('<home-stock-panier>', () => {
     expect(ajouter).not.toHaveBeenCalled();
     expect(champPrix.value).toBe('3,00');
     expect(element.shadowRoot!.querySelector('.erreur-prix')).not.toBeNull();
+  });
+});
+
+describe('<home-stock-panier> : ce que le lot 4 ajoute', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  function donneesLot4(lignes: LigneSession[], totaux: Partial<Totaux4> = {}) {
+    return {
+      session: { id: 1, state: 'shopping' as const, store: 'Leclerc',
+                 started_at: '2026-08-19T10:00:00', closed_at: null },
+      lines: lignes,
+      totals: {
+        lines: lignes.length, pending: lignes.length, total: 47.2,
+        observed: 34.9, estimated: 12.3, unpriced_lines: 2, off_list_lines: 3,
+        checked_items: 12, list_items: 17,
+        ...totaux,
+      },
+      stores: [{ id: 1, name: 'Leclerc', position: 0, active: 1,
+                 observed_sessions: 3, last_seen: null }],
+    } as unknown as DonneesSession;
+  }
+
+  it('dit combien du total est estimé', async () => {
+    const element = monter({ donnees: donneesLot4([ligne({ id: 1 })]) });
+    await element.updateComplete;
+    const total = element.shadowRoot!.querySelector('.repartition')!.textContent!;
+    expect(total).toContain('12,30 €');
+    expect(total).toContain('estimé');
+  });
+
+  it('signale les lignes sans prix sans les compter dans le total', async () => {
+    const element = monter({ donnees: donneesLot4([ligne({ id: 1 })]) });
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.repartition')!.textContent)
+      .toContain('2 lignes sans prix');
+    expect(element.shadowRoot!.querySelector('.total')!.textContent).toContain('47,20');
+  });
+
+  it('compte les lignes hors liste et permet de les isoler en un appui', async () => {
+    const element = monter({ donnees: donneesLot4([
+      ligne({ id: 1, product_name: 'Prévu' }),
+      ligne({ id: 2, product_name: 'Imprévu' }),
+    ]) });
+    await element.updateComplete;
+
+    const bouton = element.shadowRoot!.querySelector('.hors-liste') as HTMLButtonElement;
+    expect(bouton.textContent).toContain('3 hors liste');
+    bouton.click();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.hors-liste')!.getAttribute('aria-pressed'))
+      .toBe('true');
+  });
+
+  it('affiche la progression sur la liste', async () => {
+    const element = monter({ donnees: donneesLot4([ligne({ id: 1 })]) });
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.progression')!.textContent)
+      .toContain('12 / 17');
+  });
+
+  it('n’affiche pas de progression quand la liste est vide', async () => {
+    const element = monter({ donnees: donneesLot4([ligne({ id: 1 })],
+                                                  { checked_items: 0, list_items: 0 }) });
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.progression')).toBeNull();
+  });
+
+  it('reste lisible avec les totaux du lot 1, sans les clés nouvelles', async () => {
+    const element = monter({ donnees: donnees([ligne({ id: 1 })], 2.5) });
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.total')!.textContent).toContain('2,50');
+    expect(element.shadowRoot!.querySelector('.repartition')).toBeNull();
   });
 });

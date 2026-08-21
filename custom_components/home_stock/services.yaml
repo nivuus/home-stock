@@ -428,3 +428,137 @@ import_grocy_equipment:
       default: false
       selector:
         boolean:
+
+# --- lot 4 : liste de courses, ticket, correction -----------------------------
+# Ajoutées EN FIN, comme l'enregistrement dans `services.py` : ce fichier est
+# allongé par un autre lot en parallèle.
+
+add_to_shopping_list:
+  name: Ajouter à la liste de courses
+  description: >-
+    Pose une ligne sur la liste, à la main. C'est la porte du vocal : un simple
+    libellé suffit — « ajoute du beurre à la liste » — et la ligne survit à
+    toutes les réconciliations, contrairement à celles que le robot pose.
+  fields:
+    product_id:
+      name: Produit
+      description: >-
+        L'identifiant d'un produit du catalogue. Facultatif : sans lui, la ligne
+        est un texte libre, ce qui est le cas normal quand on parle.
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    free_text:
+      name: Libellé
+      description: >-
+        Ce qu'on veut acheter, écrit tel quel. Ignoré si un produit est donné.
+      required: false
+      example: Piles télécommande salon
+      selector:
+        text:
+    quantity:
+      name: Quantité
+      description: >-
+        Dans l'unité de base du produit. Vide veut dire « ce qu'il faut », qui
+        est une réponse valide — zéro n'en est pas une.
+      required: false
+      selector:
+        number:
+          min: 0.001
+          max: 100000
+          mode: box
+    note:
+      name: Note
+      description: Une précision libre, affichée sous la ligne.
+      required: false
+      selector:
+        text:
+
+refresh_shopping_list:
+  name: Réconcilier la liste de courses
+  description: >-
+    Recalcule la liste à partir des quatre origines : ruptures de stock, repas
+    prévus, lignes posées à la main, achats récurrents. Tourne déjà toutes les
+    quinze minutes ; ce service sert à ne pas attendre.
+  fields:
+    horizon_days:
+      name: Jours de repas
+      description: >-
+        Combien de jours de repas prévus sont pris en compte. Sans valeur, celle
+        des options est utilisée.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 60
+          mode: box
+
+query_shopping_list:
+  name: Lire la liste de courses
+  description: >-
+    Rend la liste ouverte, groupée par rayon, sans rien écrire ni créer
+    d'entité. C'est ce que lit une réponse vocale à « qu'est-ce qu'il faut
+    acheter ? ».
+  fields:
+    store_id:
+      name: Magasin
+      description: >-
+        Trie la liste dans l'ordre appris de ce magasin. Sans lui, celui de la
+        session ouverte, puis le dernier utilisé, puis l'ordre par défaut.
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+
+read_receipt:
+  name: Lire un ticket de caisse
+  description: >-
+    Relance la lecture de la photo d'un ticket par l'entité `ai_task`
+    configurée. Sans argument, reprend le dernier ticket en attente : c'est le
+    geste du lendemain matin, quand le réseau du parking était mauvais.
+  fields:
+    receipt_id:
+      name: Ticket
+      description: L'identifiant du ticket. Sans lui, le dernier en attente.
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+
+correct_movement:
+  name: Corriger une ligne du journal
+  description: >-
+    Écrit une contrepassation : une ligne DE PLUS, de motif identique et de
+    signe inverse, reliée à celle qu'elle annule. Le journal n'est jamais
+    réécrit, et le stock revient dans le lot d'origine. Un mouvement ne s'annule
+    qu'une fois.
+  fields:
+    movement_id:
+      name: Mouvement
+      description: L'identifiant de la ligne du journal à annuler.
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+
+correct_meal:
+  name: Annuler un repas validé
+  description: >-
+    Contrepasse le bloc entier d'un repas validé, dans l'ordre inverse : la part
+    mangée, puis le plat, puis les ingrédients. Le repas repasse à « prévu ».
+    Refusé si le plat a été entamé depuis — le passé n'est alors plus
+    reconstituable.
+  fields:
+    meal_id:
+      name: Repas
+      description: L'identifiant du repas validé.
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box

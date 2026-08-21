@@ -48,3 +48,22 @@ def test_a_zero_last_known_price_is_not_treated_as_absent():
     result = suggest_price(in_store=None, open_prices=None, last_known=0.0, store=None)
     assert result.price_per_base_unit == 0.0
     assert result.source == "last_known"
+
+
+# --- amendement A3 : un prix suggéré n'est pas un prix observé --------------
+
+def test_a_store_price_is_observed_and_open_prices_is_not():
+    """Seule la branche « ce magasin » repose sur une observation réelle :
+    quelqu'un a vu ce prix ici. Les deux autres sont des suppositions, et
+    les inscrire comme observées fait que la cascade se nourrit d'elle-même."""
+    assert suggest_price(in_store=0.002, open_prices=None, last_known=None,
+                         store="Leclerc").observed is True
+    assert suggest_price(in_store=None, open_prices=0.003, last_known=None,
+                         store="Leclerc").observed is False
+    assert suggest_price(in_store=None, open_prices=None, last_known=0.004,
+                         store=None).observed is False
+
+
+def test_nothing_known_is_not_observed_either():
+    assert suggest_price(in_store=None, open_prices=None, last_known=None,
+                         store=None).observed is False

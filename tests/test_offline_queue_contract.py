@@ -104,6 +104,25 @@ EXPECTED_QUEUED_COMMAND_TYPES = {
     "home_stock/battery/declare",
     "home_stock/battery/event",
     "home_stock/equipment/consumable/unlink",
+    # Lot 4 : l'écran « Liste » se lit debout dans un rayon, l'écran
+    # « Ticket » sur un parking, et le journal se corrige depuis la cuisine.
+    # Aucun des trois n'a plus de réseau que les autres.
+    #
+    # Ajoutés ICI, avec les écrans qui les appellent, et pas à la tâche qui
+    # écrivait les commandes serveur : le test ci-dessous compare cet
+    # ensemble à ce que le scanner TROUVE dans les sources TypeScript, donc
+    # l'inscrire avant que le TypeScript n'existe rendait toute la suite
+    # rouge. Même précédent qu'au lot 5.
+    "home_stock/list/add",
+    "home_stock/list/check",
+    "home_stock/list/uncheck",
+    "home_stock/list/remove",
+    "home_stock/receipt/submit",
+    "home_stock/receipt/retry",
+    "home_stock/receipt/line/match",
+    "home_stock/receipt/apply",
+    "home_stock/movement/correct",
+    "home_stock/meal/correct",
 }
 
 
@@ -366,6 +385,73 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     )
     assert unlinked["success"] is True, unlinked.get("error")
     tested.add("home_stock/equipment/consumable/unlink")
+
+    # --- lot 4 : la liste, le ticket et la correction ---------------------
+    # Trois écrans, trois endroits sans réseau : un rayon de magasin, un
+    # parking, une cuisine. Chacune de leurs écritures doit accepter la clé
+    # que la file appose, sinon un refus de schéma bloque toute la file
+    # derrière lui — le défaut qui a immobilisé un panier entier au lot 1.
+
+    added_line = await _send(client, _id(), "home_stock/list/add",
+                             free_text="Contrat", idempotency_key="contract-list-add")
+    assert added_line["success"] is True, added_line.get("error")
+    tested.add("home_stock/list/add")
+    item_id = added_line["result"]["items"][0]["id"]
+
+    for command, key in (("home_stock/list/check", "contract-list-check"),
+                         ("home_stock/list/uncheck", "contract-list-uncheck"),
+                         ("home_stock/list/remove", "contract-list-remove")):
+        answer = await _send(client, _id(), command, item_id=item_id,
+                             idempotency_key=key)
+        assert answer["success"] is True, answer.get("error")
+        tested.add(command)
+
+    submitted = await _send(
+        client, _id(), "home_stock/receipt/submit",
+        media_content_id="media-source://media_source/local/home_stock/receipts/c.jpg",
+        idempotency_key="contract-receipt-submit")
+    assert submitted["success"] is True, submitted.get("error")
+    tested.add("home_stock/receipt/submit")
+    receipt_id = submitted["result"]["id"]
+
+    retried = await _send(client, _id(), "home_stock/receipt/retry",
+                          receipt_id=receipt_id, idempotency_key="contract-retry")
+    assert retried["success"] is True, retried.get("error")
+    tested.add("home_stock/receipt/retry")
+
+    # Aucune ligne lue (le modèle n'est pas configuré dans ce test) : le
+    # rapprochement vise donc une ligne inexistante, et c'est le SCHÉMA qu'on
+    # vérifie ici, pas l'effet.
+    matched = await _send(client, _id(), "home_stock/receipt/line/match",
+                          line_id=1, shopping_line_id=None, state="ignored",
+                          idempotency_key="contract-match")
+    assert matched["success"] is False
+    assert matched["error"]["code"] != "invalid_format", matched["error"]
+    tested.add("home_stock/receipt/line/match")
+
+    applied = await _send(client, _id(), "home_stock/receipt/apply",
+                          receipt_id=receipt_id, idempotency_key="contract-apply")
+    assert applied["success"] is False           # le ticket n'a pas pu être lu
+    assert applied["error"]["code"] != "invalid_format", applied["error"]
+    tested.add("home_stock/receipt/apply")
+
+    # La dernière ligne écrite par ce test : contrepasser une SORTIE rend du
+    # stock, ce qui ne peut jamais échouer — contrairement à l'annulation
+    # d'un achat dont le stock est déjà parti.
+    last_movement = await _send(client, _id(), "home_stock/movements/list")
+    consumption = [row for row in last_movement["result"]["movements"]
+                   if row["quantity"] < 0 and row["corrects_id"] is None][-1]
+    corrected = await _send(client, _id(), "home_stock/movement/correct",
+                            movement_id=consumption["id"],
+                            idempotency_key="contract-correct")
+    assert corrected["success"] is True, corrected.get("error")
+    tested.add("home_stock/movement/correct")
+
+    meal_corrected = await _send(client, _id(), "home_stock/meal/correct",
+                                 meal_id=4242, idempotency_key="contract-meal")
+    assert meal_corrected["success"] is False   # ce repas n'existe pas
+    assert meal_corrected["error"]["code"] != "invalid_format", meal_corrected["error"]
+    tested.add("home_stock/meal/correct")
 
     # Every command the front end can actually queue was exercised — not a
     # subset the test author remembered to write a case for.

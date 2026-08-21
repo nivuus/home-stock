@@ -126,3 +126,49 @@ DEFAULT_KEEP_PERCENT: Final = 25.0
 
 CONSUMABLE_ROLES: Final = ("filter", "bag", "brush", "cartridge", "other")
 CONSUMABLE_UNITS: Final = ("percent", "minutes")
+
+# --- lot 4 : liste de courses, ticket, correction ---------------------------
+# `REASONS` et `CONSUME_REASONS` ne bougent PAS (amendement A1) : une
+# contrepassation porte le motif de la ligne qu'elle annule, et le lien vit
+# dans `movement.corrects_id`. Un motif `correction` serait invisible de
+# `totals_between`, `_PERSONAL_SUMS`, `journal_entries`, `counted_movements`
+# et de onze capteurs — `reason` est le compte comptable.
+CONF_RECEIPT_AGENT: Final = "receipt_agent"
+CONF_SHOPPING_LIST_HORIZON_DAYS: Final = "shopping_list_horizon_days"
+DEFAULT_SHOPPING_LIST_HORIZON_DAYS: Final = 7
+
+# Les quatre raisons pour lesquelles une ligne peut être sur la liste. Une
+# seule est humaine ; les trois autres se réclament et se relâchent seules.
+LIST_ORIGINS: Final = ("shortage", "meal_plan", "manual", "recurring")
+
+# D'où vient un prix. Les trois premières sont OBSERVÉES : quelqu'un ou
+# quelque chose a vu ce prix à la caisse. Les trois dernières sont des
+# suggestions — un prix suggéré n'est pas un prix observé (amendement A3).
+PRICE_SOURCES: Final = (
+    "manual", "receipt", "import", "open_prices", "last_known", "store",
+)
+OBSERVED_PRICE_SOURCES: Final = ("manual", "receipt", "import")
+
+# Hystérésis de la rupture : on ajoute à `seuil`, on ne retire qu'au-dessus
+# de `seuil * 1.15`. Sans cela une ligne clignote à chaque consommation.
+SHORTAGE_KEEP_FACTOR: Final = 1.15
+
+# L'ordre d'un magasin ne s'apprend pas d'une seule visite.
+ROUTE_MIN_SESSIONS: Final = 3
+ROUTE_SESSION_WINDOW: Final = 10
+ROUTE_MIN_AISLE_SESSIONS: Final = 2
+
+RECEIPT_STATES: Final = ("pending", "read", "failed", "applied", "discarded")
+MAX_RECEIPT_LINES: Final = 200
+MAX_RECEIPT_LINE_PRICE: Final = 1000.0
+MAX_RECEIPT_TOTAL: Final = 3000.0
+MAX_RECEIPT_LINE_QUANTITY: Final = 500.0
+RECEIPT_TOTAL_TOLERANCE: Final = 0.02
+RECEIPT_BACKDATE_DAYS: Final = 2
+
+MAX_LIST_QUANTITY: Final = 100_000.0
+MAX_EVERY_DAYS: Final = 365
+
+# Jamais sous `www/` : `/local/` est servi SANS authentification, et un
+# ticket porte un magasin, une heure et des habitudes.
+RECEIPT_MEDIA_FOLDER: Final = "home_stock/receipts"

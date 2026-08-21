@@ -142,3 +142,58 @@ def test_every_new_refusal_has_a_french_sentence():
             appel()
         phrase = french_message(leve.value)
         assert phrase != GENERIC_MESSAGE, str(leve.value)
+
+
+# --- lot 4 : d'où vient un prix (amendement A3) ----------------------------
+
+def test_price_source_accepts_the_six_declared_sources():
+    from custom_components.home_stock.const import PRICE_SOURCES
+    from custom_components.home_stock.validators import price_source
+    for source in PRICE_SOURCES:
+        assert price_source(source) == source
+
+
+def test_price_source_lets_nothing_through_unknown():
+    """`source` décide du rang 1 de la cascade : une faute de frappe y ferait
+    disparaître un prix réellement observé, sans que rien ne le signale."""
+    from custom_components.home_stock.validators import price_source
+    with pytest.raises(vol.Invalid):
+        price_source("open_price")
+    assert price_source(None) is None
+    assert price_source("") is None
+
+
+def test_a_store_name_is_bounded_and_stripped():
+    """`validators.store_name` : vide → refus, 300 caractères → refus,
+    espaces de bord retirés."""
+    from custom_components.home_stock.validators import store_name
+    assert store_name("  Leclerc  ") == "Leclerc"
+    with pytest.raises(vol.Invalid):
+        store_name("")
+    with pytest.raises(vol.Invalid):
+        store_name("   ")
+    with pytest.raises(vol.Invalid):
+        store_name("x" * 300)
+    with pytest.raises(vol.Invalid):
+        store_name(None)
+
+
+def test_list_quantity_refuses_zero_and_the_absurd():
+    from custom_components.home_stock.const import MAX_LIST_QUANTITY
+    from custom_components.home_stock.validators import list_quantity
+    assert list_quantity(None) is None
+    assert list_quantity(500) == 500.0
+    assert list_quantity(MAX_LIST_QUANTITY) == MAX_LIST_QUANTITY
+    for refus in (0, -1, MAX_LIST_QUANTITY + 1, float("inf"), float("nan"), "x"):
+        with pytest.raises(vol.Invalid):
+            list_quantity(refus)
+
+
+def test_every_days_is_a_whole_number_of_days_within_a_year():
+    from custom_components.home_stock.const import MAX_EVERY_DAYS
+    from custom_components.home_stock.validators import every_days
+    assert every_days(1) == 1
+    assert every_days(MAX_EVERY_DAYS) == MAX_EVERY_DAYS
+    for refus in (0, -3, MAX_EVERY_DAYS + 1, None, 1.5, "x"):
+        with pytest.raises(vol.Invalid):
+            every_days(refus)

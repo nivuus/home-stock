@@ -7,13 +7,20 @@
  *  semaine ou un mois, son `label` est déjà le premier jour du seau, que
  *  `journal/day` accepte tel quel — aucune conversion ici.
  *
- *  Écran de lecture seule : aucune file hors-ligne, aucune écriture. Comme
- *  le catalogue, il tolère un aller-retour réseau — ce n'est jamais un
- *  rayon de magasin qui le consulte.
+ *  Depuis le lot 4, il écrit une seule chose : une CORRECTION. Le journal ne
+ *  cache jamais une erreur — la ligne fautive reste visible, barrée, avec sa
+ *  contrepassation juste en dessous. C'est ce qui permet de comprendre, six
+ *  mois plus tard, pourquoi une journée porte une valeur négative.
+ *
+ *  Corriger demande DEUX appuis, et le détail dit AVANT, en clair, ce que la
+ *  correction va faire : « Annule 200 g de Pâtes — 310 kcal, 0,42 € — et
+ *  remet 200 g dans le lot du 2026-08-14 ». Une opération irréversible qui ne
+ *  s'annonce pas est une opération qu'on déclenche par erreur.
  */
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
+import type { FileAttente } from '../file-attente';
 import { formaterNombre } from '../nombres';
 
 export type Granularite = 'day' | 'week' | 'month';
@@ -34,6 +41,29 @@ export type EntreeJournal = {
   kcal: number | null;
   parts_total: number | null;
   parts_mine: number | null;
+  batch_id?: number | null;
+  /** Le mouvement que CETTE ligne annule, s'il y en a un. */
+  corrects_id?: number | null;
+  /** La contrepassation qui annule cette ligne, s'il y en a une. */
+  corrected_by?: number | null;
+};
+
+/** Ce que `home_stock/movement/correction_preview` répond : ce que la
+ *  correction fera, avant qu'on appuie. */
+export type ApercuCorrection = {
+  movement_id: number;
+  product_name: string | null;
+  base_unit: string | null;
+  quantity: number;
+  kcal: number | null;
+  cost: number | null;
+  reason: string;
+  occurred_at: string;
+  batch_id: number | null;
+  batch_entered_at: string | null;
+  meal_id?: number | null;
+  correctable: boolean;
+  refusal: string | null;
 };
 
 export type TotauxJournal = {
@@ -81,6 +111,23 @@ export class EcranJournal extends LitElement {
    *  représenterait qu'une fraction du seau) : les totaux affichés sont
    *  ceux du seau lui-même, déjà dans la réponse de `journal/series`. */
   @state() seauSelectionne: SeauJournal | null = null;
+
+  /** La file hors-ligne. Corriger est une écriture comme une autre : elle se
+   *  fait souvent depuis la cuisine, et le réseau n'y est pas meilleur qu'en
+   *  rayon. */
+  @property({ attribute: false }) file?: FileAttente;
+  /** L'identifiant de la ligne dont le détail est ouvert, et ce que le
+   *  serveur dit qu'une correction lui ferait. */
+  @state() private detailOuvert: number | null = null;
+  @state() private apercu: ApercuCorrection | null = null;
+  /** La correction armée par le premier appui : le second confirme. */
+  /** Ce que le premier appui a armé : une ligne, ou un repas entier. Le
+   *  TYPE de commande n'est pas stocké ici — il est écrit en toutes lettres
+   *  au moment de l'envoi. Le contrat de la file hors ligne se vérifie en
+   *  scannant ce fichier : une commande passée par une variable y serait
+   *  invisible, et son schéma pourrait refuser la clé d'idempotence sans
+   *  que rien ne le signale. */
+  @state() private correctionArmee: { cible: 'mouvement' | 'repas'; id: number } | null = null;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -181,15 +228,110 @@ export class EcranJournal extends LitElement {
 
   private rendreEntree(entree: EntreeJournal) {
     const partagee = entree.parts_total !== null && entree.parts_total !== entree.parts_mine;
+    const corrigee = (entree.corrected_by ?? null) !== null;
+    const contrepassation = (entree.corrects_id ?? null) !== null;
+    const classes = [
+      'entree',
+      entree.reason !== 'consumption' ? 'jete' : '',
+      corrigee ? 'corrigee' : '',
+      contrepassation ? 'contrepassation' : '',
+    ].filter(Boolean).join(' ');
     return html`
-      <li class="entree ${entree.reason !== 'consumption' ? 'jete' : ''}">
-        <span class="entree-nom">${entree.product_name}</span>
-        <span class="entree-quantite">
-          ${formaterNombre(Math.abs(entree.quantity))} ${entree.base_unit}
-        </span>
-        ${partagee ? html`<span class="entree-parts">${entree.parts_mine ?? 0}/${entree.parts_total}</span>` : nothing}
-        <span class="entree-kcal">${entree.kcal === null ? '—' : `${Math.round(entree.kcal)} kcal`}</span>
+      <li class=${classes}>
+        <button class="entree-ouvrir" @click=${() => this.ouvrirDetail(entree)}>
+          <span class="entree-nom">${entree.product_name}</span>
+          <span class="entree-quantite">
+            ${formaterNombre(Math.abs(entree.quantity))} ${entree.base_unit}
+          </span>
+          ${partagee ? html`
+            <span class="entree-parts">${entree.parts_mine ?? 0}/${entree.parts_total}</span>
+          ` : nothing}
+          <span class="entree-kcal">${entree.kcal === null ? '—' : `${Math.round(entree.kcal)} kcal`}</span>
+        </button>
+        ${this.detailOuvert === entree.id ? this.rendreDetail() : nothing}
       </li>
+    `;
+  }
+
+  /** Ouvre le détail et demande au serveur ce que la correction ferait. Le
+   *  panneau ne le CALCULE jamais lui-même : la quantité rendue, le lot visé
+   *  et le refus éventuel sont des faits que seul le serveur connaît. */
+  private async ouvrirDetail(entree: EntreeJournal): Promise<void> {
+    if (this.detailOuvert === entree.id) {
+      this.detailOuvert = null;
+      return;
+    }
+    this.detailOuvert = entree.id;
+    this.apercu = null;
+    this.correctionArmee = null;
+    if (!this.connexion) return;
+    try {
+      this.apercu = await this.connexion.appeler<ApercuCorrection>(
+        'home_stock/movement/correction_preview', { movement_id: entree.id });
+    } catch {
+      // Le détail reste ouvert et vide : mieux qu'un écran qui se referme
+      // tout seul sans dire pourquoi.
+      this.apercu = null;
+    }
+  }
+
+  private ecrire(type: string, charge: Record<string, unknown>): void {
+    if (!this.file) return;
+    this.file.ajouter(type, charge);
+    this.dispatchEvent(new CustomEvent('file-changee', { bubbles: true, composed: true }));
+    void this.file.rejouer();
+  }
+
+  private confirmerCorrection(): void {
+    const armee = this.correctionArmee;
+    if (!armee) return;
+    if (armee.cible === 'mouvement') {
+      this.ecrire('home_stock/movement/correct', { movement_id: armee.id });
+    } else {
+      this.ecrire('home_stock/meal/correct', { meal_id: armee.id });
+    }
+    this.correctionArmee = null;
+    this.detailOuvert = null;
+  }
+
+  private rendreDetail() {
+    const apercu = this.apercu;
+    if (!apercu) return html`<div class="detail"><p>Chargement…</p></div>`;
+    const lot = apercu.batch_entered_at
+      ? ` et remet ${formaterNombre(apercu.quantity)} ${apercu.base_unit ?? ''} `
+        + `dans le lot du ${apercu.batch_entered_at.slice(0, 10)}`
+      : '';
+    const chiffres = [
+      apercu.kcal === null ? null : `${Math.round(apercu.kcal)} kcal`,
+      apercu.cost === null ? null : formaterEuros(apercu.cost),
+    ].filter(Boolean).join(', ');
+    return html`
+      <div class="detail">
+        <p class="annonce">${
+          `Annule ${formaterNombre(apercu.quantity)} ${apercu.base_unit ?? ''} `
+          + `de ${apercu.product_name ?? ''}`
+          + (chiffres ? ` — ${chiffres}` : '') + lot + '.'
+        }</p>
+        ${apercu.refusal ? html`<p class="refus">${apercu.refusal}</p>` : nothing}
+        ${this.correctionArmee ? html`
+          <button class="confirmer-correction" @click=${this.confirmerCorrection}>
+            Confirmer
+          </button>
+          <button class="annuler-correction"
+            @click=${() => { this.correctionArmee = null; }}>Annuler</button>
+        ` : html`
+          ${apercu.correctable ? html`
+            <button class="corriger" @click=${() => {
+              this.correctionArmee = { cible: 'mouvement', id: apercu.movement_id };
+            }}>Corriger</button>
+          ` : nothing}
+          ${!apercu.correctable && apercu.meal_id ? html`
+            <button class="corriger-repas" @click=${() => {
+              this.correctionArmee = { cible: 'repas', id: apercu.meal_id! };
+            }}>Corriger le repas</button>
+          ` : nothing}
+        `}
+      </div>
     `;
   }
 
@@ -255,6 +397,29 @@ export class EcranJournal extends LitElement {
       background: var(--secondary-background-color); color: var(--primary-text-color);
     }
     .granularite-active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .entree-ouvrir {
+      display: flex; width: 100%; gap: 8px; align-items: baseline; min-height: 48px;
+      border: none; background: transparent; color: inherit; font: inherit;
+      text-align: left; padding: 0;
+    }
+    .corrigee .entree-nom, .corrigee .entree-quantite { text-decoration: line-through; }
+    .contrepassation { color: var(--secondary-text-color); }
+    .detail {
+      margin: 4px 0 8px; padding: 8px; border-radius: 8px;
+      background: var(--secondary-background-color);
+    }
+    .annonce { margin: 0 0 8px; }
+    .refus { margin: 0 0 8px; color: var(--secondary-text-color); font-size: 0.9rem; }
+    .corriger, .corriger-repas, .confirmer-correction, .annuler-correction {
+      display: block; width: 100%; min-height: 48px; border-radius: 8px; border: none;
+      margin-top: 8px; font-size: 1rem;
+    }
+    .corriger, .corriger-repas, .confirmer-correction {
+      background: var(--primary-color); color: var(--text-primary-color, #fff);
+    }
+    .annuler-correction {
+      background: var(--card-background-color, #fff); color: var(--primary-text-color);
+    }
     /* La cible tactile de .barre est fixe (colonne pleine hauteur ici,
        ligne pleine largeur sous 700 px) — jamais la grandeur du seau, qui ne
        viendrait qu'agrandir les gros jours et rétrécir les petits sous les

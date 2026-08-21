@@ -13,7 +13,7 @@ from typing import Any, Final, Mapping
 
 import voluptuous as vol
 
-from .const import MAX_PARTS
+from .const import MAX_EVERY_DAYS, MAX_LIST_QUANTITY, MAX_PARTS, PRICE_SOURCES
 
 _SQLITE_INT_MIN: Final = -(2**63)
 _SQLITE_INT_MAX: Final = 2**63 - 1
@@ -301,3 +301,74 @@ def media_path(value: Any) -> str | None:
         raise vol.Invalid(
             f"media path must not point under www/, got {preview(value)}")
     return cleaned
+
+
+# --- lot 4 -----------------------------------------------------------------
+# En fin de fichier, et sans toucher à `bounded_text`, `finite_float`,
+# `iso_date` ni `media_path` : les deux surfaces (websocket et services)
+# lisent les mêmes bornes, et aucune n'a le droit d'être la plus faible.
+
+def price_source(value: Any) -> str | None:
+    """L'une de `PRICE_SOURCES`, ou `None`.
+
+    Un mot inconnu est refusé plutôt que rangé tel quel : `source` décide du
+    rang 1 de la cascade (amendement A3), et une faute de frappe y ferait
+    disparaître un prix réellement observé sans que rien ne le signale.
+    """
+    if value is None:
+        return None
+    text = bounded_text(value)
+    if not text:
+        return None
+    if text not in PRICE_SOURCES:
+        raise vol.Invalid(
+            f"unknown price source '{text}'; expected one of {PRICE_SOURCES}")
+    return text
+
+
+def store_name(value: Any) -> str:
+    """Le nom d'un magasin : non vide, borné, espaces de bord retirés.
+
+    Un nom vide créerait une pastille anonyme que rien ne distingue d'une
+    autre, et `store.name` est UNIQUE : deux vides se battraient pour la
+    même ligne.
+    """
+    text = bounded_text(value)
+    if text is None:
+        raise vol.Invalid(f"a store needs a name, got {preview(value)}")
+    cleaned = text.strip()
+    if not cleaned:
+        raise vol.Invalid(f"a store needs a name, got {preview(value)}")
+    return cleaned
+
+
+def list_quantity(value: Any) -> float | None:
+    """La quantité d'une ligne de liste : `]0 ; MAX_LIST_QUANTITY]`, ou `None`.
+
+    `None` est une réponse valide — « ce qu'il faut ». Zéro n'en est pas une :
+    une ligne qui demande zéro est une ligne qu'on n'aurait pas dû écrire, et
+    elle afficherait « 0 g » à côté d'un produit qu'il faut vraiment acheter.
+    """
+    if value is None:
+        return None
+    number = finite_float(value)
+    if number <= 0:
+        raise vol.Invalid(f"quantity must be positive, got {preview(value)}")
+    if number > MAX_LIST_QUANTITY:
+        raise vol.Invalid(
+            f"quantity must not exceed {MAX_LIST_QUANTITY}, got {preview(value)}")
+    return number
+
+
+def every_days(value: Any) -> int:
+    """La période d'une récurrence, en jours entiers : `[1 ; MAX_EVERY_DAYS]`.
+
+    Zéro rendrait la ligne due à chaque passage du coordinateur — soit
+    quatre-vingt-seize ajouts par jour.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid(f"every_days must be a whole number of days, got {preview(value)}")
+    if not 1 <= value <= MAX_EVERY_DAYS:
+        raise vol.Invalid(
+            f"every_days must be between 1 and {MAX_EVERY_DAYS}, got {preview(value)}")
+    return value

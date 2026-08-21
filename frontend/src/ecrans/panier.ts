@@ -51,14 +51,39 @@ export type EnTeteSession = {
   closed_at: string | null;
 };
 
-export type Totaux = { lines: number; pending: number; total: number };
+/** Les totaux d'une session. Le lot 4 ajoute la RÉPARTITION du même total :
+ *  ce qui a été constaté (un humain a tapé le prix devant l'étiquette, ou le
+ *  ticket l'a dit) et ce qui reste une supposition. Optionnelles, parce que
+ *  la même enveloppe est encore rendue par des chemins du lot 1. */
+export type Totaux = {
+  lines: number;
+  pending: number;
+  total: number;
+  observed?: number;
+  estimated?: number;
+  unpriced_lines?: number;
+  off_list_lines?: number;
+  checked_items?: number;
+  list_items?: number;
+};
 
 /** Ce que `home_stock/session/current` répond quand une session existe. */
+/** Un magasin, tel que `home_stock/stores/list` le rend depuis le lot 4 :
+ *  une LIGNE avec un identifiant, plus une chaîne. */
+export type Magasin = {
+  id: number;
+  name: string;
+  position: number;
+  active: number;
+  observed_sessions: number;
+  last_seen: string | null;
+};
+
 export type DonneesSession = {
   session: EnTeteSession;
   lines: LigneSession[];
   totals: Totaux;
-  stores: string[];
+  stores: Magasin[];
 };
 
 function formaterEuros(valeur: number): string {
@@ -126,6 +151,10 @@ export class EcranPanier extends LitElement {
    *  rafraîchissement vient d'arriver (et donc remettre `deltaParLigne` à
    *  zéro pour cette ligne) plutôt que de comparer à une valeur déjà stale. */
   private quantiteVueParLigne: Record<number, number> = {};
+
+  /** Vrai quand on n'affiche que ce qui s'est invité dans le chariot. Un
+   *  appui, réversible : ce n'est qu'un filtre d'affichage. */
+  @state() private seulementHorsListe = false;
 
   protected willUpdate(changed: PropertyValues): void {
     if (changed.has('donnees')) {
@@ -267,6 +296,26 @@ export class EcranPanier extends LitElement {
     `;
   }
 
+  /** Le même total, dit en trois faits : « 47,20 € — dont 12,30 € estimés,
+   *  2 lignes sans prix ». C'est le chiffre qu'on compare mentalement au
+   *  ticket, et un écart inexpliqué détruit la confiance dans tout le
+   *  reste. Absent quand le serveur n'a pas donné la répartition — un lot 1
+   *  qui répond encore. */
+  private rendreRepartition(totaux: Totaux) {
+    if (totaux.estimated === undefined) return nothing;
+    const sansPrix = totaux.unpriced_lines ?? 0;
+    const progression = (totaux.list_items ?? 0) > 0
+      ? `${totaux.checked_items ?? 0} / ${totaux.list_items} de la liste`
+      : null;
+    return html`
+      <p class="repartition">${
+        `dont ${formaterEuros(totaux.estimated)} estimé`
+        + (sansPrix > 0 ? `, ${sansPrix} ligne${sansPrix > 1 ? 's' : ''} sans prix` : '')
+      }</p>
+      ${progression ? html`<p class="progression">${progression}</p>` : nothing}
+    `;
+  }
+
   render() {
     const donnees = this.donnees;
     if (!donnees) return html`<p class="vide">Aucune session de courses ouverte.</p>`;
@@ -278,11 +327,21 @@ export class EcranPanier extends LitElement {
         <p class="total">${formaterEuros(donnees.totals.total)}</p>
       </section>
 
+      ${this.rendreRepartition(donnees.totals)}
+
       ${this.enAttente > 0 ? html`
         <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
       ` : nothing}
 
       ${donnees.lines.length === 0 ? html`<p class="vide">Le panier est vide.</p>` : nothing}
+
+      ${(donnees.totals.off_list_lines ?? 0) > 0 ? html`
+        <button class="hors-liste"
+          aria-pressed=${this.seulementHorsListe ? 'true' : 'false'}
+          @click=${() => { this.seulementHorsListe = !this.seulementHorsListe; }}>
+          ${`${donnees.totals.off_list_lines} hors liste`}
+        </button>
+      ` : nothing}
 
       ${groupes.map((groupe) => html`
         <section class="rayon">
@@ -302,6 +361,13 @@ export class EcranPanier extends LitElement {
     .entete { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
     .magasin { font-weight: 600; margin: 0; }
     .total { font-size: 1.3rem; font-weight: 700; margin: 0; }
+    .repartition, .progression { margin: 0 0 4px; font-size: 0.85rem; color: var(--secondary-text-color); }
+    .hors-liste {
+      min-height: 48px; width: 100%; border-radius: 8px; border: none; font-size: 0.9rem;
+      background: var(--secondary-background-color); color: var(--primary-text-color);
+      margin-bottom: 8px;
+    }
+    .hors-liste[aria-pressed='true'] { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0 8px; }
     .vide { color: var(--secondary-text-color); text-align: center; }
     .rayon-nom {
