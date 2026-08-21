@@ -1,0 +1,9 @@
+[
+{"entity": "products", "id": 1, "name": "nutriscore"},
+{"entity": "products", "id": 2, "name": "nova"},
+{"entity": "products", "id": 3, "name": "ecoscore"},
+{"entity": "products", "id": 4, "name": "marque"},
+{"entity": "products", "id": 5, "name": "quantite_off"},
+{"entity": "products", "id": 6, "name": "allergenes"},
+{"entity": "products", "id": 7, "name": "off_synchro"}
+]

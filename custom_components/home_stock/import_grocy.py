@@ -17,16 +17,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .grocy.units import (
+    CONTAINER_UNITS,
+    DOSAGE_UNITS,
+    MASS_UNITS,
+    VOLUME_UNITS,
+    base_unit,
+)
 from .storage import repositories as repo
 from .storage.database import Database
 
-MASS_UNITS = {"g": 1.0, "kg": 1000.0}
-VOLUME_UNITS = {"ml": 1.0, "cl": 10.0, "l": 1000.0}
-CONTAINER_UNITS = {
-    "Pièce", "Paquet", "Pot", "Bouteille", "Barquette", "Brique", "Boîte",
-    "Sachet", "Lot",
-}
-DOSAGE_UNITS = {"cs", "cc"}
 MAX_KCAL_PER_GRAM = 9.5   # pure fat is 9; above that the value is wrong
 MAX_KCAL_PER_ML = 8.1     # olive oil, the densest common liquid, tops out there —
                           # this is the household's actual highest value (81
@@ -60,14 +60,9 @@ class ImportReport:
         }
 
 
-def _base_unit(unit_name: str) -> tuple[str, float] | None:
-    if unit_name in MASS_UNITS:
-        return "g", MASS_UNITS[unit_name]
-    if unit_name in VOLUME_UNITS:
-        return "ml", VOLUME_UNITS[unit_name]
-    if unit_name in CONTAINER_UNITS:
-        return "piece", 1.0
-    return None
+# Ancien nom, conservé : le lot 7 partage la table, il ne renomme rien de ce
+# que le lot 0 a testé.
+_base_unit = base_unit
 
 
 def _open_grocy(path: str) -> sqlite3.Connection:

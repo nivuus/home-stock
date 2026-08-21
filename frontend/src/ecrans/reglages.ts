@@ -76,6 +76,40 @@ const MESSAGES_RESYNC_CONNUS: ReadonlySet<string> = new Set([
 ]);
 const MESSAGE_RESYNC_GENERIQUE = "La resynchronisation n'a pas pu être lancée.";
 
+/** Un contrôle de bascule, tel que `home_stock/migration/check` le rend. */
+export type ControleBascule = {
+  code: string;
+  label: string;
+  grocy_count: number;
+  home_count: number;
+  gap: number;
+  verdict: 'ok' | 'empty' | 'gap' | 'unacknowledged';
+  blocking: boolean;
+  details: string[];
+};
+
+export type RapportBascule = {
+  checks: ControleBascule[];
+  blocking: string[];
+  archive_path: string | null;
+  ok: boolean;
+};
+
+/** Ce que chaque verdict DIT, en toutes lettres.
+ *
+ *  `empty` ne se rend jamais comme un succès, et ne se rend surtout jamais
+ *  « écart : 0 » : c'est la leçon du lot 6 portée jusque dans le rendu. Un
+ *  vérificateur qui mesure du vide et affiche zéro écart transforme une
+ *  absence de donnée en preuve de réussite. */
+const VERDICTS: Record<ControleBascule['verdict'], string> = {
+  ok: 'conforme',
+  empty: "rien mesuré — ce contrôle n'a rien pu comparer",
+  gap: 'écart',
+  unacknowledged: 'à acquitter, un par un',
+};
+
+const MESSAGE_CONTROLE_GENERIQUE = "Le contrôle n'a pas pu être lancé.";
+
 function messageResyncAffichable(err: unknown): string {
   const texte = err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string'
     ? (err as any).message as string : null;
@@ -132,6 +166,9 @@ export class EcranReglages extends LitElement {
   @property({ attribute: false }) agentTicket: string | null = null;
   @property({ attribute: false }) tailleTickets: string | null = null;
 
+  @state() private bascule: RapportBascule | null = null;
+  @state() private basculeEnCours = false;
+  @state() private erreurBascule: string | null = null;
   @state() private resyncEnCours = false;
   @state() private messageResync: string | null = null;
   @state() private erreurResync: string | null = null;
@@ -205,6 +242,60 @@ export class EcranReglages extends LitElement {
     } finally {
       this.resyncEnCours = false;
     }
+  }
+
+  /** Le contrôle passe par la COMMANDE websocket, pas par le service : le
+   *  panneau le relance vingt fois pendant la bascule, une main dans le
+   *  placard et l'autre sur le téléphone. `archive: false` parce qu'écrire
+   *  1 123 lignes à chaque appui serait absurde. */
+  private async controlerBascule(): Promise<void> {
+    if (!this.connexion || this.basculeEnCours) return;
+    this.basculeEnCours = true;
+    this.erreurBascule = null;
+    try {
+      this.bascule = await this.connexion.appeler<RapportBascule>(
+        'home_stock/migration/check', { archive: false });
+    } catch {
+      // Le message brut d'une exception Python n'a rien à faire sous les yeux
+      // du propriétaire : même liste blanche que pour la resynchronisation.
+      this.bascule = null;
+      this.erreurBascule = MESSAGE_CONTROLE_GENERIQUE;
+    } finally {
+      this.basculeEnCours = false;
+    }
+  }
+
+  private rendreBascule() {
+    if (this.basculeEnCours) {
+      return html`<p class="explication">Contrôle en cours…</p>`;
+    }
+    if (!this.bascule) return nothing;
+    const bloquants = this.bascule.blocking.length;
+    return html`
+      <p class="verdict-bascule">
+        ${bloquants === 0
+          ? 'Aucun contrôle bloquant : la bascule peut continuer.'
+          : `${bloquants} contrôles bloquants : ne pas continuer.`}
+      </p>
+      <ul class="liste-controles">
+        ${this.bascule.checks.map((controle) => html`
+          <li class="controle ${controle.blocking ? 'bloquant' : ''}"
+              data-code=${controle.code}>
+            <span class="controle-code">${controle.code}</span>
+            <span class="controle-label">${controle.label}</span>
+            <span class="controle-chiffres">
+              ${controle.verdict === 'empty'
+                ? VERDICTS.empty
+                : `${controle.grocy_count} chez Grocy, ${controle.home_count} ici`
+                  + ` — ${VERDICTS[controle.verdict]} : ${controle.gap}`}
+            </span>
+            ${controle.details.length > 0 ? html`
+              <span class="controle-details">${controle.details[0]}</span>
+            ` : nothing}
+          </li>
+        `)}
+      </ul>
+    `;
   }
 
   private rendreRayons() {
@@ -474,6 +565,19 @@ export class EcranReglages extends LitElement {
         ${this.messageResync ? html`<p class="message-resync">${this.messageResync}</p>` : nothing}
         ${this.erreurResync ? html`<p class="erreur">${this.erreurResync}</p>` : nothing}
       </section>
+
+      <section class="section">
+        <h3 class="titre">Bascule</h3>
+        <p class="explication">
+          Où en est la reprise de Grocy. Ce bloc MONTRE l'état de la bascule ; il ne
+          la conduit pas : les imports se lancent une fois depuis Outils de
+          développement, et les acquittements se font nommément par le service.
+        </p>
+        <button class="controler" ?disabled=${this.basculeEnCours}
+                @click=${this.controlerBascule}>Contrôler</button>
+        ${this.rendreBascule()}
+        ${this.erreurBascule ? html`<p class="erreur">${this.erreurBascule}</p>` : nothing}
+      </section>
     `;
 
     return html`
@@ -558,5 +662,28 @@ export class EcranReglages extends LitElement {
     }
     .resynchroniser:disabled { opacity: 0.6; }
     .message-resync { color: var(--secondary-text-color); font-size: 0.85rem; margin: 8px 0 0; }
+    .controler {
+      display: block; width: 100%; min-height: 48px; border-radius: 8px; border: none;
+      font-size: 0.95rem;
+      background: var(--primary-color); color: var(--text-primary-color, #fff);
+    }
+    .controler:disabled { opacity: 0.6; }
+    .verdict-bascule { margin: 12px 0 4px; font-weight: 600; }
+    .liste-controles { list-style: none; margin: 0; padding: 0; }
+    .controle {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+      padding: 6px 0; border-bottom: 1px solid var(--divider-color, #ddd);
+      font-size: 0.9rem;
+    }
+    .controle:last-child { border-bottom: none; }
+    .controle-code { font-weight: 700; min-width: 2.5em; }
+    .controle-label { flex: 1; min-width: 0; }
+    .controle-chiffres { color: var(--secondary-text-color); }
+    .controle-details { flex-basis: 100%; color: var(--secondary-text-color); font-size: 0.85rem; }
+    /* Le rouge d'un bloquant doit passer le contraste sur les DEUX thèmes :
+       c'est le jeton qui change, jamais le seuil. */
+    .controle.bloquant { color: var(--error-color, #b3261e); }
+    .controle.bloquant .controle-chiffres,
+    .controle.bloquant .controle-details { color: var(--error-color, #b3261e); }
   `;
 }

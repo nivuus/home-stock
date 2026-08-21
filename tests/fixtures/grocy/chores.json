@@ -1,0 +1,8 @@
+[
+{"id": 1, "name": "Nettoyer la litière", "period_type": "daily"},
+{"id": 2, "name": "Nettoyer la fontaine à eau", "period_type": "daily"},
+{"id": 3, "name": "Nettoyer le distributeur de croquettes", "period_type": "daily"},
+{"id": 4, "name": "Remplir les croquettes", "period_type": "daily"},
+{"id": 5, "name": "Vider les poubelles", "period_type": "daily"},
+{"id": 6, "name": "Vider complètement la litière", "period_type": "daily"}
+]

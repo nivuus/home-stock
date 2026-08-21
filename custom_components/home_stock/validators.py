@@ -426,3 +426,84 @@ def check_manual_portion(value: Any, *, base_unit: str,
             f"la portion doit être d'au plus {max_net_quantity:g} {base_unit},"
             " le plus gros paquet connu")
     return number
+
+
+# --- lot 7 : la bascule -----------------------------------------------------
+# Les bornes vivent UNE seule fois ici. Le service et la commande websocket
+# lisent les mêmes, et aucune des deux surfaces n'a le droit d'être la plus
+# faible — c'est `test_surface_parity.py` qui tient le contrat.
+
+def grocy_database_path(value: Any) -> str:
+    """A copy of grocy.db, under `config/`, and nowhere else.
+
+    The component never reads outside `config/`: the path is resolved by
+    `hass.config.path()`, so it must be relative and must not climb. That is
+    also why copying grocy.db into `config/` is a gesture of the procedure and
+    not something the import can do by itself — the Home Assistant container
+    does not even see Grocy's folder.
+    """
+    text = bounded_text(value)
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise vol.Invalid("grocy database path must not be empty")
+    if cleaned.startswith("/") or cleaned.startswith("\\"):
+        raise vol.Invalid(
+            f"grocy database path must be relative, got {preview(value)}")
+    normalised = cleaned.replace("\\", "/")
+    if ".." in normalised.split("/"):
+        raise vol.Invalid(
+            f"grocy database path must not climb out of config/,"
+            f" got {preview(value)}")
+    return cleaned
+
+
+def picture_dir(value: Any) -> str:
+    """A folder under `media/`, never under `www/`.
+
+    Same rule as `media_path`, and it reuses it: lot 5 settled that `www/` is
+    served on `/local/` WITHOUT authentication to the whole house network.
+    """
+    text = bounded_text(value)
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise vol.Invalid("picture dir must not be empty")
+    checked = media_path(cleaned)
+    if checked is None:
+        raise vol.Invalid("picture dir must not be empty")
+    if not checked.replace("\\", "/").lower().startswith("media/"):
+        raise vol.Invalid(
+            f"picture dir must live under media/, got {preview(value)}")
+    return checked
+
+
+# Trois façons d'écrire « tout va bien » sans regarder. Un acquittement est
+# NOMINATIF : il désigne un lot ou une ligne, jamais un ensemble.
+_BLANKET_ACKNOWLEDGEMENTS = frozenset({"all", "*", "tout", "toutes", "tous"})
+
+
+def acknowledgement_list(value: Any) -> list[str]:
+    """A list of identifiers to acknowledge, by name and one at a time.
+
+    A bare string is refused on purpose: strings are iterable, so
+    "grocy:stock:419" would silently become seventeen one-character
+    acknowledgements.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        raise vol.Invalid(
+            f"acknowledged must be a list, got {preview(value)}")
+    if not isinstance(value, (list, tuple)):
+        raise vol.Invalid(
+            f"acknowledged must be a list, got {preview(value)}")
+    resultat: list[str] = []
+    for item in value:
+        text = bounded_text(item)
+        cleaned = (text or "").strip()
+        if not cleaned:
+            raise vol.Invalid("an acknowledgement must not be empty")
+        if cleaned.lower() in _BLANKET_ACKNOWLEDGEMENTS:
+            raise vol.Invalid(
+                f"acknowledgement must name one item, got {preview(item)}")
+        resultat.append(cleaned)
+    return resultat

@@ -1,0 +1,23 @@
+[
+{"active": 1, "id": 1, "name": "Viande"},
+{"active": 1, "id": 2, "name": "Légume"},
+{"active": 1, "id": 3, "name": "Fromage"},
+{"active": 1, "id": 4, "name": "Œufs"},
+{"active": 1, "id": 5, "name": "Produit laitier"},
+{"active": 1, "id": 6, "name": "Matière grasse"},
+{"active": 1, "id": 7, "name": "Épicerie"},
+{"active": 1, "id": 8, "name": "Charcuterie"},
+{"active": 1, "id": 9, "name": "Boisson"},
+{"active": 1, "id": 10, "name": "Surgelé"},
+{"active": 1, "id": 11, "name": "Condiment"},
+{"active": 1, "id": 12, "name": "Épice"},
+{"active": 1, "id": 13, "name": "Pâtes"},
+{"active": 1, "id": 14, "name": "Céréale"},
+{"active": 1, "id": 15, "name": "Boulangerie"},
+{"active": 1, "id": 16, "name": "Ménage"},
+{"active": 1, "id": 17, "name": "Équipement"},
+{"active": 1, "id": 18, "name": "Fruit"},
+{"active": 1, "id": 19, "name": "Poisson"},
+{"active": 1, "id": 20, "name": "Snack"},
+{"active": 1, "id": 22, "name": "Pharmacie/Parapharmacie"}
+]

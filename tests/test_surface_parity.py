@@ -32,6 +32,17 @@ CAS_LIMITES = [
     ("home_stock/meal/correct", "correct_meal", {"meal_id": -3}, "refusé"),
     ("home_stock/meal/correct", "correct_meal", {"meal_id": 4242}, "refusé"),
     ("home_stock/list/refresh", "refresh_shopping_list", {}, "accepté"),
+    # Lot 7 : le contrôle de bascule. Les deux surfaces lisent le MÊME schéma.
+    ("home_stock/migration/check", "check_grocy_migration",
+     {"database_path": "../secrets.yaml"}, "refusé"),
+    ("home_stock/migration/check", "check_grocy_migration",
+     {"database_path": "/etc/passwd"}, "refusé"),
+    ("home_stock/migration/check", "check_grocy_migration",
+     {"acknowledged": ["all"]}, "refusé"),
+    ("home_stock/migration/check", "check_grocy_migration",
+     {"acknowledged": "grocy:stock:419"}, "refusé"),   # une chaîne, pas une liste
+    ("home_stock/migration/check", "check_grocy_migration",
+     {"archive": False}, "accepté"),
 ]
 
 

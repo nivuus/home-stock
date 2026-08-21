@@ -1,4 +1,8 @@
 """Shared fixtures. The custom integration must be enabled for every test."""
+import json
+import sqlite3
+from pathlib import Path
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -191,3 +195,90 @@ def setup_entry(hass):
         return entry
 
     return _setup_entry
+
+
+# --- lot 7 : les tables Grocy figées ----------------------------------------
+
+_FIXTURES_GROCY = (
+    "recipes", "recipes_pos", "stock", "products", "meal_plan",
+    "meal_plan_sections", "shopping_list", "quantity_unit_conversions",
+    "quantity_units", "locations", "stock_log", "chores_log", "chores",
+    "product_groups", "product_barcodes", "userfields", "userfield_values",
+    "shopping_locations", "inline_images", "recipes_phantoms",
+)
+
+# Les tables vides de Grocy : SELECT * ne donne pas leurs colonnes, et une
+# table absente du schéma reconstruit ferait échouer une lecture légitime.
+_COLONNES_TABLES_VIDES = {"shopping_locations": ("id", "name")}
+
+
+@pytest.fixture(scope="session")
+def grocy_reel() -> dict[str, list[dict]]:
+    """Les tables Grocy figées le 2026-08-21. Lecture seule, jamais réécrites."""
+    base = Path(__file__).parent / "fixtures" / "grocy"
+    return {nom: json.loads((base / f"{nom}.json").read_text("utf-8"))
+            for nom in _FIXTURES_GROCY}
+
+
+def _affinity(values) -> str:
+    """Le type SQLite d'une colonne, déduit de ce que la fixture y met."""
+    for value in values:
+        if isinstance(value, bool):
+            return "INTEGER"
+        if isinstance(value, int):
+            return "INTEGER"
+        if isinstance(value, float):
+            return "REAL"
+        if isinstance(value, str):
+            return "TEXT"
+    return "TEXT"
+
+
+def _build_grocy_db(path, tables: dict[str, list[dict]]) -> None:
+    conn = sqlite3.connect(str(path))
+    try:
+        for nom, lignes in tables.items():
+            colonnes = list(lignes[0]) if lignes else list(
+                _COLONNES_TABLES_VIDES.get(nom, ()))
+            if not colonnes:
+                continue
+            declaration = ", ".join(
+                f'"{col}" {_affinity(l[col] for l in lignes)}' for col in colonnes)
+            conn.execute(f'CREATE TABLE "{nom}" ({declaration})')
+            conn.executemany(
+                f'INSERT INTO "{nom}" VALUES ({", ".join("?" * len(colonnes))})',
+                [tuple(ligne[col] for col in colonnes) for ligne in lignes])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def grocy_reel_db(tmp_path, grocy_reel) -> str:
+    """Une base SQLite reconstruite depuis les fixtures.
+
+    Reconstruite, et pas copiée : le schéma minimal qu'on écrit ici est
+    exactement ce que les imports lisent, donc une colonne lue et non
+    déclarée devient une erreur de test au lieu d'un import qui « marche
+    parce que la vraie base l'avait ».
+    """
+    chemin = tmp_path / "grocy_reel.db"
+    tables = {nom: lignes for nom, lignes in grocy_reel.items()
+              if nom not in ("inline_images", "recipes_phantoms")}
+    # Les 166 copies fantômes vivent dans la MÊME table `recipes` que les 102
+    # vraies : c'est la seule façon que le filtre de l'import ait quelque
+    # chose à écarter. Rangées à part dans les fixtures pour que les tests de
+    # volumétrie continuent de compter 102 recettes.
+    tables["recipes"] = tables["recipes"] + grocy_reel["recipes_phantoms"]
+    _build_grocy_db(chemin, tables)
+    # Les tables `batteries` et `equipment` viennent de l'extrait SQL versionné
+    # du lot 5 — la même donnée, prise le même jour. Les redécouper en JSON
+    # ferait deux copies d'une même mesure, et c'est exactement ce que le lot 7
+    # interdit ailleurs.
+    conn = sqlite3.connect(str(chemin))
+    conn.executescript(
+        (Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql")
+        .read_text(encoding="utf-8"))
+    conn.commit()
+    conn.close()
+    return str(chemin)

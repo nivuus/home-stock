@@ -1,0 +1,16 @@
+[
+{"active": 1, "id": 2, "name": "Pièce", "name_plural": "Pièces"},
+{"active": 1, "id": 3, "name": "Paquet", "name_plural": "Paquets"},
+{"active": 1, "id": 4, "name": "g", "name_plural": "g"},
+{"active": 1, "id": 5, "name": "kg", "name_plural": "kg"},
+{"active": 1, "id": 6, "name": "cl", "name_plural": "cl"},
+{"active": 1, "id": 7, "name": "Pot", "name_plural": "Pots"},
+{"active": 1, "id": 8, "name": "Bouteille", "name_plural": "Bouteilles"},
+{"active": 1, "id": 9, "name": "Barquette", "name_plural": "Barquettes"},
+{"active": 1, "id": 10, "name": "Brique", "name_plural": "Briques"},
+{"active": 1, "id": 11, "name": "Boîte", "name_plural": "Boîtes"},
+{"active": 1, "id": 12, "name": "Sachet", "name_plural": "Sachets"},
+{"active": 1, "id": 13, "name": "Lot", "name_plural": "Lots"},
+{"active": 1, "id": 14, "name": "cs", "name_plural": "cs"},
+{"active": 1, "id": 15, "name": "cc", "name_plural": "cc"}
+]

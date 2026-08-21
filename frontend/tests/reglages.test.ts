@@ -483,15 +483,16 @@ describe('<home-stock-reglages> : la vue dense (lot 6)', () => {
     const e = await monterReglages({ large: true });
     const colonnes = e.shadowRoot!.querySelector('.trois-colonnes');
     expect(colonnes).not.toBeNull();
-    // Les six sections restent les six sections : la largeur les dispose,
-    // elle n'en ajoute ni n'en retire une seule.
-    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(6);
+    // Les sept sections restent les sept sections : la largeur les dispose,
+    // elle n'en ajoute ni n'en retire une seule. (Six au lot 6, sept depuis
+    // que le lot 7 a ajouté « Bascule ».)
+    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(7);
   });
 
   it('reste empilée en étroit', async () => {
     const e = await monterReglages({ large: false });
     expect(e.shadowRoot!.querySelector('.trois-colonnes')).toBeNull();
-    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(6);
+    expect(e.shadowRoot!.querySelectorAll('.section')).toHaveLength(7);
   });
 
   it('réordonne dans la BONNE liste quand elles sont côte à côte', async () => {

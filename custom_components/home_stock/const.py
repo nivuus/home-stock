@@ -195,3 +195,35 @@ MAX_GOAL: Final = 20_000.0
 # Sept journées CLOSES, J-7 … J-1 : la journée courante est exclue, sinon la
 # moyenne chuterait chaque matin puis remonterait au dîner.
 GOAL_WINDOW_DAYS: Final = 7
+
+# --- lot 7 : la bascule ------------------------------------------------------
+GROCY_STOCK_REF_PREFIX: Final = "grocy:stock:"
+GROCY_RECIPE_REF_PREFIX: Final = "grocy:recipe:"
+GROCY_MEAL_UID_TEMPLATE: Final = "grocy-meal-{id}@home_stock"
+# La sentinelle « ne périme jamais » de Grocy. La recopier donnerait dix lots
+# qui périment dans neuf cent soixante-treize ans, en tête de tous les tris
+# décroissants. NULL est la façon dont home_stock dit « pas de DLC ».
+GROCY_NEVER_EXPIRES: Final = "2999-12-31"
+# Au-delà, `amount x price` n'est pas un prix maladroit mais une ligne de
+# ticket accrochée au mauvais produit (spec §8.4). Le lot le plus cher retenu
+# vaut 13,80 EUR, le premier écarté en vaut 47 : la frontière est un fossé.
+GROCY_MAX_BATCH_VALUE: Final = 20.0
+
+# Les douze contrôles de la bascule, C0 à C11. Un contrôle sans plancher ne
+# doit pas pouvoir exister : `migration_check.FLOORS` doit porter chacun de
+# ces codes, et un test structurel le vérifie.
+MIGRATION_CHECKS: Final = (
+    "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11",
+)
+# Grocy écrit des horodatages LOCAUX naïfs, et l'heure de la copie se lit dans
+# le fuseau du vérificateur. Deux heures absorbent l'écart sans masquer une
+# écriture réelle : le geste 2 de la procédure demande de ne plus rien saisir
+# du tout, donc toute écriture postérieure est une infraction, pas un retard.
+GROCY_FREEZE_TOLERANCE_HOURS: Final = 2
+# Au-delà, la copie n'est plus une photo de l'instant : on la refait.
+GROCY_COPY_MAX_AGE_HOURS: Final = 2
+# Assez serré pour attraper une conversion ratée, assez lâche pour ne pas se
+# battre avec les flottants.
+MIGRATION_QUANTITY_TOLERANCE: Final = 1e-6
+# Un rapport de 500 lignes n'est pas lu. Le reste part dans l'archive.
+MIGRATION_DETAIL_CAP: Final = 50

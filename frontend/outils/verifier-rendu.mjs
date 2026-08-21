@@ -664,6 +664,49 @@ const JOURNEE_AVEC_OBJECTIFS = {
                salt: 5.4, sugars: 58.3 },
 };
 
+/** Le rapport de bascule du scénario de rendu. Douze contrôles, dont trois
+ *  bloquants de trois natures différentes : un qui n'a rien mesuré, un qui a
+ *  un écart, un qui attend un acquittement nominatif. */
+const RAPPORT_BASCULE = {
+  ok: false,
+  blocking: ['C0', 'C1', 'C4'],
+  archive_path: null,
+  checks: [
+    { code: 'C0', label: 'Schéma et gel de Grocy', grocy_count: 0, home_count: 0,
+      gap: 0, verdict: 'empty', blocking: true,
+      details: ['la copie de grocy.db est introuvable'] },
+    { code: 'C1', label: 'Un lot par ligne de stock', grocy_count: 108,
+      home_count: 107, gap: 1, verdict: 'gap', blocking: true,
+      details: ['grocy:stock:541 (Sorbet Fraise) : aucun lot importé'] },
+    { code: 'C2', label: 'Les quantités, au millionième près', grocy_count: 108,
+      home_count: 108, gap: 0, verdict: 'ok', blocking: false, details: [] },
+    { code: 'C3', label: 'Les dates de péremption', grocy_count: 108,
+      home_count: 98, gap: 0, verdict: 'ok', blocking: false,
+      details: ['10 sentinelles 2999-12-31 attendues à NULL'] },
+    { code: 'C4', label: 'Les prix écartés, acquittés nommément', grocy_count: 7,
+      home_count: 92, gap: 0, verdict: 'unacknowledged', blocking: true,
+      details: ['grocy:stock:419 (Petits pois) : prix écarté — 1487 × 2.45'] },
+    { code: 'C5', label: "Un mouvement d'entrée par lot", grocy_count: 108,
+      home_count: 108, gap: 0, verdict: 'ok', blocking: false, details: [] },
+    { code: 'C6', label: "Les trois cumuls n'ont pas bougé", grocy_count: 108,
+      home_count: 108, gap: 0, verdict: 'ok', blocking: false,
+      details: ['kcal_total', 'cost_total', 'cost_waste_total'] },
+    { code: 'C7', label: 'Piles et équipements (lot 5)', grocy_count: 34,
+      home_count: 34, gap: 0, verdict: 'ok', blocking: false, details: [] },
+    { code: 'C8', label: 'Recettes, ingrédients, instructions, minuteurs',
+      grocy_count: 102, home_count: 102, gap: 0, verdict: 'ok', blocking: false,
+      details: ['102 recettes', '510 ingrédients'] },
+    { code: 'C9', label: 'Les images, sur le disque', grocy_count: 82,
+      home_count: 82, gap: 0, verdict: 'ok', blocking: false, details: [] },
+    { code: 'C10', label: 'Planning et liste de courses', grocy_count: 42,
+      home_count: 42, gap: 0, verdict: 'ok', blocking: false,
+      details: ['42 repas à venir'] },
+    { code: 'C11', label: 'Ce qui lit encore Grocy dans la maison',
+      grocy_count: 0, home_count: 0, gap: 0, verdict: 'ok', blocking: false,
+      details: [] },
+  ],
+};
+
 const SCENARIOS = [
   {
     nom: 'Scanner (écran par défaut)',
@@ -770,6 +813,27 @@ const SCENARIOS = [
     ],
     ecranAttendu: 'home-stock-reglages',
     elementAttendu: { enfant: 'home-stock-reglages', selector: '.message-resync' },
+  },
+  {
+    // Un scénario où tout serait vert ne mesurerait pas le rouge, et c'est
+    // exactement le piège du lot 6 rejoué au niveau du rendu : le rapport
+    // porte donc un bloquant sur écart (C1), un « rien mesuré » (C0) et un
+    // « à acquitter » (C4). Le rouge du bloquant doit passer le contraste.
+    nom: 'Réglages / Bascule (un contrôle vide, un écart, un à acquitter)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/migration/check': RAPPORT_BASCULE,
+      },
+    },
+    actions: [
+      { type: 'click-nav', texte: 'Réglages' },
+      { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.controler' },
+    ],
+    ecranAttendu: 'home-stock-reglages',
+    elementAttendu: { enfant: 'home-stock-reglages', selector: '.controle.bloquant' },
   },
   {
     nom: 'Bannière de refus (écriture rejetée par le serveur)',

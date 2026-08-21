@@ -40,6 +40,10 @@ from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTE
 from .off.mapping import map_article
 from .off.packaging import bins_from_raw
 from .off.open_prices import latest_price
+# Importé depuis `services` : les deux surfaces lisent LE MÊME schéma et
+# appellent LA MÊME fonction. Retranscrire les bornes ici, c'est se donner
+# rendez-vous avec une divergence.
+from .services import MIGRATION_CHECK_SCHEMA, _check_migration_for
 from .shopping import ShoppingError
 from .storage import repositories as repo
 from . import validators
@@ -1302,6 +1306,38 @@ async def _open_prices_only(hass, runtime, code, mapped) -> dict[str, Any]:
                                 last_known=None, store=None))
 
 
+# --- lot 7 : la bascule ------------------------------------------------------
+# Une seule commande, et elle n'a pas d'entité derrière : la bascule est un
+# ÉVÉNEMENT, pas un état. Un binary_sensor.home_stock_migration_ok resterait
+# `on` pour toujours après le premier passage et n'apprendrait plus rien à
+# personne. Le rapport est une réponse.
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/migration/check",
+    **{key: value for key, value in MIGRATION_CHECK_SCHEMA.schema.items()},
+})
+@websocket_api.async_response
+async def migration_check(hass, connection, msg) -> None:
+    """Exactement le même schéma et exactement la même fonction que le service.
+
+    Les bornes ne sont pas retranscrites ici : `MIGRATION_CHECK_SCHEMA` est
+    importé de `services`, donc les deux surfaces ne PEUVENT pas diverger.
+    """
+    runtime = _runtime(hass)
+    if runtime is None:
+        _send_not_loaded(connection, msg)
+        return
+    charge = {"database_path": msg.get("database_path", "grocy_import.db"),
+              "archive": msg.get("archive", True),
+              "acknowledged": msg.get("acknowledged", [])}
+    try:
+        report = await _read(hass, partial(
+            _check_migration_for, hass, charge))
+    except (LookupError, ValueError) as err:
+        _send_domain_error(connection, msg["id"], err)
+        return
+    connection.send_result(msg["id"], report.as_dict())
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the read and write commands once."""
     for command in (products_list, product_get, locations_list, aisles_list,
@@ -1317,7 +1353,9 @@ def async_register_websocket(hass: HomeAssistant) -> None:
                     list_refresh, recurring_list, recurring_save, recurring_delete,
                     store_save, store_merge, store_aisles, store_reorder_aisles,
                     store_unpin_aisle,
-                    movement_correct, movement_correction_preview, meal_correct):
+                    movement_correct, movement_correction_preview, meal_correct,
+                    # Lot 7 : ajoutée EN FIN, jamais au milieu.
+                    migration_check):
         websocket_api.async_register_command(hass, command)
     # Lot 3's fourteen commands live in their own module — a file-layout
     # decision, not a contract one (see websocket_recipes' docstring).

@@ -1,0 +1,6 @@
+[
+{"active": 1, "id": 2, "is_freezer": 0, "name": "Frigo"},
+{"active": 1, "id": 3, "is_freezer": 1, "name": "Congélateur"},
+{"active": 1, "id": 4, "is_freezer": 0, "name": "Placard"},
+{"active": 1, "id": 5, "is_freezer": 0, "name": "Autre"}
+]

@@ -575,3 +575,72 @@ correct_meal:
         number:
           min: 1
           mode: box
+
+import_grocy_stock:
+  name: Importer le stock Grocy
+  description: >-
+    Reprend les lots, leurs quantités, leurs dates et leurs prix depuis une copie de
+    grocy.db placée dans le dossier de configuration, et crée un mouvement d'entrée
+    par lot. Simulation par défaut : sans « Appliquer », rien n'est écrit et seul le
+    rapport est produit. N'arrête jamais Grocy.
+  fields:
+    database_path:
+      name: Fichier
+      description: Chemin relatif au dossier de configuration.
+      default: grocy_import.db
+      selector: { text: }
+    apply:
+      name: Appliquer
+      description: Sans cela, rien n'est écrit — seul le rapport est produit.
+      default: false
+      selector: { boolean: }
+
+import_grocy_recipes:
+  name: Importer les recettes Grocy
+  description: >-
+    Reprend les recettes, leurs étapes, leurs instructions, leurs ingrédients, leurs
+    images et le planning à venir. Les images vont sous media/, jamais sous www/.
+    Simulation par défaut : sans « Appliquer », ni ligne ni fichier n'est écrit.
+    N'arrête jamais Grocy.
+  fields:
+    database_path:
+      name: Fichier
+      description: Chemin relatif au dossier de configuration.
+      default: grocy_import.db
+      selector: { text: }
+    picture_dir:
+      name: Dossier des images
+      description: Chemin sous media/, jamais sous www/ qui est servi sans authentification.
+      default: media/home_stock
+      selector: { text: }
+    apply:
+      name: Appliquer
+      description: Sans cela, ni ligne ni fichier n'est écrit — seul le rapport est produit.
+      default: false
+      selector: { boolean: }
+
+check_grocy_migration:
+  name: Contrôler la bascule Grocy
+  description: >-
+    Passe les douze contrôles de la reprise et rend leur écart chiffré. Un contrôle
+    qui n'a rien mesuré échoue au lieu d'afficher « écart : 0 ». Ce service ne
+    modifie rien et n'arrête pas Grocy : il regarde, et il écrit au plus l'archive
+    JSON de l'historique dans le dossier de configuration.
+  fields:
+    database_path:
+      name: Fichier
+      description: Chemin relatif au dossier de configuration.
+      default: grocy_import.db
+      selector: { text: }
+    archive:
+      name: Écrire l'archive
+      description: Enregistre l'historique de Grocy en JSON dans le dossier de configuration.
+      default: true
+      selector: { boolean: }
+    acknowledged:
+      name: Acquittements
+      description: >-
+        Les identifiants acquittés un par un, nommément. « all » et « * » sont
+        refusés : un acquittement désigne un lot ou une ligne, jamais un ensemble.
+      selector:
+        object:
