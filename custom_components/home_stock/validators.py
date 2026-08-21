@@ -268,3 +268,36 @@ def check_battery_event(kind: str, *, battery_kind: str, consume_spare: bool,
         raise vol.Invalid("a built_in battery cannot be replaced")
     if consume_spare and product_id is None:
         raise vol.Invalid("cannot consume a spare without a spare product")
+
+
+def media_path(value: Any) -> str | None:
+    """A file under Home Assistant's `media/`, and nowhere else.
+
+    Three shapes are refused, each for its own reason:
+      - an ABSOLUTE path ("/etc/passwd"), which is not under media/ at all;
+      - a path that CLIMBS ("../config/secrets.yaml"): `..` anywhere in it
+        makes the final location impossible to reason about locally;
+      - anything under `www/`, because everything served from there is
+        reachable on `/local/` WITHOUT authentication — and a manual carries
+        a serial number, a receipt carries a name and a price.
+
+    Nothing here checks that the file EXISTS: a missing file is reported as
+    "introuvable" by the panel, and no entity becomes unavailable over it.
+    """
+    if value is None:
+        return None
+    text = bounded_text(value)
+    if text is None:
+        return None
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("/") or cleaned.startswith("\\"):
+        raise vol.Invalid(f"media path must be relative, got {preview(value)}")
+    normalised = cleaned.replace("\\", "/")
+    if ".." in normalised.split("/"):
+        raise vol.Invalid(f"media path must not climb out of media/, got {preview(value)}")
+    if normalised.lower().startswith("www/"):
+        raise vol.Invalid(
+            f"media path must not point under www/, got {preview(value)}")
+    return cleaned

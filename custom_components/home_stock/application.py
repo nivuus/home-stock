@@ -16,6 +16,8 @@ import voluptuous as vol
 from .const import (
     BATTERY_EVENT_KINDS,
     BATTERY_KINDS,
+    CONSUMABLE_ROLES,
+    CONSUMABLE_UNITS,
     DEFAULT_KEEP_PERCENT,
     DEFAULT_LOW_PERCENT,
     MACRO_COLUMNS,
@@ -36,7 +38,12 @@ from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
 from .messages import french_message
-from .validators import check_battery_event, check_battery_fields
+from .validators import (
+    check_battery_event,
+    check_battery_fields,
+    iso_date,
+    media_path,
+)
 
 # Nutrition columns of `article`, all stored per base unit, all rescaled when a
 # product changes unit.
@@ -998,3 +1005,145 @@ class StockManager:
 
             return {"event_id": event_id, "movement_id": movement_id,
                     "spare_refused": spare_refused}
+
+    # --- lot 5 : les équipements -------------------------------------------
+
+    _EQUIPMENT_DATE_FIELDS: Final = ("purchased_on",)
+    _EQUIPMENT_PATH_FIELDS: Final = ("manual_media_id", "receipt_media_id")
+
+    @staticmethod
+    def _checked_equipment_fields(fields: dict[str, Any]) -> dict[str, Any]:
+        """Guard the two kinds of field that can poison a later refresh: a
+        malformed date (which makes every coordinator pass raise, taking every
+        entity unavailable) and a path that escapes `media/`."""
+        checked = dict(fields)
+        for column in StockManager._EQUIPMENT_DATE_FIELDS:
+            if checked.get(column) is not None:
+                checked[column] = iso_date(checked[column])
+        for column in StockManager._EQUIPMENT_PATH_FIELDS:
+            if checked.get(column) is not None:
+                checked[column] = media_path(checked[column])
+        return checked
+
+    def create_equipment(self, *, name: str, device_id: str | None = None,
+                         location_id: int | None = None, brand: str | None = None,
+                         model: str | None = None, serial: str | None = None,
+                         purchased_on: str | None = None,
+                         purchase_price: float | None = None,
+                         warranty_months: int | None = None,
+                         manual_url: str | None = None,
+                         manual_media_id: str | None = None,
+                         receipt_media_id: str | None = None,
+                         note: str | None = None, external_ref: str | None = None,
+                         idempotency_key: str | None = None) -> int:
+        """Create an equipment sheet. Returns its id.
+
+        `purchase_price` writes NO movement. It is sheet data: a 900 € TV in a
+        journal whose `cost_today` feeds the day's food spending would make
+        that sensor useless forever — and the journal is append-only, so the
+        mistake would not be correctable.
+        """
+        fields = self._checked_equipment_fields({
+            "device_id": device_id, "location_id": location_id, "brand": brand,
+            "model": model, "serial": serial, "purchased_on": purchased_on,
+            "purchase_price": purchase_price, "warranty_months": warranty_months,
+            "manual_url": manual_url, "manual_media_id": manual_media_id,
+            "receipt_media_id": receipt_media_id, "note": note,
+        })
+        stored_key = _namespaced_key("create_equipment", idempotency_key)
+        marker = external_ref or stored_key
+        with self.db.write() as conn:
+            if stored_key:
+                existing = conn.execute(
+                    "SELECT id FROM equipment WHERE external_ref = ?",
+                    (stored_key,)).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+            return repo.insert_equipment(conn, name=name,
+                                         **{**fields, "external_ref": marker})
+
+    def update_equipment(self, equipment_id: int, fields: dict[str, Any]) -> None:
+        unknown = set(fields) - set(repo.EQUIPMENT_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown equipment fields: {sorted(unknown)}")
+        checked = self._checked_equipment_fields(fields)
+        with self.db.write() as conn:
+            if repo.get_equipment(conn, equipment_id) is None:
+                raise ValueError(f"unknown equipment {equipment_id}")
+            repo.update_equipment_fields(conn, equipment_id, checked)
+
+    def list_equipment(self, *, today: date | None = None) -> list[dict[str, Any]]:
+        """Every sheet, with the warranty end and the days left — signed.
+
+        An EXPIRED warranty keeps its date here, with a negative `days_left`:
+        the panel owes three distinct sentences (ahead, over, never recorded)
+        and cannot write the second one from a row that hides the date. Only
+        `warranties()` narrows to what is still ahead.
+        """
+        day = today or date.today()
+        conn = self.db.read()
+        ends = {row["id"]: row["warranty_ends_on"] for row in repo.warranty_rows(conn)}
+        rows = []
+        for row in repo.list_equipment(conn):
+            ends_on = ends.get(row["id"])
+            rows.append({
+                **row,
+                "warranty_ends_on": ends_on,
+                "days_left": None if ends_on is None
+                else (date.fromisoformat(ends_on) - day).days,
+            })
+        return rows
+
+    def get_equipment(self, equipment_id: int) -> dict[str, Any]:
+        conn = self.db.read()
+        row = repo.get_equipment(conn, equipment_id)
+        if row is None:
+            raise ValueError(f"unknown equipment {equipment_id}")
+        consumables = repo.list_consumables(conn, equipment_id)
+        stock = repo.spare_stock(conn, {c["product_id"] for c in consumables})
+        return {
+            **row,
+            "consumables": [{**c, "in_stock": stock.get(c["product_id"], 0.0)}
+                            for c in consumables],
+            "batteries": [b for b in self.list_batteries()
+                          if b["equipment_id"] == equipment_id],
+        }
+
+    def link_consumable(self, *, equipment_id: int, product_id: int, role: str,
+                        label: str | None = None,
+                        entity_registry_id: str | None = None,
+                        low_value: float | None = None,
+                        keep_value: float | None = None,
+                        unit: str | None = None,
+                        expected_life_days: int | None = None,
+                        installed_on: str | None = None) -> int:
+        if role not in CONSUMABLE_ROLES:
+            raise vol.Invalid(f"unknown consumable role {role!r}")
+        if unit is not None and unit not in CONSUMABLE_UNITS:
+            raise vol.Invalid(f"unknown consumable unit {unit!r}")
+        with self.db.write() as conn:
+            return repo.link_consumable(
+                conn, equipment_id=equipment_id, product_id=product_id, role=role,
+                label=label, entity_registry_id=entity_registry_id,
+                low_value=low_value, keep_value=keep_value, unit=unit,
+                expected_life_days=expected_life_days,
+                installed_on=iso_date(installed_on))
+
+    def unlink_consumable(self, consumable_id: int) -> None:
+        with self.db.write() as conn:
+            repo.unlink_consumable(conn, consumable_id)
+
+    def warranties(self, *, today: date) -> list[dict[str, Any]]:
+        """Only the deadlines still AHEAD, soonest first.
+
+        A warranty that has run out is no longer a deadline: it leaves this
+        list, and therefore the sensor. That is the coherent reading of "a
+        warranty never produces a task" — what is over is not watched any
+        more.
+        """
+        ahead = []
+        for row in repo.warranty_rows(self.db.read()):
+            days_left = (date.fromisoformat(row["warranty_ends_on"]) - today).days
+            if days_left >= 0:
+                ahead.append({**row, "days_left": days_left})
+        return ahead
