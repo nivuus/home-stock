@@ -933,7 +933,7 @@ def missing_products_between(conn, start: str, end: str) -> list[dict]
 
 **Décision de plan — `list_ingredients` fait la jointure une fois.** Elle rend, par ligne, tout ce dont `domain.recipes.IngredientLine` a besoin : `product_base_unit`, `packaging_base_quantity`, `packaging_name`, et les quatre colonnes de la mesure préfixées `measure_*`. La construction de l'`IngredientLine` reste dans `application.py`, mais la requête est écrite une seule fois — c'est ce qui évite qu'un écran lise la mesure autrement qu'un autre.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/storage/test_repositories_recipes.py`. Reprendre le helper de base migrée déjà utilisé par `tests/storage/test_repositories.py`.
 
@@ -964,16 +964,16 @@ def test_missing_products_between_ignores_unmatched_and_ignored_lines(conn):
 def test_missing_products_between_scales_by_the_meal_servings(conn): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 Run: `./scripts/test.sh tests/storage/test_repositories_recipes.py -q` → FAIL (`AttributeError: … insert_recipe`).
 
-- [ ] **Step 3: Écrire les dépôts**
+- [x] **Step 3: Écrire les dépôts**
 Section commentée en fin de `repositories.py`. Réutiliser `_insert`, `_update_fields`, `_row`, `_rows`. Les listes blanches de champs (`RECIPE_FIELDS`, `INGREDIENT_FIELDS`, `MEAL_FIELDS`) suivent le motif de `PRODUCT_FIELDS` / `ARTICLE_FIELDS` : un nom de colonne interpolé dans du SQL ne se prend jamais dans une charge utile brute.
 
-- [ ] **Step 4: Vert, puis suite entière**
+- [x] **Step 4: Vert, puis suite entière**
 Run: `./scripts/test.sh tests/storage -q && ./scripts/test.sh -q` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/storage/repositories.py tests/storage/test_repositories_recipes.py
 git commit -m "feat: repositories for recipes, ingredients, measures, aliases and meals"
