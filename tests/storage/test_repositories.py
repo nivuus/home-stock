@@ -271,3 +271,39 @@ def test_list_batches_for_product_reports_the_macro_rates(seeded_conn):
     [row] = repo.list_batches_for_product(seeded_conn, 1)
     assert row["proteins"] == 0.05
     assert row["salt"] == 0.001
+
+
+# --- lot 3 : la cascade ne doit jamais être masquée par une colonne du lot ---
+
+def test_no_query_selects_the_whole_batch_row_next_to_a_resolved_rate():
+    """`SELECT b.*` est interdit dès lors que `batch` porte des nutriments.
+
+    Depuis m004, `batch` a ses propres `kcal_per_base_unit` et ses huit macros.
+    Une requête qui écrit `SELECT b.*, COALESCE(...) AS kcal_per_base_unit`
+    renvoie donc DEUX colonnes du même nom, et `dict(sqlite3.Row)` garde la
+    PREMIÈRE — celle du lot, encore NULL partout. Toutes les calories du stock
+    passeraient à NULL sans qu'aucune exception ne soit levée et sans qu'aucun
+    test existant ne s'en aperçoive : c'est exactement la panne silencieuse
+    que ce test rend impossible. On interdit le motif à la source plutôt que
+    de courir après ses symptômes un site d'appel à la fois.
+    """
+    from pathlib import Path
+
+    component = Path(repo.__file__).resolve().parent.parent
+    offenders = [
+        path.relative_to(component).as_posix()
+        for path in component.rglob("*.py")
+        if "SELECT b.*" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_list_batches_for_product_still_resolves_kcal_after_m004(seeded_conn):
+    """La régression que le piège ci-dessus aurait provoquée, prise sur le fait.
+
+    Le lot porte `kcal_per_base_unit` à NULL ; l'article, lui, a un taux. C'est
+    le taux de l'article qui doit ressortir — pas le NULL du lot.
+    """
+    seeded_conn.execute("UPDATE article SET kcal_per_base_unit = 3.5 WHERE id = 1")
+    [row] = repo.list_batches_for_product(seeded_conn, 1)
+    assert row["kcal_per_base_unit"] == 3.5

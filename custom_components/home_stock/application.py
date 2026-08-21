@@ -295,7 +295,14 @@ class StockManager:
                 return int(row["id"])
             row = conn.execute(
                 # kcal rate: same fallback as add_stock() and consume() (spec 7.4).
-                f"SELECT b.*, a.product_id, {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
+                # b.* is deliberately not used here: since lot 3 (amendment A2),
+                # batch carries its own kcal_per_base_unit/macro columns under
+                # the same names as the resolved article rate selected below,
+                # and sqlite3.Row would silently keep the first (batch's own,
+                # always NULL today) match instead of the resolved one. See
+                # repo.BATCH_COLUMNS_SQL for the full explanation.
+                f"SELECT {repo.BATCH_COLUMNS_SQL}, a.product_id,"
+                f" {repo.KCAL_RATE_SQL} AS kcal_per_base_unit,"
                 f" {repo.MACRO_RATE_SQL}"
                 " FROM batch b"
                 " JOIN article a ON a.id = b.article_id"

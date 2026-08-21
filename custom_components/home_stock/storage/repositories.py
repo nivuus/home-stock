@@ -43,6 +43,22 @@ KCAL_RATE_SQL = "COALESCE(a.kcal_per_base_unit, p.reference_kcal)"
 # the article means no value, and the movement freezes NULL.
 MACRO_RATE_SQL = ", ".join(f"a.{column}" for column in MACRO_COLUMNS)
 
+# Lot 3 (amendment A2) gave `batch` its own kcal_per_base_unit and eight macro
+# columns, so `batch` and `article` now share those nine names. `b.*` used to
+# be safe to combine with KCAL_RATE_SQL/MACRO_RATE_SQL because the names never
+# collided; now sqlite3.Row resolves a name to its FIRST matching column, so
+# `b.*`'s own (still-unused, always-NULL-today) kcal_per_base_unit/macros would
+# silently shadow the resolved article rate that comes right after it in the
+# SELECT list. Spelling out batch's columns instead of `b.*` keeps the rate
+# resolution the only source of truth for those nine names, exactly as before
+# lot 3 — using the batch's own nutrition (when a later lot starts writing it)
+# is a resolution-order decision for that lot to make, not a side effect of
+# this migration's column names.
+BATCH_COLUMNS_SQL = (
+    "b.id, b.article_id, b.location_id, b.remaining, b.initial, b.best_before,"
+    " b.entered_at, b.opened_at, b.price_per_base_unit, b.session_id, b.closed_at"
+)
+
 
 def macro_rates(row: Mapping[str, Any]) -> dict[str, float | None]:
     """The eight macro rates of an already-read row, keyed by column name."""
@@ -257,8 +273,8 @@ def list_articles_for_product(conn, product_id: int) -> list[dict[str, Any]]:
 
 def list_open_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     return _rows(conn.execute(
-        """
-        SELECT b.* FROM batch b JOIN article a ON a.id = b.article_id
+        f"""
+        SELECT {BATCH_COLUMNS_SQL} FROM batch b JOIN article a ON a.id = b.article_id
         WHERE a.product_id = ? AND b.closed_at IS NULL ORDER BY b.id
         """,
         (product_id,)))
@@ -270,7 +286,8 @@ def list_batches_for_product(conn, product_id: int) -> list[dict[str, Any]]:
     (spec 7.4 — generic/produce articles usually carry no rate of their own).
     """
     return _rows(conn.execute(
-        f"SELECT b.*, {KCAL_RATE_SQL} AS kcal_per_base_unit, {MACRO_RATE_SQL},"
+        f"SELECT {BATCH_COLUMNS_SQL}, {KCAL_RATE_SQL} AS kcal_per_base_unit,"
+        f" {MACRO_RATE_SQL},"
         "       a.product_id, a.serving_quantity FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"

@@ -13,6 +13,13 @@ REASON_EXPIRED: Final = "expired"
 REASON_INVENTORY: Final = "inventory"
 REASON_TRANSFER: Final = "transfer"
 REASON_CONVERSION: Final = "conversion"
+# Lot 3. Cuisiner n'est pas consommer : `cooked` deplace la valeur des
+# ingredients vers le plat, donc il rejoint REASONS mais jamais
+# CONSUME_REASONS. Sa place est la DERNIERE du tuple, et un test epingle
+# cet ordre (tests/test_harness.py) : les lots 3 et 5 fusionnent en
+# parallele, et une insertion au milieu decalerait silencieusement des
+# valeurs deja ecrites en base.
+REASON_COOKED: Final = "cooked"
 REASONS: Final = (
     REASON_PURCHASE,
     REASON_CONSUMPTION,
@@ -21,6 +28,7 @@ REASONS: Final = (
     REASON_INVENTORY,
     REASON_TRANSFER,
     REASON_CONVERSION,
+    REASON_COOKED,
 )
 
 # Reasons a "consume" call may legitimately carry — offered by both the
@@ -63,3 +71,19 @@ FOOD_DAY_START_HOUR: Final = 4
 # Twenty-four plates is already a party; past that it is a typo, and the
 # number ends up dividing someone's calories by a hundred.
 MAX_PARTS: Final = 24
+
+# --- lot 3 : recettes, planning, repas --------------------------------------
+MEAL_SLOT_KEYS: Final = ("breakfast", "lunch", "dinner", "snack")
+MEAL_STATES: Final = ("planned", "done", "skipped")
+MATCH_STATES: Final = ("unmatched", "auto", "confirmed", "ignored")
+RECIPE_SOURCES: Final = ("manual", "themealdb", "grocy")
+LEFTOVER_SHELF_LIFE_DAYS: Final = 3
+LEFTOVER_CATEGORY_NAME: Final = "Plats cuisinés"
+LEFTOVER_NAME_PREFIX: Final = "Reste — "
+MAX_SERVINGS: Final = 100.0              # au-delà, c'est une saisie, pas un dîner
+MAX_RECIPE_STEPS: Final = 40
+MAX_RECIPE_INGREDIENTS: Final = 60
+MEAL_HORIZON_DAYS: Final = 7             # la fenêtre de sensor.missing_ingredients
+CONF_RECIPE_AGENT: Final = "recipe_agent"
+CONF_RECIPE_SOURCE_KEY: Final = "recipe_source_key"
+DEFAULT_RECIPE_SOURCE_KEY: Final = "1"
