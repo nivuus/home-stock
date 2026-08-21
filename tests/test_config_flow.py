@@ -1,3 +1,4 @@
+import pytest
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -103,3 +104,47 @@ async def test_the_source_key_reaches_the_client_after_a_reload(hass):
     await hass.async_block_till_done()
     assert entry.runtime_data.recipe_source is not None
     assert entry.runtime_data.recipe_source._key == "9973533"
+
+
+# --- lot 4 ------------------------------------------------------------------
+
+async def test_the_options_flow_offers_the_shopping_list_horizon(hass):
+    """« Ce que je prépare » et « ce pour quoi je fais les courses » ne sont
+    pas forcément la même durée : le planning garde `MEAL_HORIZON_DAYS`, la
+    liste a la sienne."""
+    from custom_components.home_stock.const import (
+        CONF_SHOPPING_LIST_HORIZON_DAYS, DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
+    )
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    keys = {str(key) for key in result["data_schema"].schema}
+    assert CONF_SHOPPING_LIST_HORIZON_DAYS in keys
+
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
+                    CONF_SHOPPING_LIST_HORIZON_DAYS: 14})
+    await hass.async_block_till_done()
+    assert entry.options[CONF_SHOPPING_LIST_HORIZON_DAYS] == 14
+    assert DEFAULT_SHOPPING_LIST_HORIZON_DAYS == 7
+
+
+async def test_the_horizon_is_bounded(hass):
+    """Zéro jour ne réclamerait jamais rien pour un repas ; un an de
+    planning demanderait des courses pour des repas qui n'existent pas."""
+    from custom_components.home_stock.const import CONF_SHOPPING_LIST_HORIZON_DAYS
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with pytest.raises(Exception):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
+                        CONF_SHOPPING_LIST_HORIZON_DAYS: 0})

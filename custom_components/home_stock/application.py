@@ -28,6 +28,7 @@ from .const import (
     LEFTOVER_NAME_PREFIX,
     LEFTOVER_SHELF_LIFE_DAYS,
     MATCH_STATES,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     MEAL_HORIZON_DAYS,
     MEAL_SLOT_KEYS,
     MAX_PARTS,
@@ -45,6 +46,13 @@ from .const import (
     RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
+from .domain.shoppinglist import (
+    Claim,
+    WantedItem,
+    item_quantity,
+    reconcile,
+    shortage_claim,
+)
 from .domain.correction import (
     CorrectionError,
     check_correctable,
@@ -1969,6 +1977,220 @@ class StockManager:
                     conn, batch_id, 0.0 if closes else after,
                     closed_at=moment if closes else None)
         return repo.insert_movement(conn, batch_id=batch_id, **line)
+
+    # --- § 7 : la liste de courses ----------------------------------------
+
+    def shopping_list(self, *, store_id: int | None = None,
+                      include_checked: bool = True) -> list[dict[str, Any]]:
+        """La liste ouverte, dans l'ordre du magasin où l'on est."""
+        return repo.list_items(self.db.read(), store_id=store_id,
+                               include_checked=include_checked)
+
+    def list_estimate(self) -> dict[str, Any]:
+        """« Ça va faire combien ? », et rien d'autre.
+
+        `confidence` est la proportion de lignes réellement chiffrées, dite
+        en clair plutôt que noyée dans un total. Ce chiffre n'entre dans
+        aucune comptabilité : il n'est pas un prix, c'est une prévision.
+        """
+        rows = repo.list_estimate_rows(self.db.read())
+        priced = [row for row in rows if row["estimate"] is not None]
+        total = len(rows)
+        return {
+            "amount": round(sum(row["estimate"] for row in priced), 2),
+            "confidence": 1.0 if not total else round(len(priced) / total, 4),
+            "priced": len(priced),
+            "total": total,
+        }
+
+    def add_to_shopping_list(self, *, product_id: int | None = None,
+                             free_text: str | None = None,
+                             quantity: float | None = None,
+                             note: str | None = None,
+                             detail: str | None = None,
+                             idempotency_key: str | None = None,
+                             moment: str | None = None) -> dict[str, Any]:
+        """Poser une ligne à la main. La seule origine humaine des quatre.
+
+        Un produit déjà sur la liste gagne une revendication `manual`, il ne
+        gagne pas une deuxième ligne : l'index UNIQUE partiel de
+        `shopping_list_item` la refuserait de toute façon, et une ligne en
+        double est ce qui a produit 35 doublons dans Grocy en avril 2026.
+        """
+        if product_id is None and not free_text:
+            raise ValueError("a shopping list line needs a product or a text")
+        when = moment or _now()
+        with self.db.write() as conn:
+            if idempotency_key:
+                existing = conn.execute(
+                    "SELECT id FROM shopping_list_item WHERE note = ?",
+                    (f"key:{idempotency_key}",)).fetchone()
+                if existing is not None:
+                    return {"item_id": int(existing["id"]), "created": False}
+            item = (repo.open_item_for_product(conn, product_id)
+                    if product_id is not None else None)
+            created = item is None
+            if created:
+                item_id = repo.insert_list_item(
+                    conn, added_at=when, product_id=product_id,
+                    free_text=free_text, quantity=quantity,
+                    note=note or (f"key:{idempotency_key}" if idempotency_key else None))
+            else:
+                item_id = int(item["id"])
+                if quantity is not None:
+                    repo.update_list_item(conn, item_id, {"quantity": quantity})
+            repo.set_claim(conn, item_id=item_id, origin="manual",
+                           quantity=quantity, detail=detail or "ajouté à la main",
+                           claimed_at=when)
+            if not created and quantity is not None:
+                claims = [Claim(row["origin"], row["quantity"], row["detail"])
+                          for row in repo.claims_of(conn, item_id)]
+                repo.update_list_item(conn, item_id,
+                                      {"quantity": item_quantity(claims)})
+            return {"item_id": item_id, "created": created}
+
+    def check_list_item(self, item_id: int, *, at: str | None = None,
+                        session_id: int | None = None,
+                        line_id: int | None = None) -> None:
+        """« Je l'ai », jamais « c'est en stock » (§ 7.5)."""
+        with self.db.write() as conn:
+            repo.check_list_item(conn, item_id, at=at or _now(),
+                                 session_id=session_id, line_id=line_id)
+
+    def uncheck_list_item(self, item_id: int) -> None:
+        with self.db.write() as conn:
+            repo.uncheck_list_item(conn, item_id)
+
+    def remove_list_item(self, item_id: int, *, at: str | None = None) -> None:
+        with self.db.write() as conn:
+            repo.remove_list_item(conn, item_id, at=at or _now())
+
+    def update_list_item(self, item_id: int, fields: Mapping[str, Any]) -> None:
+        with self.db.write() as conn:
+            repo.update_list_item(conn, item_id, fields)
+
+    def reconcile_shopping_list(
+            self, *, today: date,
+            horizon_days: int = DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
+            moment: str | None = None) -> dict[str, Any]:
+        """Les quatre origines contre la liste réelle, en UNE transaction.
+
+        Les lectures et `reconcile()` se font HORS verrou ; un seul
+        `db.write()` applique le `Plan`. `Database._lock` n'est pas
+        réentrant : aucune des méthodes appelées ici ne peut ouvrir sa
+        propre transaction.
+
+        Aucune ligne de ce code ne connaît le mot « pile ». Le lot 5 a fait
+        de la CR2032 de rechange un `product` avec `edible = 0` : une
+        rechange sous son seuil est un produit sous son seuil, et sa ligne
+        ne se distingue que par son rayon.
+        """
+        when = moment or _now()
+        conn = self.db.read()
+        existing = repo.list_items(conn, include_removed=True)
+        session = repo.current_session(conn)
+        session_open = session is not None and session["state"] != "done"
+        wanted = self._wanted_items(conn, today=today, horizon_days=horizon_days,
+                                    existing=existing)
+        plan = reconcile(wanted=wanted, existing=existing,
+                         session_open=session_open)
+        due = [] if session_open else repo.due_recurring(conn, today.isoformat())
+
+        with self.db.write() as write_conn:
+            for item_id in plan.to_remove:
+                repo.remove_list_item(write_conn, item_id, at=when)
+            for change in plan.to_update:
+                repo.update_list_item(write_conn, change["item_id"],
+                                      {"quantity": change["quantity"]})
+            for drop in plan.claims_to_drop:
+                repo.drop_claim(write_conn, item_id=drop["item_id"],
+                                origin=drop["origin"])
+            for addition in plan.claims_to_add:
+                claim = addition["claim"]
+                repo.set_claim(write_conn, item_id=addition["item_id"],
+                               origin=claim.origin, quantity=claim.quantity,
+                               detail=claim.detail, claimed_at=when)
+            for item in plan.to_create:
+                item_id = repo.insert_list_item(
+                    write_conn, added_at=when, product_id=item.product_id,
+                    free_text=item.free_text,
+                    quantity=item_quantity(item.claims))
+                for claim in item.claims:
+                    repo.set_claim(write_conn, item_id=item_id, origin=claim.origin,
+                                   quantity=claim.quantity, detail=claim.detail,
+                                   claimed_at=when)
+            # Une récurrence n'est repoussée qu'une fois sa ligne réellement
+            # posée : marquer avant l'écriture perdrait le café pour trois
+            # semaines si la transaction échouait.
+            for row in due:
+                repo.mark_recurring_added(write_conn, row["id"], today.isoformat())
+            open_lines = len(repo.list_items(write_conn, include_checked=True))
+
+        return {"created": len(plan.to_create), "updated": len(plan.to_update),
+                "removed": len(plan.to_remove), "open": open_lines}
+
+    def _wanted_items(self, conn, *, today: date, horizon_days: int,
+                      existing: Sequence[Mapping[str, Any]]) -> list[WantedItem]:
+        """Les quatre origines, fusionnées par produit puis par texte libre."""
+        claimed: dict[int, set[str]] = {}
+        for row in existing:
+            if row["product_id"] is None or row["removed_at"] is not None:
+                continue
+            claimed.setdefault(int(row["product_id"]), set()).update(
+                claim["origin"] for claim in row.get("claims") or ())
+
+        by_product: dict[int, list[Claim]] = {}
+        by_text: dict[str, list[Claim]] = {}
+
+        # 1. les ruptures, hystérésis comprise — et les produits qui avaient
+        #    une revendication, pour savoir si elle se maintient.
+        rows = {int(row["product_id"]): row for row in repo.shortage_rows(conn)}
+        previously = [product_id for product_id, origins in claimed.items()
+                      if "shortage" in origins and product_id not in rows]
+        for row in repo.levels_for_products(conn, previously):
+            rows.setdefault(int(row["product_id"]), row)
+        for product_id, row in rows.items():
+            claim = shortage_claim(
+                row, already_claimed="shortage" in claimed.get(product_id, set()))
+            if claim is not None:
+                by_product.setdefault(product_id, []).append(claim)
+
+        # 2. le planning, déjà mis à l'échelle des convives.
+        end = (today + timedelta(days=horizon_days)).isoformat()
+        for row in repo.missing_products_between(conn, today.isoformat(), end):
+            missing = (row["needed"] or 0.0) - (row["available"] or 0.0)
+            by_product.setdefault(int(row["product_id"]), []).append(
+                Claim("meal_plan", missing if missing > 0 else None,
+                      "repas prévus"))
+
+        # 3. les récurrences arrivées à échéance.
+        for row in repo.due_recurring(conn, today.isoformat()):
+            claim = Claim("recurring", row["quantity"],
+                          f"tous les {row['every_days']} j")
+            if row["product_id"] is not None:
+                by_product.setdefault(int(row["product_id"]), []).append(claim)
+            else:
+                by_text.setdefault(row["free_text"], []).append(claim)
+
+        # 4. `manual` ne se déduit de rien : elle vit en base, et
+        #    `reconcile()` ne la retire jamais (règle 5).
+        for row in existing:
+            if row["removed_at"] is not None or row["checked_at"] is not None:
+                continue
+            for claim in row.get("claims") or ():
+                if claim["origin"] != "manual":
+                    continue
+                kept = Claim("manual", claim["quantity"], claim["detail"])
+                if row["product_id"] is not None:
+                    by_product.setdefault(int(row["product_id"]), []).append(kept)
+                elif row["free_text"]:
+                    by_text.setdefault(row["free_text"], []).append(kept)
+
+        wanted = [WantedItem(product_id=product_id, claims=tuple(claims))
+                  for product_id, claims in by_product.items()]
+        wanted += [WantedItem(free_text=text, claims=tuple(claims))
+                   for text, claims in by_text.items()]
+        return wanted
 
     # --- § 12.4 : corriger un prix ----------------------------------------
 

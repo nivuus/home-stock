@@ -17,8 +17,10 @@ from .const import (
     CONF_EXPIRATION_ALERT_DAYS,
     CONF_RECIPE_AGENT,
     CONF_RECIPE_SOURCE_KEY,
+    CONF_SHOPPING_LIST_HORIZON_DAYS,
     DEFAULT_EXPIRATION_ALERT_DAYS,
     DEFAULT_RECIPE_SOURCE_KEY,
+    DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     DOMAIN,
 )
 from .validators import bounded_text
@@ -55,6 +57,11 @@ class HomeStockOptionsFlow(OptionsFlow):
         options = self.config_entry.options
         current = options.get(CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS)
         source_key = options.get(CONF_RECIPE_SOURCE_KEY, DEFAULT_RECIPE_SOURCE_KEY)
+        # Une fenêtre distincte de MEAL_HORIZON_DAYS, et pas par symétrie :
+        # « ce que je prépare » et « ce pour quoi je fais les courses » ne
+        # sont pas forcément la même durée. Le planning garde la sienne.
+        horizon = options.get(CONF_SHOPPING_LIST_HORIZON_DAYS,
+                              DEFAULT_SHOPPING_LIST_HORIZON_DAYS)
         # The agent carries a SUGGESTED value, not a default. `EntitySelector`
         # refuses the empty string as an entity id, so a `default=""` would
         # make "no agent" unrepresentable — and clearing the field would fail
@@ -75,5 +82,7 @@ class HomeStockOptionsFlow(OptionsFlow):
                     EntitySelector(EntitySelectorConfig(domain="conversation")),
                 vol.Optional(CONF_RECIPE_SOURCE_KEY, default=source_key):
                     vol.All(TextSelector(), bounded_text),
+                vol.Required(CONF_SHOPPING_LIST_HORIZON_DAYS, default=horizon):
+                    vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
             }),
         )

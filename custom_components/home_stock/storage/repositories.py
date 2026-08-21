@@ -1812,6 +1812,27 @@ def mark_recurring_added(conn, recurring_id: int, on: str) -> None:
 
 # --- l'estimation du panier -------------------------------------------------
 
+def levels_for_products(conn, product_ids: Sequence[int]) -> list[dict[str, Any]]:
+    """Le seuil et le stock de ces produits, seuil franchi ou non.
+
+    `shortage_rows` ne rend que ce qui est SOUS le seuil : appliquer une
+    hystérésis demande de revoir aussi ce qui vient de repasser au-dessus.
+    Un produit disparu ou désactivé n'est simplement pas dans la réponse —
+    et une revendication sans mesure se MAINTIENT (§ 7.3).
+    """
+    if not product_ids:
+        return []
+    marks = ", ".join("?" for _ in product_ids)
+    return _rows(conn.execute(
+        "SELECT p.id AS product_id, p.name AS product_name, p.base_unit,"
+        "       p.min_quantity, COALESCE(SUM(bt.remaining), 0) AS quantity"
+        " FROM product p"
+        " LEFT JOIN article a ON a.product_id = p.id"
+        " LEFT JOIN batch bt ON bt.article_id = a.id AND bt.closed_at IS NULL"
+        f" WHERE p.id IN ({marks}) AND p.active = 1"
+        " GROUP BY p.id", tuple(product_ids)))
+
+
 def _estimate_articles(conn, product_id: int) -> list[dict[str, Any]]:
     """Les articles de ce produit, du plus habituel au moins habituel.
 
