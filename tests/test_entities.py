@@ -694,3 +694,64 @@ async def test_the_goals_blueprint_is_a_valid_automation_nobody_installs(hass):
         variables=substituted["variables"], parse_result=False)
     assert "le sel aujourd'hui" in " ".join(rendu.split())
     assert "l'énergie en moyenne sur la semaine" in " ".join(rendu.split())
+
+
+# --- lot 6 : la forme dont dépend la ligne de synthèse de la tablette -------
+
+def _seed_two_expiring_batches(manager):
+    """Deux lots distincts dont la DLC tombe demain."""
+    def _seed() -> None:
+        with manager.db.write() as conn:
+            location_id = repo.insert_location(conn, name="Frigo", kind="fridge")
+            yaourt = repo.insert_product(conn, name="Yaourt", base_unit="piece")
+            lait = repo.insert_product(conn, name="Lait", base_unit="ml")
+            yaourt_article = repo.insert_article(conn, product_id=yaourt)
+            lait_article = repo.insert_article(conn, product_id=lait)
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        for article_id, quantity in ((yaourt_article, 4), (lait_article, 1000)):
+            manager.add_stock(article_id=article_id, quantity=quantity,
+                              location_id=location_id, best_before=tomorrow,
+                              occurred_at="2026-08-18T10:00:00")
+    return _seed
+
+
+async def test_the_two_todo_states_are_counts(hass, loaded):
+    """L'état d'une entité `todo` est le nombre d'éléments NON COCHÉS.
+
+    `wallpanel-app` compte dessus : sa ligne de synthèse affiche
+    « {etat} produit{s} à consommer », et un `binary_sensor` ne pourrait
+    produire qu'un texte sans compte — or le compte est ce qu'on lit de loin.
+    Rien ne garantissait cette forme jusqu'ici ; ce test la tient."""
+    manager = loaded.runtime_data.manager
+    await hass.async_add_executor_job(_seed_two_expiring_batches(manager))
+    await loaded.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("todo.home_stock_expirations").state == "2"
+    assert hass.states.get("todo.home_stock_shopping").state == "0"
+
+
+async def test_a_ticked_shopping_line_leaves_the_count(hass, loaded):
+    """Cocher décrémente l'état — sinon la ligne de synthèse mentirait juste
+    après le geste qui vient de la corriger."""
+    manager = loaded.runtime_data.manager
+
+    def _seed() -> int:
+        with manager.db.write() as conn:
+            product_id = repo.insert_product(conn, name="Lait", base_unit="ml")
+        return manager.add_to_shopping_list(product_id=product_id)["item_id"]
+
+    item_id = await hass.async_add_executor_job(_seed)
+    await loaded.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get("todo.home_stock_shopping").state == "1"
+
+    await hass.services.async_call(
+        "todo", "update_item",
+        {"entity_id": "todo.home_stock_shopping", "item": str(item_id),
+         "status": "completed"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("todo.home_stock_shopping").state == "0"

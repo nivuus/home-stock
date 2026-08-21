@@ -235,3 +235,48 @@ async def test_a_leftover_batch_fires_the_expiration_event(hass, setup_entry):
     state = hass.states.get("event.home_stock_expiration")
     assert state.attributes["event_type"] == "approaching"
     assert state.attributes["count"] >= 1
+
+
+# --- lot 6 : ce que la tablette et le vocal lisent d'un coup ----------------
+
+async def _plan_a_dinner(hass, entry):
+    """Planifie un dîner aujourd'hui et rend son identifiant."""
+    manager = entry.runtime_data.manager
+    today = await hass.async_add_executor_job(_today)
+    posted = await hass.async_add_executor_job(
+        lambda: manager.plan_meal(day=today, slot_key="dinner", note="Restaurant"))
+    await _refresh(hass, entry)
+    return posted["meal_id"]
+
+
+async def test_next_meal_publishes_its_meal_id(hass, setup_entry):
+    """Ce que la tablette et le vocal ont besoin de savoir pour VALIDER ce
+    qu'ils viennent d'annoncer, sans un second aller-retour."""
+    entry = await setup_entry()
+    meal_id = await _plan_a_dinner(hass, entry)
+    state = hass.states.get(NEXT)
+    assert state.attributes["meal_id"] == meal_id
+
+
+async def test_next_meal_without_a_meal_has_a_none_meal_id(hass, setup_entry):
+    """`None`, JAMAIS `0`. Un zéro ici se lirait comme le repas numéro zéro,
+    exactement l'argument qui a déjà fait choisir l'état vide plutôt que `0`
+    pour le nom du plat."""
+    await setup_entry()
+    state = hass.states.get(NEXT)
+    assert state.state in ("unknown", "None", "")
+    assert state.attributes["meal_id"] is None
+    # La clé EXISTE quand même : un template qui teste `is not none` doit
+    # pouvoir le faire sans que l'attribut apparaisse et disparaisse.
+    assert "meal_id" in state.attributes
+
+
+async def test_next_meal_keeps_its_four_older_attributes(hass, setup_entry):
+    """Garde-fou de non-régression : la tablette lira `day`, `slot` et
+    `recipe_id` DANS LA MÊME lecture. Un renommage silencieux les casserait
+    toutes les trois d'un coup."""
+    entry = await setup_entry()
+    await _plan_a_dinner(hass, entry)
+    attrs = hass.states.get(NEXT).attributes
+    assert set(attrs) >= {"day", "slot", "recipe_id", "missing_ingredients",
+                          "meal_id"}
