@@ -103,6 +103,9 @@
    },
    "list_estimate": {
     "name": "Estimation du panier"
+   },
+   "receipts_pending": {
+    "name": "Tickets à traiter"
    }
   },
   "binary_sensor": {

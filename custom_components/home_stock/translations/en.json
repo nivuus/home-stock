@@ -103,6 +103,9 @@
    },
    "list_estimate": {
     "name": "Basket estimate"
+   },
+   "receipts_pending": {
+    "name": "Receipts to handle"
    }
   },
   "binary_sensor": {

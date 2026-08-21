@@ -24,6 +24,7 @@ from .const import (
     DOMAIN,
 )
 from .domain.foodday import food_day_bounds
+from .storage import repositories as repo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ class HomeStockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 today=datetime.now(tz).date(), horizon_days=horizon)
             data["shopping_list"] = self.manager.shopping_list()
             data["list_estimate"] = self.manager.list_estimate()
+            data["receipts"] = repo.pending_receipts(self.manager.db.read())
             return data
 
         data = await self.hass.async_add_executor_job(_read)

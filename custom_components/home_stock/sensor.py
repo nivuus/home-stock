@@ -499,6 +499,35 @@ class ListEstimateSensor(HomeStockEntity, SensorEntity):
         }
 
 
+class ReceiptsPendingSensor(HomeStockEntity, SensorEntity):
+    """Les tickets qui doivent encore une réponse : à lire, ou dont la
+    lecture a échoué. La dernière erreur est en français, affichable telle
+    quelle — « Unknown error » sur un parking n'aide personne."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: HomeStockCoordinator) -> None:
+        super().__init__(coordinator, "receipts_pending", ENTITY_ID_FORMAT)
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data["receipts"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self.coordinator.data["receipts"]
+        failed = [row for row in rows if row["error"]]
+        return {
+            "last_error": failed[0]["error"] if failed else None,
+            "failed": len(failed),
+            "receipts": [
+                {"id": row["id"], "state": row["state"],
+                 "captured_at": row["captured_at"], "error": row["error"]}
+                for row in rows
+            ],
+        }
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -521,4 +550,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry,
         WarrantyNextSensor(coordinator),
         ShoppingListSensor(coordinator),
         ListEstimateSensor(coordinator),
+        ReceiptsPendingSensor(coordinator),
     ])

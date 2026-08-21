@@ -1254,3 +1254,6 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     # in either direction is a cycle. Lot 5 touches exactly these two lines.
     from .websocket_batteries import async_register_battery_commands
     async_register_battery_commands(hass)
+    # Idem pour le lot 4 : deux lignes ici, tout le reste dans son module.
+    from .websocket_receipts import async_register_receipt_commands
+    async_register_receipt_commands(hass)
