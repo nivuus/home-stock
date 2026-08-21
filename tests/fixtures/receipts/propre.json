@@ -1,0 +1,38 @@
+{
+ "store": "Leclerc",
+ "purchased_on": "2026-08-21",
+ "currency": "EUR",
+ "total": 12.4,
+ "lines": [
+  {
+   "label": "LT DEMI ECR 1L",
+   "quantity": 2,
+   "unit_price": 1.05,
+   "total_price": 2.1
+  },
+  {
+   "label": "PATES PANZANI 500G",
+   "quantity": 1,
+   "unit_price": 1.3,
+   "total_price": 1.3
+  },
+  {
+   "label": "YAOURT NATURE X4",
+   "quantity": 1,
+   "unit_price": 2.0,
+   "total_price": 2.0
+  },
+  {
+   "label": "CAFE MOULU 250G",
+   "quantity": 1,
+   "unit_price": 4.0,
+   "total_price": 4.0
+  },
+  {
+   "label": "PAIN COMPLET",
+   "quantity": 1,
+   "unit_price": 3.0,
+   "total_price": 3.0
+  }
+ ]
+}
