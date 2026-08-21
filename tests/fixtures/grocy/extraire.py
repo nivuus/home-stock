@@ -159,6 +159,14 @@ def main(source: str, destination: str) -> int:
             rows = [dict(row) for row in
                     conn.execute(f"SELECT {selection} FROM {table} ORDER BY id")]
             if table == "recipes":
+                # Les 166 copies fantômes sont sorties À PART, et pas jetées :
+                # sans elles dans la table, le filtre `type IN ('normal','1')`
+                # n'aurait rien à écarter, et le test qui prétend le vérifier
+                # mesurerait du vide. Elles n'ont aucune description, donc
+                # elles ne coûtent rien.
+                fantomes = [row for row in rows
+                            if str(row["type"]) not in ("normal", "1")]
+                _dump(target / "recipes_phantoms.json", fantomes)
                 rows = [row for row in rows if str(row["type"]) in ("normal", "1")]
                 inline = _stub_descriptions(rows)
                 _dump(target / "inline_images.json", inline)

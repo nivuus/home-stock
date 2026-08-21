@@ -204,7 +204,7 @@ _FIXTURES_GROCY = (
     "meal_plan_sections", "shopping_list", "quantity_unit_conversions",
     "quantity_units", "locations", "stock_log", "chores_log", "chores",
     "product_groups", "product_barcodes", "userfields", "userfield_values",
-    "shopping_locations", "inline_images",
+    "shopping_locations", "inline_images", "recipes_phantoms",
 )
 
 # Les tables vides de Grocy : SELECT * ne donne pas leurs colonnes, et une
@@ -263,6 +263,12 @@ def grocy_reel_db(tmp_path, grocy_reel) -> str:
     parce que la vraie base l'avait ».
     """
     chemin = tmp_path / "grocy_reel.db"
-    _build_grocy_db(chemin, {nom: lignes for nom, lignes in grocy_reel.items()
-                             if nom != "inline_images"})
+    tables = {nom: lignes for nom, lignes in grocy_reel.items()
+              if nom not in ("inline_images", "recipes_phantoms")}
+    # Les 166 copies fantômes vivent dans la MÊME table `recipes` que les 102
+    # vraies : c'est la seule façon que le filtre de l'import ait quelque
+    # chose à écarter. Rangées à part dans les fixtures pour que les tests de
+    # volumétrie continuent de compter 102 recettes.
+    tables["recipes"] = tables["recipes"] + grocy_reel["recipes_phantoms"]
+    _build_grocy_db(chemin, tables)
     return str(chemin)
