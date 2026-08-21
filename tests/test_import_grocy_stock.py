@@ -7,12 +7,17 @@ sept prix aberrants sans ouvrir une base.
 import pytest
 
 from custom_components.home_stock.grocy.units import base_unit
+from custom_components.home_stock.import_grocy import import_catalog
 from custom_components.home_stock.import_grocy_stock import (
     CatalogueEntry,
     Locations,
     StockImportError,
+    import_stock,
     plan_batches,
 )
+from custom_components.home_stock.storage import repositories as repo
+from custom_components.home_stock.storage.database import Database
+from custom_components.home_stock.storage.migrations import apply_migrations
 
 # Le jour de la bascule, tel que les fixtures l'ont figé.
 AUJOURD_HUI = "2026-08-21"
@@ -47,6 +52,28 @@ def _catalogue(grocy_reel, *, cree_avant: str | None = None
             default_location_id=_LOCATIONS_HOME.get(ligne["location_id"]),
         )
     return catalogue
+
+
+@pytest.fixture
+def db(tmp_path):
+    database = Database(str(tmp_path / "home_stock.db"))
+    database.connect()
+    with database.write() as conn:
+        apply_migrations(conn)
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def db_catalogue(db, grocy_reel_db):
+    """La base après le REJEU du catalogue — geste 6 de la procédure.
+
+    L'import du stock ne tourne jamais sur une base vide : il tourne après
+    l'import du catalogue, et c'est cet ordre-là qu'on teste. Un catalogue
+    fabriqué à la main dans le test ne prouverait rien de cet ordre.
+    """
+    import_catalog(db, grocy_reel_db, apply=True)
+    return db
 
 
 @pytest.fixture
@@ -387,3 +414,131 @@ def test_every_batch_carries_a_grocy_reference(lignes_reelles, catalogue_reel,
     refs = {l.external_ref for l in lots}
     assert len(refs) == 108
     assert all(r.startswith("grocy:stock:") for r in refs)
+
+
+# --- écriture ---------------------------------------------------------------
+#
+# Tous les tests qui suivent traversent un import complet et portent donc
+# --timeout=60 : Database._lock n'est PAS réentrant, deux db.write() imbriqués
+# figent le processus sans lever, et un test gelé n'échoue jamais tout seul.
+
+def _empreinte(db) -> list[tuple]:
+    """De quoi dire qu'un second passage n'a rien changé."""
+    conn = db.read()
+    return [tuple(row) for row in conn.execute(
+        "SELECT id, article_id, location_id, remaining, initial, best_before,"
+        "       entered_at, opened_at, price_per_base_unit, closed_at,"
+        "       external_ref FROM batch ORDER BY id")]
+
+
+def test_a_dry_run_writes_nothing(db_catalogue, grocy_reel_db):
+    rapport = import_stock(db_catalogue, grocy_reel_db, apply=False)
+    assert rapport.batches == 108
+    assert repo.stock_rows(db_catalogue.read()) == []
+
+
+def test_a_dry_run_reports_the_same_anomalies_as_a_real_run(db_catalogue,
+                                                            grocy_reel_db):
+    """C'est tout l'intérêt de le lancer avant : le rapport de simulation doit
+    être celui qu'on lira après. import_grocy.py du lot 0 tient déjà cette
+    promesse ; elle ne se relâche pas ici."""
+    sec = import_stock(db_catalogue, grocy_reel_db, apply=False)
+    vrai = import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert sec.anomalies == vrai.anomalies
+
+
+def test_apply_writes_a_hundred_and_eight_batches(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    conn = db_catalogue.read()
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM batch WHERE external_ref IS NOT NULL"
+    ).fetchone()["n"] == 108
+
+
+def test_every_batch_carries_its_grocy_reference(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    refs = {row["external_ref"] for row in db_catalogue.read().execute(
+        "SELECT external_ref FROM batch WHERE external_ref IS NOT NULL")}
+    assert all(ref.startswith("grocy:stock:") for ref in refs)
+    assert len(refs) == 108        # l'index unique partiel tient
+
+
+def test_one_purchase_movement_per_batch(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    conn = db_catalogue.read()
+    lignes = conn.execute(
+        "SELECT idempotency_key FROM movement WHERE reason = 'purchase'"
+        " AND idempotency_key LIKE 'grocy:stock:%'").fetchall()
+    assert len(lignes) == 108
+
+
+def test_the_three_totals_do_not_move(db_catalogue, grocy_reel_db):
+    """C6, prouvé mécaniquement. Un purchase n'entre jamais dans
+    totals_between : ni kcal_total, ni cost_total, ni cost_waste_total."""
+    avant = repo.totals_between(db_catalogue.read())
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    apres = repo.totals_between(db_catalogue.read())
+    assert avant == apres
+
+
+def test_entry_movements_carry_no_kcal_and_no_cost(db_catalogue, grocy_reel_db):
+    """Aucun capteur ne les lit sur une entrée, et un chiffre que personne ne
+    lit finit par être cru."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    for row in db_catalogue.read().execute(
+            "SELECT kcal, cost FROM movement WHERE reason = 'purchase'"
+            " AND idempotency_key LIKE 'grocy:stock:%'"):
+        assert row["kcal"] is None and row["cost"] is None
+
+
+def test_a_second_run_changes_nothing(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    empreinte = _empreinte(db_catalogue)
+    second = import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert second.batches == 0
+    assert second.skipped == 108
+    assert _empreinte(db_catalogue) == empreinte
+
+
+def test_a_replay_does_not_undo_a_real_consumption(db_catalogue, grocy_reel_db):
+    """LE test de la rejouabilité. On a mangé depuis l'import ; un second
+    passage qui remettrait remaining = initial défferait une consommation
+    réelle SANS LAISSER DE TRACE — et movement est en ajout seul, donc on ne
+    pourrait même pas la retrouver."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    with db_catalogue.write() as conn:
+        lot = conn.execute(
+            "SELECT id, remaining FROM batch WHERE external_ref IS NOT NULL"
+            " AND remaining > 10 ORDER BY id LIMIT 1").fetchone()
+        repo.set_batch_remaining(conn, lot["id"], lot["remaining"] - 10)
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    apres = db_catalogue.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (lot["id"],)).fetchone()
+    assert apres["remaining"] == lot["remaining"] - 10
+
+
+def test_the_fridge_is_finally_a_fridge(db_catalogue, grocy_reel_db):
+    """Défaut hérité du lot 0 : l'import du catalogue mappe location.kind sur
+    is_freezer, et Grocy n'a pas de drapeau « réfrigérateur ». « Frigo » est
+    donc enregistré en pantry dans la base de production. Corrigé ici PAR NOM
+    EXACT, une seule ligne, et rapporté. Aucun autre nom n'est deviné."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    row = db_catalogue.read().execute(
+        "SELECT kind FROM location WHERE name = 'Frigo'").fetchone()
+    assert row["kind"] == "fridge"
+
+
+def test_no_other_location_name_is_guessed(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    kinds = {row["name"]: row["kind"] for row in db_catalogue.read().execute(
+        "SELECT name, kind FROM location")}
+    assert kinds["Congélateur"] == "freezer"
+    assert kinds["Placard"] == "pantry"
+    assert kinds["Autre"] == "pantry"
+
+
+def test_the_import_never_opens_a_second_transaction(db_catalogue, grocy_reel_db):
+    """Database._lock n'est pas réentrant : deux db.write() imbriqués figent
+    le processus SANS lever. Ce test ne peut donc pas échouer proprement — il
+    expire. C'est pour lui que --timeout=60 est sur toute la suite."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)     # doit rendre la main

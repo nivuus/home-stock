@@ -59,7 +59,7 @@ TABLES: dict[str, tuple[str, ...] | None] = {
     "stock": None,
     "products": (
         "id", "name", "active", "location_id", "qu_id_stock", "qu_id_purchase",
-        "calories", "product_group_id", "picture_file_name",
+        "calories", "product_group_id", "picture_file_name", "min_stock_amount",
         "not_check_stock_fulfillment_for_recipes",
         "default_best_before_days_after_open", "row_created_timestamp",
     ),
@@ -86,6 +86,20 @@ TABLES: dict[str, tuple[str, ...] | None] = {
         "row_created_timestamp",
     ),
     "chores": ("id", "name", "period_type"),
+    # Ce que l'import du CATALOGUE (lot 0) lit. Les fixtures servent aussi à
+    # rejouer la chaîne complète — catalogue puis stock — parce que c'est
+    # exactement l'ordre de la bascule, et qu'un import de stock testé contre
+    # un catalogue fabriqué à la main ne prouverait rien de cet ordre.
+    "product_groups": ("id", "name", "active"),
+    "product_barcodes": (
+        "id", "product_id", "barcode", "qu_id", "amount", "last_price",
+    ),
+    "userfields": ("id", "entity", "name"),
+    "userfield_values": ("id", "field_id", "object_id", "value"),
+    # Vide chez Grocy : rien pour amorcer l'ordre des rayons du lot 4, et on
+    # n'en fabrique pas. Extraite quand même pour que le test puisse le
+    # PROUVER au lieu de le supposer.
+    "shopping_locations": None,
 }
 
 DATA_URI = re.compile(r"(data:image/[a-zA-Z0-9.+-]+;base64,)([A-Za-z0-9+/=]+)")
@@ -152,6 +166,13 @@ def main(source: str, destination: str) -> int:
     finally:
         conn.close()
     return 0
+
+
+# Les colonnes d'une table vide : SELECT * ne les donne pas, et une table
+# absente du schéma reconstruit ferait échouer une lecture légitime.
+EMPTY_TABLE_COLUMNS = {
+    "shopping_locations": ("id", "name"),
+}
 
 
 def _dump(path: Path, payload: list[dict]) -> None:

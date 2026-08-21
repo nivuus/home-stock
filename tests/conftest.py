@@ -203,8 +203,13 @@ _FIXTURES_GROCY = (
     "recipes", "recipes_pos", "stock", "products", "meal_plan",
     "meal_plan_sections", "shopping_list", "quantity_unit_conversions",
     "quantity_units", "locations", "stock_log", "chores_log", "chores",
-    "inline_images",
+    "product_groups", "product_barcodes", "userfields", "userfield_values",
+    "shopping_locations", "inline_images",
 )
+
+# Les tables vides de Grocy : SELECT * ne donne pas leurs colonnes, et une
+# table absente du schéma reconstruit ferait échouer une lecture légitime.
+_COLONNES_TABLES_VIDES = {"shopping_locations": ("id", "name")}
 
 
 @pytest.fixture(scope="session")
@@ -233,9 +238,10 @@ def _build_grocy_db(path, tables: dict[str, list[dict]]) -> None:
     conn = sqlite3.connect(str(path))
     try:
         for nom, lignes in tables.items():
-            if not lignes:
+            colonnes = list(lignes[0]) if lignes else list(
+                _COLONNES_TABLES_VIDES.get(nom, ()))
+            if not colonnes:
                 continue
-            colonnes = list(lignes[0])
             declaration = ", ".join(
                 f'"{col}" {_affinity(l[col] for l in lignes)}' for col in colonnes)
             conn.execute(f'CREATE TABLE "{nom}" ({declaration})')
