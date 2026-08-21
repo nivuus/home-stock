@@ -139,7 +139,7 @@ Le lot 2bis (`docs/superpowers/specs/2026-08-21-home-stock-lot2bis-design.md`) e
 
 **Pourquoi `m006` et pas `m007`.** L'état réel de `storage/migrations/` est `m001` … `m005` : le lot 5, fusionné avant celui-ci, a pris le premier numéro libre. Le lot 2bis prendra `m007`. Un dépassement de version saute une migration **définitivement** et **sans bruit** (`apply_migrations` ne redescend jamais).
 
-- [ ] **Step 1: Écrire les tests de la migration**
+- [x] **Step 1: Écrire les tests de la migration**
 
 Lire d'abord le haut de `tests/storage/test_migrations.py` pour reprendre les helpers déjà présents (`_migrated`, `_migrated_to`) plutôt que d'en écrire d'autres. Ajouter **à la fin** du fichier :
 
@@ -315,12 +315,12 @@ def test_m006_applies_to_a_copy_of_the_real_lot5_database(tmp_path):
     assert migrations.apply_migrations(conn) == 6      # rejouée : sans effet
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: FAIL — `ImportError: cannot import name 'm006_shopping'`
 
-- [ ] **Step 3: Écrire `m006_shopping.py`, l'enregistrer, poser les constantes**
+- [x] **Step 3: Écrire `m006_shopping.py`, l'enregistrer, poser les constantes**
 
 Créer `custom_components/home_stock/storage/migrations/m006_shopping.py` avec `VERSION = 6` et le DDL **exact** du § 6.2 de la spec, puis un `apply(conn)` rejouable qui fait les trois choses du § 6.3 :
 
@@ -334,21 +334,21 @@ Dans `storage/migrations/__init__.py`, ajouter `m006_shopping` à l'import **et*
 
 Dans `const.py`, ajouter le bloc `# --- lot 4 : liste de courses, ticket, correction` **en fin de fichier**, avec les constantes listées plus haut. **`REASONS` et `CONSUME_REASONS` ne bougent pas** — amendement A1.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage/test_migrations.py -q`
 Expected: PASS, y compris `test_migration_versions_are_contiguous_from_one` et `test_migration_modules_are_named_after_their_version`, **sans les avoir touchés**.
 
-- [ ] **Step 5: Vérifier que le test de contiguïté a des dents**
+- [x] **Step 5: Vérifier que le test de contiguïté a des dents**
 
 Passer temporairement `VERSION = 7` dans `m006_shopping.py` (sans renommer le fichier) et relancer : `test_migration_versions_are_contiguous_from_one` **et** `test_migration_modules_are_named_after_their_version` doivent tomber tous les deux. Si un seul tombe, l'autre ne couvre pas ce qu'il prétend. Remettre `VERSION = 6`.
 
-- [ ] **Step 6: Suite complète**
+- [x] **Step 6: Suite complète**
 
 Run: `./scripts/test.sh -q`
 Expected: 1 390 tests + les nouveaux, tout vert.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/migrations/ custom_components/home_stock/const.py tests/storage/test_migrations.py
@@ -378,7 +378,7 @@ git commit -m "feat: m006 brings the list, the receipt, the store and the revers
 
 **Pourquoi ce module est pur.** Une erreur de signe y est catastrophique et **silencieuse** : elle ne lève rien, elle fausse une comptabilité. Un test doit pouvoir l'épingler sans base ni Home Assistant.
 
-- [ ] **Step 1: Écrire les tests du domaine**
+- [x] **Step 1: Écrire les tests du domaine**
 
 Créer `tests/domain/test_correction.py` :
 
@@ -522,12 +522,12 @@ def test_correction_key_is_derived_and_stable():
     assert correction_key(42) == "correction:42"
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_correction.py -q`
 Expected: FAIL — `ModuleNotFoundError: custom_components.home_stock.domain.correction`
 
-- [ ] **Step 3: Écrire les tests des trois `state_class`**
+- [x] **Step 3: Écrire les tests des trois `state_class`**
 
 Dans `tests/test_entities.py`, à la fin :
 
@@ -554,7 +554,7 @@ async def test_the_eleven_daily_sensors_do_not_move(hass, ...):
     assert state.attributes["state_class"] == "total"
 ```
 
-- [ ] **Step 4: Écrire le module et changer les trois lignes**
+- [x] **Step 4: Écrire le module et changer les trois lignes**
 
 Créer `custom_components/home_stock/domain/correction.py` : pur, aucun `hass`, aucun SQLite, docstring rappelant que `reason` est le **compte comptable** et pourquoi un motif `correction` casserait les quatre requêtes qui le lisent. `reversal()` construit un `dict` aux clés de `repo.insert_movement` (`macros` étant un sous-`dict` couvrant **tout** `MACRO_COLUMNS`, `None` compris). `_flip(value)` rend `None` pour `None` et `-value` sinon — une seule fonction, utilisée pour les onze valeurs signées.
 
@@ -562,18 +562,18 @@ Dans `sensor.py`, remplacer `SensorStateClass.TOTAL_INCREASING` par `SensorState
 
 Dans `docs/exploitation.md`, ajouter **en fin** une section « Statistiques à supprimer une fois » : Home Assistant ouvrira un `repair` « la classe d'état a changé » sur ces trois entités ; la résolution est **un geste du propriétaire** (Outils de développement → Statistiques → supprimer les statistiques de `sensor.home_stock_kcal_total`, `cost_total`, `cost_waste_total`). Rappeler que le journal SQLite contient toute l'histoire et que les graphes du panneau se recalculent depuis lui : seules les statistiques natives repartent.
 
-- [ ] **Step 5: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 5: Lancer les tests, vérifier qu'ils passent**
 
 ```bash
 ./scripts/test.sh tests/domain/test_correction.py tests/test_entities.py -q
 ```
 Expected: PASS
 
-- [ ] **Step 6: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 6: Vérifier que les tests ont des dents (mutation)**
 
 Dans `_flip`, remplacer `return None if value is None else -value` par `return 0.0 if value is None else -value`. `test_a_null_nutrient_is_reversed_by_a_null_never_by_a_zero` doit tomber. Puis inverser les parts (`-parts_total`) : `test_the_parts_are_copied_never_inverted` doit tomber. Remettre le code correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/correction.py custom_components/home_stock/sensor.py docs/exploitation.md tests/domain/test_correction.py tests/test_entities.py
@@ -598,7 +598,7 @@ git commit -m "feat: a reversal carries the reason it cancels, and three counter
 
 **Le piège à ne pas redécouvrir.** `Database._lock` n'est pas réentrant. `_correct_movement_within` existe **pour ça** : `correct_price` et `correct_meal` (tâche 4) écrivent plusieurs corrections dans une seule transaction. `correct_movement` public ouvre le `db.write()`, appelle le corps, et rien d'autre. Ne créez aucune variante de `_consume_within`, `_consume_batch_within` ou `_add_stock_within` : ce lot les réutilise telles quelles.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Créer `tests/test_application_correction.py`. Ce que chacun prouve :
 
@@ -662,12 +662,12 @@ def test_preview_says_what_will_happen_before_it_happens(manager):
 
 Dans `tests/test_messages.py`, ajouter les six phrases françaises nouvelles et **rejouer les messages des lots antérieurs** pour prouver qu'aucun motif nouveau n'en masque un ancien (le premier motif qui correspond gagne).
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_correction.py -q --timeout=60`
 Expected: FAIL — `AttributeError: 'StockManager' object has no attribute 'correct_movement'`
 
-- [ ] **Step 3: Écrire les dépôts, le corps et la méthode publique**
+- [x] **Step 3: Écrire les dépôts, le corps et la méthode publique**
 
 Dans `repositories.py` : `get_movement` (`SELECT * FROM movement WHERE id = ?`, alias **`m`**, jamais `b`), `movements_of_batch`, `correction_of`.
 
@@ -691,16 +691,16 @@ Il : appelle `check_correctable`, construit la ligne par `reversal()`, l'insère
 
 Dans `messages.py`, **en fin** de `DOMAIN_ERROR_PATTERNS`, les motifs des refus.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_correction.py tests/test_messages.py tests/storage -q --timeout=60`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier l'absence de verrou imbriqué**
+- [x] **Step 5: Vérifier l'absence de verrou imbriqué**
 
 Écrire volontairement une version de `correct_movement` qui appelle `self.consume_batch(...)` depuis l'intérieur de son `db.write()`, relancer avec `--timeout=60` : le test doit sortir en **timeout**, pas en attente infinie. C'est la preuve que le garde-fou de temps est en place. Remettre le code correct.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/repositories.py custom_components/home_stock/application.py custom_components/home_stock/messages.py tests/
@@ -727,7 +727,7 @@ git commit -m "feat: correct_movement writes the mirror row and gives the stock 
 
 **Le cas normal ne produit aucune écriture arrière** : un ticket lu le soir même corrige des lots dont rien n'est sorti.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_correcting_a_price_updates_the_batch_and_records_an_observation(manager):
@@ -778,28 +778,28 @@ def test_correcting_a_meal_is_idempotent_on_replay(manager):
     """Clé dérivée par mouvement ; un rejeu rend le même résultat."""
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/test_application_correction.py -q --timeout=60`
 Expected: FAIL — `AttributeError: … 'correct_price'`
 
-- [ ] **Step 3: Écrire les deux méthodes**
+- [x] **Step 3: Écrire les deux méthodes**
 
 `correct_price` : un seul `db.write()`, `repo.set_batch_price`, `repo.insert_price(source="receipt"|"manual", store_id=…)`, puis boucle sur `repo.movements_of_batch` non encore corrigés → `_correct_movement_within` puis `repo.insert_movement(**reprice(...))`. Clés d'idempotence dérivées : `correction:<id>` pour la première, `reprice:<id>` pour la seconde.
 
 `correct_meal` : lit le repas et ses mouvements par `ref_type='meal'` / `ref_id`, **refuse** si le lot de plat a `remaining < initial` (entamé), puis contrepasse `reversed(movements)` avec `allow_cooked=True`, ferme le lot de plat, et `repo.update_meal_fields(conn, meal_id, {"state": "planned"})` — le tout dans **un seul** `db.write()`.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/test_application_correction.py tests/test_meal_validate.py -q --timeout=60`
 Expected: PASS
 
-- [ ] **Step 5: Suite complète**
+- [x] **Step 5: Suite complète**
 
 Run: `./scripts/test.sh -q --timeout=120`
 Expected: tout vert. Aucun test antérieur ne doit avoir changé de comportement : la comptabilité se corrige **sans qu'une requête soit touchée**, c'est le critère de l'amendement A1.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/application.py custom_components/home_stock/storage/repositories.py custom_components/home_stock/messages.py tests/
@@ -828,7 +828,7 @@ git commit -m "feat: correcting a price and correcting a meal, both in one trans
 - `ShoppingService.add_line(..., price_source: str | None = None)` et `update_line(..., price_source: str | None = None)`.
 - `repo.latest_price_in_store(conn, article_id, store)` filtre `source IN OBSERVED_PRICE_SOURCES`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # tests/domain/test_pricing.py
@@ -874,12 +874,12 @@ def test_a_store_with_only_suggested_prices_answers_nothing():
     connu — comportement du lot 1, préservé."""
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_pricing.py tests/test_shopping.py -q`
 Expected: FAIL
 
-- [ ] **Step 3: Écrire le code**
+- [x] **Step 3: Écrire le code**
 
 `pricing.suggest_price` : ajouter `observed` au `dataclass` (défaut `False`) et le poser à `True` sur la seule branche `in_store`.
 
@@ -889,12 +889,12 @@ Expected: FAIL
 
 `websocket_api.session_add_line` et `session_update_line` : `vol.Optional("price_source"): _price_source`. `_suggest_price` rend déjà `asdict(...)`, qui porte donc `observed` : le panneau n'a qu'à le relayer.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/domain/test_pricing.py tests/test_shopping.py tests/storage tests/test_websocket_session.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -921,7 +921,7 @@ git commit -m "fix: a suggested price no longer records itself as observed in th
 
 **`price.store` n'est jamais réécrite.** `price` est un journal d'observations : chaque ligne dit ce qui a été vu le jour où ça l'a été. Réécrire le texte pour faire joli, c'est exactement ce que le lot 0 refuse au journal des mouvements.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_list_stores_now_carries_an_id_and_a_session_count():
@@ -956,12 +956,12 @@ def test_a_store_name_is_bounded_and_stripped():
     espaces de bord retirés."""
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/storage/test_repositories_shopping.py tests/test_shopping.py -q`
 Expected: FAIL
 
-- [ ] **Step 3: Écrire les dépôts et le raccord**
+- [x] **Step 3: Écrire les dépôts et le raccord**
 
 Dans `repositories.py` : les six fonctions, `list_stores` comptant les sessions par `LEFT JOIN shopping_session s ON s.store_id = st.id AND s.state = 'done'`. Alias **`st`**, jamais `b`.
 
@@ -969,12 +969,12 @@ Dans `shopping.py` : `start` résout le magasin (`store_id` d'abord, sinon `find
 
 `merge_stores` refuse si `repo.current_session(conn)` porte l'un des deux identifiants.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/storage tests/test_shopping.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1001,7 +1001,7 @@ git commit -m "feat: the shop becomes a row, and two spellings stay two shops"
 
 **Le maximum, jamais la somme.** Un seuil de réapprovisionnement et un besoin de recette décrivent le **même stock manquant** vu de deux côtés, pas deux stocks. On n'achète pas deux fois le même litre.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_two_origins_make_one_line_with_two_claims():
@@ -1065,25 +1065,25 @@ def test_reconcile_is_deterministic_and_writes_nothing():
     un `frozen dataclass`, il ne porte aucune connexion."""
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run: `./scripts/test.sh tests/domain/test_shoppinglist.py -q`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 3: Écrire le module**
+- [x] **Step 3: Écrire le module**
 
 Pur : ni `hass`, ni SQLite, ni horloge (l'instant est passé en argument). Les cinq règles du § 7.3 sont écrites dans la docstring, numérotées, avec la raison de chacune.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run: `./scripts/test.sh tests/domain/test_shoppinglist.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Remplacer le `max(...)` de `item_quantity` par `sum(...)` : `test_the_quantity_is_the_maximum_never_the_sum` doit tomber. Puis retirer le facteur d'hystérésis (`keep = threshold`) : les deux tests de bornes doivent tomber. Remettre.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/shoppinglist.py tests/domain/test_shoppinglist.py
@@ -1109,7 +1109,7 @@ git commit -m "feat: one line per product, one claim per reason, and a 15 % hyst
 - `validators.list_quantity(value) -> float | None` — `]0 ; MAX_LIST_QUANTITY]` ou `None`
 - `validators.every_days(value) -> int` — `[1 ; MAX_EVERY_DAYS]`
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_the_list_is_ordered_by_the_store_route_when_there_is_one():
@@ -1161,17 +1161,17 @@ def test_no_query_in_this_module_aliases_a_table_as_b():
     sur `receipt` le ferait tomber sans rapport avec `batch`."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/storage/test_repositories_list.py tests/test_validators.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Vérifier le garde-fou `SELECT b.*`**
+- [x] **Step 5: Vérifier le garde-fou `SELECT b.*`**
 
 Run: `./scripts/test.sh tests/storage/test_repositories.py -q -k "select_b or alias"`
 Expected: PASS — aucune requête de ce lot n'aliase une table en `b`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/storage/repositories.py custom_components/home_stock/validators.py tests/
@@ -1202,7 +1202,7 @@ git commit -m "feat: the list, its claims and its recurring lines, at the reposi
 
 **Une seule transaction.** Lecture des quatre origines et de l'existant, `reconcile()` en Python **hors verrou**, puis **un** `db.write()` qui applique le `Plan`. `Database._lock` n'est pas réentrant : aucune des méthodes appelées ici ne peut ouvrir sa propre transaction.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_shortage_creates_a_line_with_its_missing_quantity():
@@ -1232,12 +1232,12 @@ def test_list_estimate_reports_its_confidence():
     combien ? » et à rien d'autre : il n'entre dans aucune comptabilité."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_application_shopping_list.py tests/test_config_flow.py -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1265,7 +1265,7 @@ git commit -m "feat: four origins, one list, reconciled in a single transaction"
 
 **Ni `SET_DUE_DATE` ni `MOVE_TODO_ITEM`.** Une ligne de courses n'a pas d'échéance, et en annoncer une promettrait un tri qui n'existe pas. Et **l'ordre de la liste est celui du magasin**, calculé : laisser une carte Lovelace le réordonner ferait diverger les deux surfaces sur la seule chose que ce lot passe son temps à apprendre.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_the_shopping_list_declares_exactly_three_features(hass):
@@ -1303,12 +1303,12 @@ async def test_the_expirations_list_is_untouched(hass):
     de nom, ni de fonctionnalités, ni de comportement."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_todo_shopping.py tests/test_entities.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1329,7 +1329,7 @@ git commit -m "feat: todo.home_stock_shopping, and two sensors that answer how m
 
 **Le pointage n'est jamais une condition du scan.** Liste vide, produit absent, table verrouillée : la ligne de panier s'écrit quand même. Règle générale du composant depuis le lot 1 — ce qui est accessoire ne bloque jamais ce qui est essentiel.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_scanning_a_listed_product_checks_its_line():
@@ -1360,12 +1360,12 @@ def test_checking_needs_no_open_session():
     `list/check` qui le permet, pas le scan."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_shopping.py tests/test_websocket_session.py -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/shopping.py tests/
@@ -1401,7 +1401,7 @@ Le panier affiche `47,20 € — dont 12,30 € estimés, 2 lignes sans prix`. U
 
 **Le coût par nutriment est gratuit.** Le lot 2 a figé les neuf nutriments sur *tout* mouvement, achats compris, en annonçant que ça « rendrait le lot 4 gratuit ». C'est vérifié : le panier connaît les kilocalories qu'il rapporte sans une colonne de plus, et le panneau l'affiche en **second rang**, comme une curiosité et non comme une décision.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_the_total_splits_into_observed_and_estimated():
@@ -1431,12 +1431,12 @@ async def test_no_new_sensor_was_created_for_the_cart(hass):
     receipts_pending — et d'aucune de plus."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/storage/test_repositories_shopping.py tests/test_entities.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1462,7 +1462,7 @@ git commit -m "feat: the cart says how much of its total is a guess"
 
 **Normaliser est indispensable** : une session de 8 lignes et une de 40 doivent peser pareil.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_a_clean_walk_gives_back_its_own_order():
@@ -1505,16 +1505,16 @@ def test_learn_route_is_deterministic():
 def test_an_empty_history_returns_the_default_order_untouched():
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/domain/test_route.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Vérifier que les tests ont des dents (mutation)**
+- [x] **Step 5: Vérifier que les tests ont des dents (mutation)**
 
 Retirer la normalisation (`rang moyen` au lieu de `rang moyen / n`) : `test_two_sessions_of_very_different_sizes_weigh_the_same` doit tomber. Puis laisser l'apprentissage écraser une ligne `manual` : `test_a_pinned_aisle_is_never_moved_by_learning` doit tomber. Remettre.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/route.py tests/domain/test_route.py
@@ -1545,7 +1545,7 @@ git commit -m "feat: the walking order of a shop, learned from mean scan ranks"
 
 **L'écran de rangement ne trie pas par rayon** — il groupe par emplacement **dans la maison**. C'est rappelé ici parce que c'est le genre de cohérence qu'on applique par réflexe là où elle n'a pas de sens.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 def test_closing_a_session_recalculates_the_route():
@@ -1566,12 +1566,12 @@ def test_learning_runs_inside_the_close_transaction():
 def test_a_session_with_no_store_learns_nothing_and_raises_nothing():
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_shopping.py tests/storage -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1606,7 +1606,7 @@ git commit -m "feat: a shop learns its aisle order at checkout, and stays pinned
 
 **Une ligne fautive est écartée SEULE**, contrairement à la nutrition OFF du lot 1 où un dépassement refuse toute la fiche. La différence est assumée : une fiche OFF est un **tout cohérent** dont une valeur aberrante trahit la table entière ; un ticket est une **suite de lignes indépendantes**, et perdre les dix-neuf bonnes parce que la vingtième est illisible n'aide personne. L'écart au total rend l'omission visible.
 
-- [ ] **Step 1: Écrire les fixtures et les tests**
+- [x] **Step 1: Écrire les fixtures et les tests**
 
 Fixtures versionnées dans `tests/fixtures/receipts/` : `propre.json`, `promotions_et_fidelite.json`, `ligne_a_4000_euros.json`, `quantite_nulle.json`, `date_en_1970.json`, `total_qui_ne_tombe_pas_juste.json`, `vide.json`, `tronquee.json`.
 
@@ -1637,12 +1637,12 @@ def test_nothing_in_this_module_touches_the_network_or_hass():
     """Scan d'import : ni `homeassistant`, ni `aiohttp`, ni `sqlite3`."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/receipt -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/receipt/ tests/receipt/ tests/fixtures/receipts/
@@ -1676,7 +1676,7 @@ git commit -m "feat: a receipt is read line by line, and a bad line is dropped a
 
 **Aucun test ne sort sur le réseau.** L'entité `ai_task` est un **double injecté**, exactement comme le transport OFF l'est déjà.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_no_agent_configured_returns_a_result_that_says_so(hass):
@@ -1718,12 +1718,12 @@ async def test_no_test_in_this_file_reaches_the_network(hass):
     """Le double est injecté ; `aiohttp` n'est jamais importé ici."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/receipt tests/test_config_flow.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/receipt/task.py custom_components/home_stock/config_flow.py custom_components/home_stock/translations/ tests/
@@ -1759,7 +1759,7 @@ git commit -m "feat: the receipt is read by an ai_task entity of the house, atta
 
 **Une seule transaction pour tout appliquer.** `apply_receipt` ouvre **un** `db.write()` et appelle `_correct_price_within` par ligne rangée. Aucun `db.write()` imbriqué — `Database._lock` n'est pas réentrant.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 # tests/domain/test_matching.py
@@ -1804,17 +1804,17 @@ def test_the_put_away_never_depends_on_the_receipt():
     était mauvais. Le test range une session dont le ticket est `failed`."""
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/domain/test_matching.py tests/storage/test_repositories_receipt.py tests/test_application_receipt.py -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Suite complète**
+- [x] **Step 5: Suite complète**
 
 Run: `./scripts/test.sh -q --timeout=120`
 Expected: tout vert — l'appariement d'ingrédients du lot 3 compris, qui partage `matching.py`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1846,7 +1846,7 @@ git commit -m "feat: a receipt re-reads prices, and never feeds the catalogue"
 
 **La photo n'est pas supprimée toute seule** : elle est la pièce justificative de tout ce que le modèle en a tiré. Le nettoyage est un geste du propriétaire ; les réglages affichent la **taille du dossier** pour qu'il ne l'oublie pas.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_submitting_records_the_receipt_and_starts_the_read(hass):
@@ -1873,12 +1873,12 @@ async def test_the_pending_sensor_publishes_the_last_error_in_french(hass):
 
 Dans `tests/test_offline_queue_contract.py`, ajouter les commandes nouvelles à `EXPECTED_QUEUED_COMMAND_TYPES` **en fin de liste**. Le test scanne le TypeScript réel : il tombera de lui-même quand les écrans des tâches 21–23 poseront leurs appels.
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_websocket_receipts.py tests/test_offline_queue_contract.py -q`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1915,7 +1915,7 @@ git commit -m "feat: the receipt commands, in their own module like recipes and 
 
 Les fonctions s'ajoutent **en fin** de `websocket_api.py`, leurs noms **en fin** du tuple d'`async_register_websocket`.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_list_items_is_sorted_for_the_given_store(hass):
@@ -1946,12 +1946,12 @@ async def test_add_line_accepts_a_price_source(hass):
 async def test_every_new_write_command_accepts_an_idempotency_key(hass):
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_websocket_list.py tests/test_websocket_session.py tests/test_websocket_write.py -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -1980,7 +1980,7 @@ git commit -m "feat: the list, the shop and the correction, on the websocket sur
 
 **Validation aux deux surfaces.** La règle du lot 1, répétée au lot 2, tient sans exception : *aucune des deux surfaces n'a le droit d'être la plus faible*. Ce que le websocket refuse, le service le refuse, et réciproquement. Les helpers de `validators.py` sont **partagés** ; les bornes nouvelles du lot 4 (quantité de liste, `every_days`, prix de ticket, identifiant de mouvement) y vivent **une fois** et sont utilisées des deux côtés.
 
-- [ ] **Step 1: Écrire le test de parité en premier**
+- [x] **Step 1: Écrire le test de parité en premier**
 
 `tests/test_surface_parity.py` — le test qui donne son sens à la règle. Sur la même liste de valeurs limites (quantité 0, quantité négative, quantité au-delà de la borne, texte de 300 caractères, `every_days = 0`, identifiant de mouvement inexistant, prix de ticket à 4 000 €), il envoie **la même charge** sur les deux surfaces et exige **le même verdict** : refusé des deux côtés, ou accepté des deux côtés. Jamais l'un sans l'autre.
 
@@ -2003,7 +2003,7 @@ async def test_neither_surface_is_weaker_than_the_other(hass, cas):
     n'a pas testé."""
 ```
 
-- [ ] **Step 2: Écrire les tests des six services**
+- [x] **Step 2: Écrire les tests des six services**
 
 ```python
 async def test_add_to_shopping_list_accepts_a_product_or_a_text(hass):
@@ -2023,17 +2023,17 @@ async def test_services_yaml_documents_every_new_field(hass):
     champ que l'interface ne montrera jamais. Le test compare les deux."""
 ```
 
-- [ ] **Step 3 → 5: Rouge, code, vert**
+- [x] **Step 3 → 5: Rouge, code, vert**
 
 Run: `./scripts/test.sh tests/test_services_shopping_list.py tests/test_services_correction.py tests/test_surface_parity.py -q --timeout=60`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 6: Suite Python complète**
+- [x] **Step 6: Suite Python complète**
 
 Run: `./scripts/test.sh -q --timeout=120`
 Expected: tout vert. **C'est le dernier point de contrôle avant le front** : à partir d'ici, plus aucune tâche ne touche à Python sauf la documentation.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add custom_components/home_stock/ tests/
@@ -2060,7 +2060,7 @@ git commit -m "feat: six services, and a contract test that neither surface is t
 
 **Cocher est un appui, pas deux.** Le double appui du lot 2 protège les gestes **destructifs** (cocher une tâche de maintenance, supprimer). Cocher une ligne de courses se défait en un appui — c'est un bit, réversible sur place.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('groupe les lignes par rayon, dans l’ordre du magasin', ...)
@@ -2078,21 +2078,21 @@ it('reste utilisable hors ligne : une ligne cochée le reste à l’écran', ...
 it('affiche une liste vide sans erreur et dit quoi faire', ...)
 ```
 
-- [ ] **Step 2: Lancer les tests, vérifier qu'ils échouent**
+- [x] **Step 2: Lancer les tests, vérifier qu'ils échouent**
 
 Run (depuis `frontend/`) : `npm test -- liste`
 Expected: FAIL
 
-- [ ] **Step 3: Écrire l'écran et le brancher**
+- [x] **Step 3: Écrire l'écran et le brancher**
 
 `liste.ts` en français (identifiants et commentaires), sur le modèle de `panier.ts` : `ecrire(type, charge)` qui délègue à `FileAttente`. Dans `panneau.ts` : import, `'liste'` **en fin** de l'union `Ecran`, bouton de navigation **en fin** de la barre.
 
-- [ ] **Step 4: Lancer les tests, vérifier qu'ils passent**
+- [x] **Step 4: Lancer les tests, vérifier qu'ils passent**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: PASS — 405 tests + les nouveaux.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/ecrans/liste.ts frontend/src/panneau.ts frontend/tests/
@@ -2115,7 +2115,7 @@ git commit -m "feat: the list screen, in the order of the shop one is standing i
 
 **Le téléversement exige un compte administrateur** : le foyer n'en a qu'un, et un **403 s'affiche en français** au lieu de laisser tourner un rond. La vue de Home Assistant plafonne à 20 Mo et refuse tout ce qui n'est pas `image/*` — un refus de sa part est affiché tel quel, traduit.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 it('affiche « aucune entité de lecture configurée » plutôt qu’un bouton mort', ...)
@@ -2136,12 +2136,12 @@ it('permet de réessayer une lecture échouée', ...)
 it('n’ajoute pas de hauteur : un bandeau REMPLACE un bloc, il ne s’ajoute pas', ...)
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run (depuis `frontend/`) : `npm test -- ticket` puis `npm test`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/ecrans/ticket.ts frontend/src/panneau.ts frontend/tests/ticket.test.ts
@@ -2169,7 +2169,7 @@ git commit -m "feat: the receipt screen, from the photo to the applied prices"
 
 **Le détail dit ce que la correction va faire, en clair, AVANT** : « Annule 200 g de Pâtes — 310 kcal, 0,42 € — et remet 200 g dans le lot du 2026-08-14 ». Une opération irréversible qui ne s'annonce pas est une opération qu'on déclenche par erreur.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```ts
 // panier.test.ts
@@ -2207,12 +2207,12 @@ it('affiche l’entité ai_task, ou dit qu’il n’y en a pas', ...)
 it('affiche la taille du dossier des tickets', ...)
 ```
 
-- [ ] **Step 2 → 4: Rouge, code, vert**
+- [x] **Step 2 → 4: Rouge, code, vert**
 
 Run (depuis `frontend/`) : `npm test`
 Expected: FAIL puis PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/ecrans/ frontend/tests/
@@ -2230,7 +2230,7 @@ git commit -m "feat: the cart tells its guesses, and the journal can be correcte
 
 **C'est la seule tâche autorisée à lancer `npm run build`.** `custom_components/home_stock/` est bind-monté dans le conteneur Home Assistant : le bundle construit est servi **tel quel**. Un vérificateur ne déploie pas ; un build, si.
 
-- [ ] **Step 1: Ajouter les deux scénarios**
+- [x] **Step 1: Ajouter les deux scénarios**
 
 **En fin** de `SCENARIOS`, aux deux formats (412 × 915 et 1280 × 800) :
 
@@ -2254,14 +2254,14 @@ git commit -m "feat: the cart tells its guesses, and the journal can be correcte
 
 `ecranAttendu` est **obligatoire** sur les deux : c'est ce qui fait échouer le scénario quand l'écran n'est jamais atteint, au lieu de mesurer un écran par défaut et de le déclarer vert.
 
-- [ ] **Step 2: Lancer le vérificateur, sur les sources**
+- [x] **Step 2: Lancer le vérificateur, sur les sources**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs`
 Expected: **41 scénarios**, tous verts. Le bundle est construit **en mémoire** depuis `src/` : ce script ne déploie rien.
 
 Ce qu'il vérifie et qu'aucun test unitaire ne voit : débordement horizontal, cible tactile < 48 px, contraste < 4,5:1, texte tronqué, écran jamais atteint.
 
-- [ ] **Step 3: Écrire la documentation d'exploitation**
+- [x] **Step 3: Écrire la documentation d'exploitation**
 
 Dans `docs/exploitation.md`, **en fin**, quatre sections :
 
@@ -2270,7 +2270,7 @@ Dans `docs/exploitation.md`, **en fin**, quatre sections :
 3. **Corriger une ligne du journal.** Depuis l'écran Journal, deux appuis. Une correction s'impute au **jour de la correction**, pas au jour de l'erreur : la barre d'hier ne bouge pas, celle d'aujourd'hui porte une entrée négative nommée « Correction ». Un mouvement ne s'annule qu'**une** fois. Un repas validé se corrige **en bloc**, et pas si le plat est entamé.
 4. **Statistiques à supprimer, une fois.** `sensor.home_stock_kcal_total`, `cost_total` et `cost_waste_total` passent en `state_class: TOTAL`. Home Assistant ouvre un `repair` « la classe d'état a changé » : le résoudre en **supprimant les statistiques de ces trois entités** (Outils de développement → Statistiques). **Le composant ne supprime jamais de statistiques tout seul.** Le journal SQLite contient toute l'histoire et les graphes du panneau se recalculent depuis lui ; seules les statistiques natives repartent. Le lot 2 l'a déjà payé sur les deux premiers : c'est la **seconde et dernière** fois.
 
-- [ ] **Step 4: Construire le bundle**
+- [x] **Step 4: Construire le bundle**
 
 Run (depuis `frontend/`) : `npm run build`
 
@@ -2282,12 +2282,12 @@ git -C /opt/nivuus/HomeAssistant/data/meal status --porcelain custom_components/
 
 Un seul fichier doit avoir changé : `home-stock-panel.js`.
 
-- [ ] **Step 5: Vérifier le bundle réellement en place**
+- [x] **Step 5: Vérifier le bundle réellement en place**
 
 Run (depuis `frontend/`) : `node outils/verifier-rendu.mjs --deploye`
 Expected: les mêmes 41 scénarios verts, cette fois sur le bundle construit.
 
-- [ ] **Step 6: Lancer les trois suites une dernière fois**
+- [x] **Step 6: Lancer les trois suites une dernière fois**
 
 ```bash
 ./scripts/test.sh -q --timeout=120
@@ -2295,7 +2295,7 @@ cd /opt/nivuus/HomeAssistant/data/meal/frontend && npm test && node outils/verif
 ```
 Expected: tout vert — Python, front, et 41 scénarios.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/outils/verifier-rendu.mjs docs/exploitation.md custom_components/home_stock/panel/home-stock-panel.js
