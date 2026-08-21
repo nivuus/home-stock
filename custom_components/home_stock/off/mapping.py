@@ -19,6 +19,9 @@ from typing import Any, Final
 
 from ..aisles import resolve_aisle
 from ..const import BASE_UNITS, MAX_SERVING
+# Re-exported: the table lives in the domain since lot 3 (recipes need it and
+# may not import a data provider), but lot 1's callers still import it here.
+from ..domain.units import UNIT_TO_BASE
 
 # Our internal nutrition keys, mapped to the OFF nutriment name each one
 # reads (e.g. "energy-kcal_100g"). This is NOT the list of `article` columns:
@@ -42,15 +45,6 @@ NUTRIMENT_KEYS: Final = {
 # differs (`kcal_per_base_unit`); the rest keep their name.
 _ARTICLE_COLUMN_NAMES: Final = {
     key: ("kcal_per_base_unit" if key == "kcal" else key) for key in NUTRIMENT_KEYS
-}
-
-# Everything OFF may express a mass or a volume in, and what one unit is worth
-# in our base unit. Anything else — "unité", "pcs", "portions" — is a count,
-# not a weight, and is refused.
-UNIT_TO_BASE: Final = {
-    "g": ("g", 1.0), "gr": ("g", 1.0), "gram": ("g", 1.0), "grammes": ("g", 1.0),
-    "kg": ("g", 1000.0), "mg": ("g", 0.001),
-    "ml": ("ml", 1.0), "cl": ("ml", 10.0), "dl": ("ml", 100.0), "l": ("ml", 1000.0),
 }
 
 MIN_NET_QUANTITY: Final = 0.5

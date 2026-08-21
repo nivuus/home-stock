@@ -563,7 +563,7 @@ git commit -m "feat: add_stock takes a reason and a nutrition to freeze on the b
 
 **Pourquoi déplacer plutôt que dupliquer.** `domain/recipes.py` doit ramener « 2 tbsp » et « 250 g » à l'unité de base d'un produit, et il n'a pas le droit d'importer `off/` — le domaine ne connaît ni le réseau ni les fournisseurs de données. Recopier la table donnerait deux vérités sur ce que vaut un décilitre, et la seconde dériverait. Le domaine est l'endroit où elle aurait dû naître.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Dans `tests/domain/test_units.py` :
 
@@ -620,21 +620,21 @@ def test_off_mapping_still_exposes_the_unit_table():
     assert reexport is source
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec**
+- [x] **Step 2: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/domain/test_units.py tests/off/test_mapping.py -q`
 Expected: FAIL — `ImportError: cannot import name 'UNIT_TO_BASE' from …domain.units`.
 
-- [ ] **Step 3: Déplacer la table et écrire `convertible_amount`**
+- [x] **Step 3: Déplacer la table et écrire `convertible_amount`**
 
 `convertible_amount` : `unit` non `str` ou absent de `UNIT_TO_BASE` → `None` ; dimension rendue par la table différente de `product_base_unit` → `None` ; sinon `amount * facteur`. Aucun `strip()`, aucun `lower()` : la normalisation du texte de la source est le travail de `recipes/mapping.py`, pas du domaine — une fonction qui devine deux fois ne dit plus où la devinette a eu lieu.
 
-- [ ] **Step 4: Lancer, vérifier le vert**
+- [x] **Step 4: Lancer, vérifier le vert**
 
 Run: `./scripts/test.sh tests/domain tests/off -q && ./scripts/test.sh -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add custom_components/home_stock/domain/units.py custom_components/home_stock/off/mapping.py tests/domain/test_units.py tests/off/test_mapping.py

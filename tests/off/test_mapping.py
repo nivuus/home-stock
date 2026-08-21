@@ -440,3 +440,12 @@ def test_serving_from_raw_reads_the_stored_record():
 def test_serving_from_raw_survives_anything_unusable():
     for raw in (None, "", "{tronqu", "[1, 2]", '"une chaine"', "{}"):
         assert serving_from_raw(raw, base_unit="g", net_quantity=None) is None
+
+
+def test_off_mapping_still_exposes_the_unit_table():
+    """Le déplacement dans le domaine ne doit rien casser chez les appelants
+    du lot 1 : `off.mapping.UNIT_TO_BASE` reste importable, et c'est le MÊME
+    objet — pas une copie qui dériverait."""
+    from custom_components.home_stock.domain.units import UNIT_TO_BASE as source
+    from custom_components.home_stock.off.mapping import UNIT_TO_BASE as reexport
+    assert reexport is source
