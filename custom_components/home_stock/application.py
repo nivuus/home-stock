@@ -4,12 +4,19 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 """
 from __future__ import annotations
 
+import logging
 import unicodedata
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
+import voluptuous as vol
+
 from .const import (
+    BATTERY_KINDS,
+    DEFAULT_KEEP_PERCENT,
+    DEFAULT_LOW_PERCENT,
     MACRO_COLUMNS,
     MAX_PARTS,
     QUANTITY_EPSILON,
@@ -21,11 +28,13 @@ from .const import (
 )
 from .domain.conversion import ConversionError, plan_conversion
 from .domain.foodday import bounds_of_food_day, bucket_bounds, food_day_bounds, food_day_of
+from .domain.maintenance import battery_plan, merge_plan
 from .domain.nutrition import movement_values
 from .domain.stock import BatchView, InsufficientStock, allocate, is_empty
 from .domain.units import format_quantity, to_base_quantity
 from .storage import repositories as repo
 from .storage.database import Database
+from .validators import check_battery_fields
 
 # Nutrition columns of `article`, all stored per base unit, all rescaled when a
 # product changes unit.
@@ -40,6 +49,9 @@ _TOTAL_KEYS: Final = ("kcal", *MACRO_COLUMNS, "cost", "waste_cost", "unvalued")
 
 # The two stages of an expiry announcement, in the only order they may occur.
 EXPIRY_STAGES: Final = ("approaching", "expired")
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _empty_totals() -> dict[str, float]:
@@ -744,3 +756,140 @@ class StockManager:
     def export_journal(self) -> list[dict[str, Any]]:
         """The whole append-only journal. It is enough to rebuild everything."""
         return repo.list_movements(self.db.read())
+
+    # --- lot 5 : piles, équipements et consommables -------------------------
+
+    def declare_battery(self, *, label: str, kind: str,
+                        entity_registry_id: str | None = None,
+                        device_id: str | None = None,
+                        equipment_id: int | None = None,
+                        product_id: int | None = None,
+                        cell_count: int = 1,
+                        tracked: bool | None = None,
+                        exclusion_reason: str | None = None,
+                        low_percent: float = DEFAULT_LOW_PERCENT,
+                        keep_percent: float = DEFAULT_KEEP_PERCENT,
+                        installed_on: str | None = None,
+                        expected_life_days: int | None = None,
+                        note: str | None = None,
+                        external_ref: str | None = None,
+                        idempotency_key: str | None = None) -> int:
+        """Declare a place where a battery lives. Returns its id.
+
+        Validates before writing, even though both surfaces already called
+        `check_battery_fields`: a third door exists — the import (task 13) —
+        and a rule only enforced at the surfaces is a rule an import that
+        writes fourteen rows in one go quietly walks around.
+        """
+        if kind not in BATTERY_KINDS:
+            raise vol.Invalid(f"unknown battery kind {kind!r}")
+        fields = {
+            "entity_registry_id": entity_registry_id, "device_id": device_id,
+            "equipment_id": equipment_id, "product_id": product_id,
+            "cell_count": cell_count, "tracked": tracked,
+            "exclusion_reason": exclusion_reason, "low_percent": low_percent,
+            "keep_percent": keep_percent, "installed_on": installed_on,
+            "expected_life_days": expected_life_days, "note": note,
+            "external_ref": external_ref,
+        }
+        check_battery_fields(fields, kind=kind)
+        # `battery` has no idempotency_key column (the DDL is the spec's, and
+        # no column is added to it), so the replay marker rides in
+        # `external_ref` — the same column the Grocy import uses for its own
+        # id. That is safe only because both sides are NAMESPACED: the queue
+        # writes "declare_battery:<uuid>", the import writes "grocy:battery:7"
+        # (task 13). Never store a bare id here, or lot 7's join between the
+        # two systems starts matching a queue token.
+        stored_key = _namespaced_key("declare_battery", idempotency_key)
+        # An explicit external_ref always wins: the import owns that column
+        # for the rows it creates, and its replayability depends on it.
+        marker = external_ref or stored_key
+        with self.db.write() as conn:
+            if stored_key:
+                existing = conn.execute(
+                    "SELECT id FROM battery WHERE external_ref = ?",
+                    (stored_key,)).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+            return repo.insert_battery(
+                conn, label=label, kind=kind, **{**fields, "external_ref": marker})
+
+    def update_battery(self, battery_id: int, fields: dict[str, Any]) -> None:
+        """Correct a declaration. Refuses an unknown column, like
+        `update_article_fields` already does: a typo in a column name must be
+        a refusal, never a silence."""
+        unknown = set(fields) - set(repo.BATTERY_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown battery fields: {sorted(unknown)}")
+        with self.db.write() as conn:
+            row = repo.get_battery(conn, battery_id)
+            if row is None:
+                raise ValueError(f"unknown battery {battery_id}")
+            # The invariants bind the SUBMITTED fields to the STORED ones: a
+            # `product_id` alone is still refused on a built_in battery whose
+            # kind is not in the same request, because the kind is in the row.
+            merged = {**dict(row), **fields}
+            check_battery_fields(merged, kind=merged["kind"])
+            repo.update_battery_fields(conn, battery_id, fields)
+
+    def record_reading(self, battery_id: int, *, percent: float, at: str) -> None:
+        with self.db.write() as conn:
+            repo.set_battery_reading(conn, battery_id, percent=percent, at=at)
+
+    def list_batteries(self, *, include_untracked: bool = True) -> list[dict[str, Any]]:
+        """Every declared place, in the shape `domain/maintenance` expects —
+        minus `state` and `entity_id`, which only the coordinator can resolve.
+        """
+        conn = self.db.read()
+        rows = repo.list_batteries(conn)
+        stock = repo.spare_stock(
+            conn, {row["product_id"] for row in rows if row["product_id"]})
+        batteries = []
+        for row in rows:
+            if not include_untracked and not row["tracked"]:
+                continue
+            battery = dict(row)
+            battery["tracked"] = (None if row["tracked"] is None
+                                  else bool(row["tracked"]))
+            battery["spare"] = None if row["product_id"] is None else {
+                "label": row["spare_label"],
+                "cell_count": int(row["cell_count"]),
+                "in_stock": stock.get(row["product_id"], 0.0),
+            }
+            batteries.append(battery)
+        return batteries
+
+    def list_battery_events(self, battery_id: int, limit: int = 20) -> list[dict[str, Any]]:
+        return repo.list_battery_events(self.db.read(), battery_id, limit)
+
+    def maintenance_plan(self, *, now: datetime, readings: Mapping[int, Mapping[str, Any]],
+                         extra_items: Sequence[Any] | None = None,
+                         extra_keep: Sequence[Any] | None = None,
+                         spares: Mapping[str, Mapping[str, Any]] | None = None,
+                         ) -> dict[str, Any]:
+        """The plan `home_stock.maintenance_plan` answers with.
+
+        NEVER raises towards its caller: it catches, logs, and answers
+        `complete: False`. That is the whole contract of task 15 — an
+        incomplete plan may add and refresh, never close. A plan that raised
+        would take the battery items out of `items` AND out of `keep`, and one
+        single 5:05 sync would close all fourteen battery tasks of the house.
+        """
+        try:
+            rows = []
+            for battery in self.list_batteries():
+                reading = readings.get(battery["id"], {})
+                rows.append({**battery,
+                             "entity_id": reading.get("entity_id"),
+                             "state": reading.get("state")})
+            own = battery_plan(rows, now=now)
+            merged = merge_plan(own, extra_items=extra_items,
+                                extra_keep=extra_keep, spares=spares)
+            return {**merged, "complete": True}
+        except Exception:  # noqa: BLE001 - the refusal is data, not an exception
+            _LOGGER.exception(
+                "maintenance_plan could not be built; answering complete=False "
+                "so the reconciliation adds and refreshes but closes nothing")
+            own = battery_plan([], now=now)
+            merged = merge_plan(own, extra_items=extra_items, extra_keep=extra_keep)
+            return {**merged, "complete": False}
