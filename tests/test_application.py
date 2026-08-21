@@ -912,3 +912,41 @@ def test_add_stock_refuses_a_reason_it_does_not_know(manager):
     with pytest.raises(ValueError, match="grignotage"):
         manager.add_stock(article_id=article_id, quantity=3.0, location_id=1,
                           reason="grignotage")
+
+
+# --- lot 3 : le verrou n'est pas réentrant, et c'est prouvé ici -------------
+
+def test_two_writes_in_one_transaction_do_not_deadlock(manager):
+    """Preuve directe : `Database._lock` est un `threading.Lock` simple.
+
+    Sans les méthodes `_within`, ce test ne finirait JAMAIS — pas d'exception,
+    pas de trace, juste un processus figé. Il est lancé avec un délai maximum
+    précisément pour que l'échec se voie au lieu de bloquer la suite entière.
+    C'est la contrainte structurante de la validation d'un repas, qui doit
+    écrire trois choses en une seule transaction.
+    """
+    article_id, product_id = _seed_article(manager, kcal_per_base_unit=2.0)
+    with manager.db.write() as conn:
+        batch_id = manager._add_stock_within(
+            conn, article_id=article_id, quantity=3.0, location_id=1,
+            moment="2026-08-21T20:00:00", reason="cooked")
+        movement_ids = manager._consume_within(
+            conn, product_id=product_id, quantity=1.0, reason="cooked",
+            moment="2026-08-21T20:00:00")
+        one_more = manager._consume_batch_within(
+            conn, batch_id, quantity=1.0, reason="consumption",
+            moment="2026-08-21T20:00:00")
+    assert batch_id and movement_ids and one_more
+
+    remaining = manager.db.read().execute(
+        "SELECT remaining FROM batch WHERE id = ?", (batch_id,)).fetchone()
+    assert remaining["remaining"] == pytest.approx(1.0)
+
+
+def test_the_public_wrappers_still_validate_before_taking_the_lock(manager):
+    """L'extraction ne doit pas avoir fait glisser la validation des parts À
+    L'INTÉRIEUR de la transaction : un enregistrement incohérent ne prend pas
+    le verrou d'écriture juste pour être refusé dedans."""
+    _seed_article(manager)
+    with pytest.raises(Exception):
+        manager.consume(product_id=1, quantity=1.0, parts_total=99, parts_mine=1)

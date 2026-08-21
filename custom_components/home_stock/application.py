@@ -4,6 +4,7 @@ Everything here is synchronous. Home Assistant calls it from the executor.
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from .const import (
     MACRO_COLUMNS,
+    LEFTOVER_CATEGORY_NAME,
     LEFTOVER_NAME_PREFIX,
     LEFTOVER_SHELF_LIFE_DAYS,
     MATCH_STATES,
@@ -28,6 +30,7 @@ from .const import (
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
     REASON_CONVERSION,
+    REASON_COOKED,
     REASON_INVENTORY,
     REASON_PURCHASE,
     REASON_TRANSFER,
@@ -1170,7 +1173,8 @@ class StockManager:
                      portions_eaten: float | None = None,
                      parts_total: int | None = None,
                      parts_mine: int | None = None,
-                     today: str | None = None) -> dict[str, Any]:
+                     today: str | None = None,
+                     allow_done: bool = False) -> dict[str, Any]:
         """What validating this meal WOULD do. Writes absolutely nothing.
 
         Runs on a read connection and goes through `domain.recipes.plan_decrement`,
@@ -1186,7 +1190,7 @@ class StockManager:
         meal = repo.get_meal(conn, meal_id)
         if meal is None:
             raise LookupError(f"unknown meal {meal_id}")
-        if meal["state"] == "done":
+        if meal["state"] == "done" and not allow_done:
             raise ValueError(f"meal {meal_id} is already done")
 
         wanted = _checked_servings(servings if servings is not None else meal["servings"])
@@ -1248,6 +1252,191 @@ class StockManager:
         preview["blocking"] = sorted(set(preview["blocking"]))
         preview["dish"] = _dish_summary(conn, recipe, wanted, frozen, today)
         return preview
+
+    def validate_meal(self, meal_id: int, *, portions_eaten: float,
+                      servings: float | None = None,
+                      parts_total: int | None = None,
+                      parts_mine: int | None = None,
+                      skip_ingredient_ids: Collection[int] = (),
+                      dry_run: bool = True,
+                      occurred_at: str | None = None) -> dict[str, Any]:
+        """Cook, then eat, in ONE transaction. `dry_run` is the default.
+
+        Simulating by default follows `import_grocy_catalog`, which has done so
+        since lot 0: a service that decrements a stock must not do it on the
+        first exploratory call from the developer tools.
+
+        The three writes, in this exact order:
+
+        1. the ingredients leave with reason `cooked`, FIFO, one movement per
+           batch crossed, each freezing its own price, kcal and eight macros;
+        2. the dish enters with reason `cooked`, one batch on the recipe's
+           leftover product, valued from the movements just written;
+        3. the evening's portion leaves with reason `consumption`, out of the
+           batch created one step earlier.
+
+        Idempotency does NOT rest on the panel's key. It rests on the
+        deterministic family `meal:<id>:…`: two different panel keys for the
+        same meal must not decrement it twice. A replay reads the movements
+        back by key prefix and returns the same ids.
+
+        This is not reversible at lot 3, and the screen says so rather than
+        pretending otherwise.
+        """
+        # Zero portions is a real answer, not a refusal: cooking a big dish on
+        # Sunday to eat during the week is exactly the case leftovers exist
+        # for. Negative, infinite and NaN are refused — an infinite portion
+        # would reach the movement row as `Inf`, which Home Assistant's JSON
+        # encoder renders as `null`, so nothing would look wrong on screen.
+        eaten = _checked_portions(portions_eaten)
+        parts_total, parts_mine = _checked_parts(
+            REASON_CONSUMPTION, parts_total, parts_mine)
+
+        moment = occurred_at or _now()
+        prefix = f"meal:{meal_id}"
+        if not dry_run:
+            # Looked up BEFORE the simulation is judged. A replay runs against
+            # a stock the first pass already decremented, so every line would
+            # now read `short` and the replay would be refused instead of
+            # recognised — turning a harmless retry into a hard error exactly
+            # when the offline queue needs it to be harmless.
+            replayed = _replayed_movements(self.db.read(), prefix)
+            if replayed:
+                return {**self.preview_meal(
+                            meal_id, servings=servings,
+                            skip_ingredient_ids=skip_ingredient_ids,
+                            today=moment[:10], allow_done=True),
+                        "movement_ids": replayed,
+                        "batch_id": _replayed_dish_batch(self.db.read(), prefix)}
+
+        preview = self.preview_meal(
+            meal_id, servings=servings, skip_ingredient_ids=skip_ingredient_ids,
+            today=moment[:10])
+        if dry_run:
+            return preview
+        if preview["blocking"]:
+            raise ValueError(
+                "meal {} cannot be validated: {}".format(
+                    meal_id, ", ".join(preview["blocking"])))
+        if preview["dish"] is not None and eaten > preview["dish"]["parts"]:
+            raise ValueError(
+                f"portions_eaten {eaten} exceeds the {preview['dish']['parts']} "
+                "parts this meal produces")
+
+        with self.db.write() as conn:
+            movement_ids: list[int] = []
+            frozen: list[dict[str, float | None]] = []
+            for line in preview["lines"]:
+                written = self._consume_within(
+                    conn, product_id=line["product_id"], quantity=line["needed"],
+                    reason=REASON_COOKED, moment=moment,
+                    base_unit=line["base_unit"], ref_type="meal", ref_id=meal_id,
+                    key=f"{prefix}:ing:{line['ingredient_id']}")
+                movement_ids.extend(written)
+                for movement_id in written:
+                    row = conn.execute(
+                        "SELECT kcal, cost, proteins, carbohydrates, sugars,"
+                        " added_sugars, fat, saturated_fat, fiber, salt"
+                        " FROM movement WHERE id = ?", (movement_id,)).fetchone()
+                    frozen.append(dict(row))
+
+            batch_id = None
+            if preview["recipe"] is not None:
+                batch_id = self._write_dish_within(
+                    conn, preview, frozen, moment=moment, meal_id=meal_id,
+                    prefix=prefix)
+                # The dish's own ENTRY movement counts too. It is a movement
+                # this validation wrote, and a replay reads it back with the
+                # others: leaving it out here would make the first answer and
+                # the replayed one disagree about what happened.
+                entry = conn.execute(
+                    "SELECT id FROM movement WHERE idempotency_key = ?",
+                    (f"{prefix}:dish",)).fetchone()
+                if entry is not None:
+                    movement_ids.append(int(entry["id"]))
+                if eaten > 0:
+                    movement_ids.append(self._consume_batch_within(
+                        conn, batch_id, quantity=eaten,
+                        reason=REASON_CONSUMPTION, moment=moment,
+                        parts_total=parts_total, parts_mine=parts_mine,
+                        ref_type="meal", ref_id=meal_id, key=f"{prefix}:eaten"))
+
+            repo.update_meal_fields(conn, meal_id, {
+                "state": "done", "validated_at": moment,
+                "portions_eaten": eaten, "servings": preview["servings"],
+                "parts_total": parts_total, "parts_mine": parts_mine,
+                # Provenance only. Nothing reads this back to compute anything:
+                # what was actually taken is in the movements, which are the
+                # only arithmetic there is.
+                "skipped_ingredient_ids": json.dumps(sorted(
+                    [line["ingredient_id"] for line in preview["by_hand"]]
+                    + sorted(skip_ingredient_ids))),
+            })
+            return {**preview, "movement_ids": movement_ids, "batch_id": batch_id}
+
+    def _write_dish_within(self, conn, preview: Mapping[str, Any],
+                           frozen: Sequence[Mapping[str, float | None]], *,
+                           moment: str, meal_id: int, prefix: str) -> int:
+        """The cooked dish enters the stock, valued from what actually left it.
+
+        The nutrition and the price live on the BATCH, not on the shared
+        article (amendment A2): two cookings of the same recipe have neither
+        the same nutrients nor the same cost, and writing them on the article
+        would overwrite the previous cooking while its portions are still in
+        the fridge.
+        """
+        recipe = repo.get_recipe(conn, preview["recipe"]["id"])
+        _, article_id = self._ensure_leftover_product(conn, recipe)
+        location_id = _fridge_location(conn)
+        dish = preview["dish"]
+        parts = dish["parts"]
+        nutrition = {
+            "kcal_per_base_unit": dish["kcal"],
+            **{column: dish[column] for column in MACRO_COLUMNS},
+        }
+        return self._add_stock_within(
+            conn, article_id=article_id, quantity=parts, location_id=location_id,
+            moment=moment, best_before=dish["best_before"],
+            price_per_base_unit=dish["cost"], reason=REASON_COOKED,
+            nutrition=nutrition, ref_type="meal", ref_id=meal_id,
+            key=f"{prefix}:dish",
+            # A cooked dish was never bought: recording a price observation
+            # for it would poison the price history of a product that has no
+            # shop and no receipt.
+            record_price_observation=False)
+
+    def _ensure_leftover_product(self, conn, recipe: Mapping[str, Any]) -> tuple[int, int]:
+        """The recipe's leftover product and its generic article, made once.
+
+        `recipe.leftover_product_id` remembers the link, so a second cooking
+        reuses the same product. A generic article accompanies it — lot 0
+        §6.3, no exception: a batch always points at an article, so no special
+        case appears in the consumption, kcal or cost code.
+        """
+        existing = recipe["leftover_product_id"]
+        if existing is not None:
+            article = conn.execute(
+                "SELECT id FROM article WHERE product_id = ? ORDER BY id LIMIT 1",
+                (existing,)).fetchone()
+            if article is not None:
+                return existing, int(article["id"])
+
+        category = conn.execute("SELECT id FROM category WHERE name = ?",
+                                (LEFTOVER_CATEGORY_NAME,)).fetchone()
+        category_id = (int(category["id"]) if category
+                       else repo.insert_category(conn, LEFTOVER_CATEGORY_NAME))
+        # `product.name` is UNIQUE since m001: on a collision the recipe id
+        # disambiguates rather than the write failing.
+        name = f"{LEFTOVER_NAME_PREFIX}{recipe['name']}"
+        if conn.execute("SELECT 1 FROM product WHERE name = ?", (name,)).fetchone():
+            name = f"{name} ({recipe['id']})"
+        product_id = repo.insert_product(
+            conn, name=name, base_unit="piece", category_id=category_id,
+            default_location_id=_fridge_location(conn), edible=1)
+        article_id = repo.insert_article(conn, product_id=product_id, is_generic=1)
+        repo.update_recipe_fields(conn, recipe["id"],
+                                  {"leftover_product_id": product_id})
+        return product_id, article_id
 
 
 # =============================================================================
@@ -1506,6 +1695,18 @@ def _checked_day(day: Any) -> str:
     return checked
 
 
+def _checked_portions(portions: Any) -> float:
+    """A real, finite, non-negative number of portions eaten."""
+    try:
+        value = finite_float(portions)
+    except vol.Invalid as err:
+        raise ValueError(
+            f"portions_eaten must be a real number, got {portions!r}") from err
+    if value < 0:
+        raise ValueError(f"portions_eaten must not be negative, got {value}")
+    return value
+
+
 def _checked_servings(servings: Any) -> float:
     """A real, finite, strictly positive serving count."""
     try:
@@ -1590,3 +1791,41 @@ def _dish_summary(conn, recipe: Mapping[str, Any], parts: float,
         "unvalued": sum(1 for row in frozen if row["kcal"] is None),
         **per_part,
     }
+
+
+def _fridge_location(conn) -> int:
+    """The first fridge, or failing that the first location at all.
+
+    A dish with nowhere to go would be a dish that cannot be written, so an
+    installation with no fridge declared still gets its leftovers stored
+    rather than losing the whole validation over a missing setting.
+    """
+    row = conn.execute(
+        "SELECT id FROM location WHERE kind = 'fridge' ORDER BY position, id"
+        " LIMIT 1").fetchone()
+    if row is not None:
+        return int(row["id"])
+    row = conn.execute("SELECT id FROM location ORDER BY position, id LIMIT 1").fetchone()
+    if row is None:
+        raise ValueError("no location to put the dish in")
+    return int(row["id"])
+
+
+def _replayed_movements(conn, prefix: str) -> list[int]:
+    """The movements a previous validation of this meal already wrote.
+
+    Matched on the deterministic `meal:<id>:` family, not on the panel's own
+    idempotency key: two different panel keys for the same meal must not cook
+    it twice. The prefix is escaped so a '%' or '_' inside it stays literal.
+    """
+    rows = conn.execute(
+        "SELECT id FROM movement WHERE idempotency_key LIKE ? ESCAPE '\\'"
+        " ORDER BY id", (f"{_escape_like(prefix)}:%",)).fetchall()
+    return [int(row["id"]) for row in rows]
+
+
+def _replayed_dish_batch(conn, prefix: str) -> int | None:
+    row = conn.execute(
+        "SELECT batch_id FROM movement WHERE idempotency_key = ?",
+        (f"{prefix}:dish",)).fetchone()
+    return int(row["batch_id"]) if row and row["batch_id"] is not None else None

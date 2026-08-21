@@ -1636,7 +1636,7 @@ class StockManager:
 
 **Décision de plan — la clé du panneau ne remplace pas les clés déterministes.** `home_stock/meal/validate` porte une `idempotency_key` (la file hors-ligne la pose sur tout). Elle est acceptée et validée, mais **le garde-fou est la famille `meal:<id>:…`**, dérivée de l'identifiant du repas : deux clés de panneau différentes pour le même repas ne doivent pas décrémenter deux fois. Un rejeu relit les mouvements par préfixe de clé et rend les mêmes `movement_ids`.
 
-- [ ] **Step 1: Écrire les tests du refactor d'abord**
+- [x] **Step 1: Écrire les tests du refactor d'abord**
 
 Ils ne portent pas sur du code neuf : ils épinglent le comportement **avant** de déplacer quoi que ce soit.
 
@@ -1654,7 +1654,7 @@ def test_two_writes_in_one_transaction_do_not_deadlock(manager):
                                 reason="cooked", moment="2026-08-21T20:00:00")
 ```
 
-- [ ] **Step 2: Écrire les tests de validation**
+- [x] **Step 2: Écrire les tests de validation**
 
 ```python
 # --- la simulation par défaut ----------------------------------------------
@@ -1729,7 +1729,7 @@ def test_a_dinner_validated_at_one_in_the_morning_lands_on_the_evening(manager):
     fait monter sa barre."""
 ```
 
-- [ ] **Step 3: Écrire les tests des restes** dans `tests/test_leftovers.py`
+- [x] **Step 3: Écrire les tests des restes** dans `tests/test_leftovers.py`
 
 ```python
 def test_the_leftover_product_is_created_once_for_two_cookings(manager):
@@ -1761,18 +1761,18 @@ def test_a_leftover_product_falls_back_to_the_other_aisle(manager):
     liste de courses — ce que le lot 4 devra explicitement empêcher."""
 ```
 
-- [ ] **Step 4: Lancer, vérifier l'échec**
+- [x] **Step 4: Lancer, vérifier l'échec**
 
 Run: `./scripts/test.sh tests/test_meal_validate.py tests/test_leftovers.py -q`
 Expected: FAIL
 
-- [ ] **Step 5: Extraire les trois `_within`, puis écrire `validate_meal`**
+- [x] **Step 5: Extraire les trois `_within`, puis écrire `validate_meal`**
 
 Faire le refactor **en premier** et relancer la suite entière avant d'écrire une seule ligne de `validate_meal` : c'est le seul moment où l'on saura qu'une régression vient du déplacement et non du code neuf.
 
 Run intermédiaire : `./scripts/test.sh -q` → PASS obligatoire avant de continuer.
 
-- [ ] **Step 6: Vert**
+- [x] **Step 6: Vert**
 
 ```bash
 ./scripts/test.sh tests/test_meal_validate.py tests/test_leftovers.py -q
@@ -1780,7 +1780,7 @@ Run intermédiaire : `./scripts/test.sh -q` → PASS obligatoire avant de contin
 ```
 Expected: PASS des deux.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 ```bash
 git add custom_components/home_stock/application.py tests/test_meal_validate.py tests/test_leftovers.py
 git commit -m "feat: validate a meal — cook then eat, in one transaction"
