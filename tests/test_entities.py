@@ -444,3 +444,25 @@ async def test_the_three_sensors_are_named_in_french(hass, setup_entry):
         # manquante fait retomber le nom sur l'`entity_id` brut.
         assert en["entity"]["sensor"][cle]["name"]
         assert hass.states.get(f"sensor.home_stock_{cle}") is not None
+
+
+async def test_the_three_cumulative_counters_are_total_not_total_increasing(hass, loaded):
+    """Une correction les fait BAISSER. Déclarés TOTAL_INCREASING, Home
+    Assistant lit cette baisse comme la remise à zéro d'un compteur
+    d'appareil et AJOUTE la nouvelle valeur : une correction de 300 kcal
+    produirait un saut de plusieurs milliers dans les statistiques."""
+    for entity_id in ("sensor.home_stock_kcal_total",
+                      "sensor.home_stock_cost_total",
+                      "sensor.home_stock_cost_waste_total"):
+        state = hass.states.get(entity_id)
+        assert state.attributes["state_class"] == "total"
+        # Sans last_reset : HA somme alors les DIFFÉRENCES successives, et
+        # une différence négative est une donnée valide.
+        assert "last_reset" not in state.attributes
+
+
+async def test_the_eleven_daily_sensors_do_not_move(hass, loaded):
+    """Le garde-fou : seuls trois capteurs changent de classe. Les `_today`
+    étaient déjà TOTAL et le restent."""
+    state = hass.states.get("sensor.home_stock_kcal_today")
+    assert state.attributes["state_class"] == "total"

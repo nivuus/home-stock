@@ -63,7 +63,11 @@ class KcalTotalSensor(HomeStockEntity, SensorEntity):
     """
 
     _attr_native_unit_of_measurement = "kcal"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL et non TOTAL_INCREASING depuis le lot 4 : une correction fait
+    # BAISSER ce cumul, et TOTAL_INCREASING lirait cette baisse comme la
+    # remise à zéro d'un compteur d'appareil — HA ajouterait alors la
+    # nouvelle valeur au lieu de la soustraire.
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "kcal_total", ENTITY_ID_FORMAT)
@@ -77,7 +81,8 @@ class CostTotalSensor(HomeStockEntity, SensorEntity):
     """Cumulative cost of what left the stock, purchases excluded."""
 
     _attr_native_unit_of_measurement = "EUR"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL depuis le lot 4 : une correction fait baisser ce cumul (§ A2).
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "cost_total", ENTITY_ID_FORMAT)
@@ -200,7 +205,8 @@ class CostWasteTotalSensor(HomeStockEntity, SensorEntity):
     """
 
     _attr_native_unit_of_measurement = "EUR"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL depuis le lot 4 : une correction fait baisser ce cumul (§ A2).
+    _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, coordinator: HomeStockCoordinator) -> None:
         super().__init__(coordinator, "cost_waste_total", ENTITY_ID_FORMAT)
