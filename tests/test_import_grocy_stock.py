@@ -542,3 +542,138 @@ def test_the_import_never_opens_a_second_transaction(db_catalogue, grocy_reel_db
     le processus SANS lever. Ce test ne peut donc pas échouer proprement — il
     expire. C'est pour lui que --timeout=60 est sur toute la suite."""
     import_stock(db_catalogue, grocy_reel_db, apply=True)     # doit rendre la main
+
+
+# --- conversions et courses -------------------------------------------------
+
+def test_fifteen_pairs_become_fourteen_packagings(db_catalogue, grocy_reel_db):
+    """30 lignes, 15 paires aller-retour : le sens inverse est le même fait
+    écrit deux fois. Et « 1 Lot = 1 Pot » est écartée — les deux deviennent
+    piece, facteur 1, c'est un no-op."""
+    rapport = import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert rapport.packagings == 14
+
+
+def test_a_bottle_of_olive_oil_is_seven_hundred_and_fifty_millilitres(
+        db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    row = db_catalogue.read().execute(
+        "SELECT pk.base_quantity FROM packaging AS pk"
+        " JOIN product AS prod ON prod.id = pk.target_id"
+        " WHERE pk.scope = 'product' AND pk.name = 'Bouteille'"
+        "   AND prod.name LIKE 'Huile d%olive%'").fetchone()
+    assert row["base_quantity"] == 750.0
+
+
+def test_a_piece_packaging_carries_grams(db_catalogue, grocy_reel_db):
+    """« Houmous bio Pascalou 160g » : 1 Pièce = 160 g."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    row = db_catalogue.read().execute(
+        "SELECT pk.base_quantity FROM packaging AS pk"
+        " JOIN product AS prod ON prod.id = pk.target_id"
+        " WHERE pk.name = 'Pièce' AND prod.name LIKE 'Houmous%'").fetchone()
+    assert row["base_quantity"] == 160.0
+
+
+def test_a_no_op_conversion_is_dropped(db_catalogue, grocy_reel_db):
+    """« 1 Lot = 1 Pot » sur le yaourt aux fruits : Lot et Pot deviennent tous
+    deux piece, facteur 1. Une ligne packaging qui dit « une pièce vaut une
+    pièce » est du bruit."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT COUNT(*) AS n FROM packaging WHERE name = 'Lot'"
+    ).fetchone()["n"] == 0
+
+
+def test_an_existing_packaging_is_never_overwritten(db_catalogue, grocy_reel_db):
+    """Le lot 1 a pu en créer depuis Open Food Facts, et une mesure
+    d'emballage vaut mieux qu'une conversion de 2026."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    with db_catalogue.write() as conn:
+        conn.execute("UPDATE packaging SET base_quantity = 700"
+                     " WHERE name = 'Bouteille'")
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert db_catalogue.read().execute(
+        "SELECT base_quantity FROM packaging WHERE name = 'Bouteille' LIMIT 1"
+    ).fetchone()["base_quantity"] == 700
+
+
+def test_only_the_nine_open_shopping_rows_come_over(db_catalogue, grocy_reel_db):
+    """16 lignes cochées : une course faite n'a pas d'après."""
+    rapport = import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert rapport.list_items == 9
+    assert len(repo.list_items(db_catalogue.read())) == 9
+
+
+def test_each_line_gets_a_manual_claim(db_catalogue, grocy_reel_db):
+    """Leur origine réelle est inconnaissable, et `manual` est la seule des
+    quatre origines qui ne prétende rien."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    origines = {row["origin"] for row in db_catalogue.read().execute(
+        "SELECT origin FROM shopping_list_claim")}
+    assert origines == {"manual"}
+
+
+def test_the_four_notes_travel_as_they_are(db_catalogue, grocy_reel_db):
+    """Quatre, pas trois : trois sont des prescriptions médicamenteuses, la
+    quatrième dit « bouteille ~1L » sur le savon noir. Amendement A5 du § 22 —
+    la spec a compté les prescriptions, pas les notes. La colonne est faite
+    pour les unes comme pour l'autre."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    avec_note = [i for i in repo.list_items(db_catalogue.read()) if i["note"]]
+    assert len(avec_note) == 4
+    assert any("2x/semaine" in i["note"] for i in avec_note)
+
+
+def test_the_unique_open_product_index_passes_without_arbitration(
+        db_catalogue, grocy_reel_db):
+    """Les 9 produits sont actifs et distincts : idx_list_open_product tient
+    sans qu'on ait à trancher quoi que ce soit."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    ids = [i["product_id"] for i in repo.list_items(db_catalogue.read())]
+    assert len(ids) == len(set(ids)) == 9
+
+
+def test_a_sachet_and_a_paquet_are_both_pieces(db_catalogue, grocy_reel_db):
+    """« Cerneaux de noix » : Sachet contre Paquet. Les deux deviennent piece,
+    facteur 1, aucune conversion — et surtout pas une division."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    ligne = next(i for i in repo.list_items(db_catalogue.read())
+                 if "Cerneaux" in (i.get("product_name") or ""))
+    assert ligne["quantity"] == 1.0
+
+
+def test_a_quantity_in_grams_stays_in_grams(db_catalogue, grocy_reel_db):
+    """« Savon noir liquide », 1 000 g : la ligne de courses est dans l'unité
+    de base du produit, comme partout ailleurs dans home_stock."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    ligne = next(i for i in repo.list_items(db_catalogue.read())
+                 if "Savon noir" in (i.get("product_name") or ""))
+    assert ligne["quantity"] == 1000.0
+
+
+def test_a_second_run_adds_no_second_list_line(db_catalogue, grocy_reel_db):
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    second = import_stock(db_catalogue, grocy_reel_db, apply=True)
+    assert second.list_items == 0
+    assert len(repo.list_items(db_catalogue.read())) == 9
+
+
+def test_no_shopping_session_and_no_store_are_invented(db_catalogue,
+                                                       grocy_reel_db):
+    """shopping_locations est VIDE chez Grocy : rien pour amorcer l'ordre des
+    rayons du lot 4, et on n'en fabrique pas."""
+    import_stock(db_catalogue, grocy_reel_db, apply=True)
+    conn = db_catalogue.read()
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_session").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM store").fetchone()["n"] == 0
+
+
+def test_a_dry_run_creates_neither_packaging_nor_list_line(db_catalogue,
+                                                           grocy_reel_db):
+    rapport = import_stock(db_catalogue, grocy_reel_db, apply=False)
+    assert rapport.packagings == 14 and rapport.list_items == 9
+    conn = db_catalogue.read()
+    assert conn.execute("SELECT COUNT(*) AS n FROM packaging").fetchone()["n"] == 0
+    assert repo.list_items(conn) == []

@@ -227,7 +227,7 @@ class StockReport:
     movements: int = 0
     packagings: int = 0
     list_items: int = 0
-    skipped: int = 0
+    skipped: int = 0            # des LOTS déjà importés, et rien d'autre
     anomalies: list[str] = field(default_factory=list)
 
     @property
@@ -333,6 +333,106 @@ def _fix_fridge_within(conn, report: StockReport) -> None:
         " « fridge » (Grocy ne distingue que le congélateur)")
 
 
+def _import_packagings_within(conn, grocy, catalogue: Mapping[int, CatalogueEntry],
+                              report: StockReport, *, apply: bool) -> None:
+    """The 15 hand-typed conversion pairs become 14 packagings.
+
+    Lot 0 gave up on creating packagings: "the net weight will come from Open
+    Food Facts at lot 1, through product_quantity, which is a measurement and
+    not a guess". The 30 rows of `quantity_unit_conversions` are 15 round-trip
+    pairs typed by hand by the owner — measurements too, on exactly the same
+    footing. Only the packaging → base unit direction is kept: the reverse is
+    the same fact written twice.
+
+    "1 Lot = 1 Pot" is dropped: both resolve to `piece`, factor 1, and a row
+    saying "one piece is worth one piece" is noise.
+
+    An existing packaging is never overwritten — lot 1 may have created one
+    from Open Food Facts, and a measured pack beats a 2026 conversion.
+
+    Takes `conn`, never `db`: it runs inside the transaction import_stock
+    opened. `Database._lock` is not reentrant.
+    """
+    unites = {row["id"]: row["name"] for row in
+              grocy.execute("SELECT id, name FROM quantity_units")}
+    existants = {(row["scope"], row["target_id"], row["name"]) for row in
+                 conn.execute("SELECT scope, target_id, name FROM packaging")}
+    for row in grocy.execute(
+        "SELECT id, from_qu_id, to_qu_id, factor, product_id"
+        " FROM quantity_unit_conversions ORDER BY id"
+    ):
+        entry = catalogue.get(row["product_id"])
+        if entry is None:
+            continue
+        depart = base_unit(unites.get(row["from_qu_id"], "?"))
+        arrivee = base_unit(unites.get(row["to_qu_id"], "?"))
+        if depart is None or arrivee is None:
+            continue
+        if arrivee[0] != entry.base_unit:
+            continue                    # le sens inverse, ou une unité tierce
+        base_quantity = row["factor"] * arrivee[1]
+        if depart[0] == arrivee[0] and base_quantity == 1.0:
+            continue                    # « une pièce vaut une pièce » : du bruit
+        cle = ("product", entry.product_id, unites[row["from_qu_id"]])
+        if cle in existants:
+            continue
+        existants.add(cle)
+        report.packagings += 1
+        if apply:
+            repo.insert_packaging(
+                conn, scope="product", target_id=entry.product_id,
+                name=unites[row["from_qu_id"]], base_quantity=base_quantity)
+
+
+def _import_shopping_within(conn, grocy, catalogue: Mapping[int, CatalogueEntry],
+                            report: StockReport, *, apply: bool) -> None:
+    """The 9 open lines. The 16 ticked ones stay: a done errand has no after.
+
+    Each line gets a `manual` claim. Their real origin is unknowable, and
+    `manual` is the only one of the four origins that claims nothing.
+    """
+    deja = {row["product_id"] for row in conn.execute(
+        "SELECT product_id FROM shopping_list_item"
+        " WHERE product_id IS NOT NULL AND checked_at IS NULL"
+        "   AND removed_at IS NULL")}
+    unites = {row["id"]: row["name"] for row in
+              grocy.execute("SELECT id, name FROM quantity_units")}
+    maintenant = _today()
+    for row in grocy.execute(
+        "SELECT id, product_id, note, amount, done, qu_id"
+        " FROM shopping_list WHERE done = 0 ORDER BY id"
+    ):
+        entry = catalogue.get(row["product_id"])
+        if entry is None:
+            report.anomalies.append(
+                f"ligne de courses Grocy {row['id']} : produit"
+                f" {row['product_id']} absent du catalogue, ligne ignorée")
+            continue
+        if entry.product_id in deja:
+            # `skipped` compte les LOTS déjà importés, et rien d'autre : une
+            # ligne de courses déjà ouverte n'est pas un lot sauté, et mélanger
+            # les deux rendrait le chiffre du rapport illisible.
+            continue
+        mapped = base_unit(unites.get(row["qu_id"], "?"))
+        quantity = None
+        if mapped is not None and mapped[0] == entry.base_unit:
+            quantity = row["amount"] * mapped[1]
+        elif mapped is not None:
+            # Sachet contre Paquet : les deux sont des pièces, facteur 1.
+            # Aucune conversion, et surtout pas une division.
+            quantity = row["amount"] * mapped[1] if mapped[0] == "piece" else None
+        deja.add(entry.product_id)
+        report.list_items += 1
+        if not apply:
+            continue
+        item_id = repo.insert_list_item(
+            conn, added_at=maintenant, product_id=entry.product_id,
+            quantity=quantity, note=row["note"] or None)
+        repo.set_claim(conn, item_id=item_id, origin="manual", quantity=quantity,
+                       detail="repris de la liste de courses de Grocy",
+                       claimed_at=maintenant)
+
+
 def import_stock(db, grocy_path: str, *, apply: bool = False) -> StockReport:
     """Bring the stock over. Without apply=True, nothing is written.
 
@@ -392,6 +492,8 @@ def import_stock(db, grocy_path: str, *, apply: bool = False) -> StockReport:
                     idempotency_key=lot.external_ref)
 
             _fix_fridge_within(conn, report)
+            _import_packagings_within(conn, grocy, catalogue, report, apply=apply)
+            _import_shopping_within(conn, grocy, catalogue, report, apply=apply)
             if not apply:
                 conn.rollback()
     finally:
