@@ -23,6 +23,7 @@ from .const import (
     CONSUMABLE_UNITS,
     DEFAULT_KEEP_PERCENT,
     DEFAULT_LOW_PERCENT,
+    GOAL_WINDOW_DAYS,
     MACRO_COLUMNS,
     LEFTOVER_CATEGORY_NAME,
     LEFTOVER_NAME_PREFIX,
@@ -779,6 +780,15 @@ class StockManager:
         day_start, day_end = food_day_bounds(now or datetime.now(UTC), tz)
         today_totals = repo.totals_between(conn, day_start, day_end)
 
+        # Les sept journées CLOSES qui précèdent : J-7 … J-1, la journée
+        # courante exclue (spec § 7.3). Divisée par sept JOURNÉES, pas par
+        # 168 heures : une journée est une journée, même quand elle en dure
+        # 23 ou 25. Une dérive se lit sur des journées finies.
+        week_start, _ = bounds_of_food_day(
+            food_day_of(now or datetime.now(UTC), tz) - timedelta(days=GOAL_WINDOW_DAYS),
+            tz)
+        week_totals = repo.totals_between(conn, week_start, day_start)
+
         # The cart: read on this same connection, like the rest of the
         # summary — a second, separate read here could race a concurrent
         # write and show a session that no longer matches its own totals.
@@ -825,6 +835,17 @@ class StockManager:
             # Rounded to 2 decimals like every other euro sensor
             # (stock_value, cost_total): session_totals() itself keeps 4,
             # for the websocket API's own precision needs.
+            # Même forme que `today`, moins `food_day` et `start` : un capteur
+            # doit pouvoir lire l'une ou l'autre fenêtre sans se demander
+            # laquelle. Chaque grandeur est divisée par sept avant l'arrondi.
+            "week_mean": {
+                "kcal": round(week_totals["kcal"] / GOAL_WINDOW_DAYS, 1),
+                **{column: round(week_totals[column] / GOAL_WINDOW_DAYS, 3)
+                   for column in MACRO_COLUMNS},
+                "cost": round(week_totals["cost"] / GOAL_WINDOW_DAYS, 2),
+                "waste_cost": round(week_totals["waste_cost"] / GOAL_WINDOW_DAYS, 2),
+                "unvalued": int(week_totals["unvalued"]),
+            },
             "cart_total": round(cart_totals["total"], 2) if cart_totals else 0.0,
             "cart_lines": cart_totals["lines"] if cart_totals else 0,
             "cart_pending": cart_totals["pending"] if cart_totals else 0,
