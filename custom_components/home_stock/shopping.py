@@ -30,7 +30,8 @@ class ShoppingService:
 
     # --- session ------------------------------------------------------------
 
-    def start(self, *, store: str | None) -> dict[str, Any]:
+    def start(self, *, store: str | None = None,
+              store_id: int | None = None) -> dict[str, Any]:
         """Open a trip. Refuses ANY session that is not `done`.
 
         Not just an open one: the partial unique index only covers
@@ -57,8 +58,54 @@ class ShoppingService:
                     f"Des courses{enseigne} attendent encore d'être rangées : "
                     "rangez-les ou clôturez-les avant d'en ouvrir de nouvelles."
                 )
-            session_id = repo.open_session(conn, started_at=_now(), store=store)
+            # Le magasin est une LIGNE depuis le lot 4 (amendement A4).
+            # `store_id` prime : le panneau envoie une pastille, pas une
+            # chaîne. Un nom sans identifiant crée le magasin s'il n'existe
+            # pas, par égalité EXACTE — deux orthographes restent deux
+            # magasins tant que le propriétaire ne les a pas fusionnés.
+            name = store.strip() if isinstance(store, str) else store
+            if store_id is not None:
+                row = repo.get_store(conn, store_id)
+                if row is None:
+                    raise ShoppingError("Ce magasin n'existe pas.")
+                name = row["name"]
+            elif name:
+                store_id = repo.upsert_store(conn, name=name)
+            else:
+                name = None
+            session_id = repo.open_session(conn, started_at=_now(), store=name,
+                                           store_id=store_id)
             return repo.get_session(conn, session_id)
+
+    def merge_stores(self, *, keep_id: int, merge_id: int) -> dict[str, Any]:
+        """Réunir deux orthographes du même magasin.
+
+        Refusé tant qu'une session est en cours dans l'un des deux : on ne
+        déplace pas le sol sous une session de courses.
+        """
+        if keep_id == merge_id:
+            raise ShoppingError("Ces deux magasins sont le même.")
+        with self.manager.db.write() as conn:
+            current = repo.current_session(conn)
+            if current is not None and current["store_id"] in (keep_id, merge_id):
+                raise ShoppingError(
+                    "Une session de courses est en cours dans ce magasin : "
+                    "clôturez-la avant de fusionner.")
+            for store_id in (keep_id, merge_id):
+                if repo.get_store(conn, store_id) is None:
+                    raise ShoppingError("Ce magasin n'existe pas.")
+            return repo.merge_stores(conn, keep_id=keep_id, merge_id=merge_id)
+
+    def list_stores(self, *, active_only: bool = True) -> list[dict[str, Any]]:
+        return repo.list_stores(self.manager.db.read(), active_only=active_only)
+
+    def upsert_store(self, *, name: str, store_id: int | None = None,
+                     position: int | None = None,
+                     active: int | None = None) -> dict[str, Any]:
+        with self.manager.db.write() as conn:
+            written = repo.upsert_store(conn, name=name, store_id=store_id,
+                                        position=position, active=active)
+            return repo.get_store(conn, written)
 
     def current(self) -> dict[str, Any] | None:
         conn = self.manager.db.read()

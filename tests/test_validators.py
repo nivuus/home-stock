@@ -161,3 +161,18 @@ def test_price_source_lets_nothing_through_unknown():
         price_source("open_price")
     assert price_source(None) is None
     assert price_source("") is None
+
+
+def test_a_store_name_is_bounded_and_stripped():
+    """`validators.store_name` : vide → refus, 300 caractères → refus,
+    espaces de bord retirés."""
+    from custom_components.home_stock.validators import store_name
+    assert store_name("  Leclerc  ") == "Leclerc"
+    with pytest.raises(vol.Invalid):
+        store_name("")
+    with pytest.raises(vol.Invalid):
+        store_name("   ")
+    with pytest.raises(vol.Invalid):
+        store_name("x" * 300)
+    with pytest.raises(vol.Invalid):
+        store_name(None)

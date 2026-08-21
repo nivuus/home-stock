@@ -118,17 +118,15 @@ def test_session_totals_on_an_empty_session(conn):
     assert totals["pending"] is not None
 
 
-def test_list_stores_ignores_prices_with_no_store(conn):
+def test_list_stores_reads_the_store_table_not_the_free_text_of_price(conn):
+    """Depuis le lot 4 le magasin est une LIGNE (amendement A4). Un prix
+    observé chez « Carrefour » ne crée plus un magasin par effet de bord :
+    c'est `m006` qui a promu l'existant, une fois."""
     repo.insert_price(conn, article_id=1, observed_on="2026-08-01",
                       price_per_base_unit=0.003, store="Carrefour", source="manual")
-    repo.insert_price(conn, article_id=1, observed_on="2026-08-02",
-                      price_per_base_unit=0.002, store="Leclerc", source="manual")
-    repo.insert_price(conn, article_id=1, observed_on="2026-08-03",
-                      price_per_base_unit=0.0021, store=None, source="manual")
-    repo.insert_price(conn, article_id=1, observed_on="2026-08-04",
-                      price_per_base_unit=0.0022, store="", source="manual")
-
-    assert sorted(repo.list_stores(conn)) == ["Carrefour", "Leclerc"]
+    assert repo.list_stores(conn) == []
+    repo.upsert_store(conn, name="Carrefour")
+    assert [row["name"] for row in repo.list_stores(conn)] == ["Carrefour"]
 
 
 def test_latest_price_in_store_breaks_a_same_day_tie_by_insertion_order(conn):
@@ -208,12 +206,16 @@ def test_the_price_of_this_shop_beats_the_price_of_another(conn):
 
 
 def test_known_shops_come_back_most_recent_first(conn):
-    repo.insert_price(conn, article_id=1, observed_on="2026-08-01",
-                      price_per_base_unit=0.003, store="Carrefour", source="manual")
-    repo.insert_price(conn, article_id=1, observed_on="2026-08-05",
-                      price_per_base_unit=0.002, store="Leclerc", source="manual")
+    carrefour = repo.upsert_store(conn, name="Carrefour")
+    leclerc = repo.upsert_store(conn, name="Leclerc")
+    repo.open_session(conn, started_at="2026-08-01T09:00:00", store="Carrefour",
+                      store_id=carrefour)
+    repo.set_session_state(conn, 1, "done", closed_at="2026-08-01T10:00:00")
+    repo.open_session(conn, started_at="2026-08-05T09:00:00", store="Leclerc",
+                      store_id=leclerc)
+    repo.set_session_state(conn, 2, "done", closed_at="2026-08-05T10:00:00")
 
-    assert repo.list_stores(conn) == ["Leclerc", "Carrefour"]
+    assert [row["name"] for row in repo.list_stores(conn)] == ["Leclerc", "Carrefour"]
 
 
 # --- amendement A3 : la cascade ne se nourrit pas de ses suppositions -------
@@ -246,3 +248,129 @@ def test_a_store_with_only_suggested_prices_answers_nothing(conn, source):
     connu — comportement du lot 1, préservé."""
     _observe(conn, source=source, price=0.009, day="2026-08-20")
     assert repo.latest_price_in_store(conn, 1, "Leclerc") is None
+
+
+# --- amendement A4 : le magasin promu en table ------------------------------
+
+def _done_session(conn, *, store_id, name, started_at):
+    session_id = repo.open_session(conn, started_at=started_at, store=name,
+                                   store_id=store_id)
+    repo.set_session_state(conn, session_id, "done", closed_at=started_at)
+    return session_id
+
+
+def test_list_stores_now_carries_an_id_and_a_session_count(conn):
+    """Forme changée : les appelants du lot 1 (session.ts, websocket) sont
+    tous mis à jour dans ce lot. Le test épingle les cinq clés."""
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    _done_session(conn, store_id=store_id, name="Leclerc",
+                  started_at="2026-08-01T09:00:00")
+    [row] = repo.list_stores(conn)
+    assert set(row) == {"id", "name", "position", "active",
+                        "observed_sessions", "last_seen"}
+    assert row["id"] == store_id
+    assert row["name"] == "Leclerc"
+    assert row["observed_sessions"] == 1
+    assert row["last_seen"] == "2026-08-01T09:00:00"
+
+
+def test_two_spellings_stay_two_stores(conn):
+    """« Leclerc » et « E.Leclerc » restent distincts. Les réunir est une
+    décision du propriétaire, prise dans les réglages, jamais devinée."""
+    first = repo.upsert_store(conn, name="Leclerc")
+    second = repo.upsert_store(conn, name="E.Leclerc")
+    assert first != second
+    assert repo.upsert_store(conn, name="Leclerc") == first
+    # La casse compte : deviner qu'elle ne compte pas, c'est deviner.
+    assert repo.upsert_store(conn, name="leclerc") not in (first, second)
+
+
+def test_merging_reassigns_sessions_prices_and_aisle_orders(conn):
+    """Et additionne les `observed_sessions` : un magasin fiable ne
+    redevient pas incertain parce qu'on a corrigé son nom."""
+    keep = repo.upsert_store(conn, name="Leclerc")
+    merge = repo.upsert_store(conn, name="E.Leclerc")
+    _done_session(conn, store_id=keep, name="Leclerc", started_at="2026-08-01T09:00:00")
+    _done_session(conn, store_id=merge, name="E.Leclerc",
+                  started_at="2026-08-08T09:00:00")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-08",
+                      price_per_base_unit=0.002, store="E.Leclerc", source="manual",
+                      store_id=merge)
+    aisle_id = repo.list_aisles(conn)[0]["id"]
+    repo.set_store_aisle(conn, store_id=merge, aisle_id=aisle_id, position=3,
+                         source="learned", mean_rank=1.5, observed_sessions=2,
+                         updated_at="2026-08-08T10:00:00")
+
+    result = repo.merge_stores(conn, keep_id=keep, merge_id=merge)
+
+    assert result["keep_id"] == keep
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_session WHERE store_id = ?",
+        (keep,)).fetchone()["n"] == 2
+    assert conn.execute("SELECT store_id FROM price WHERE id = 1").fetchone()[0] == keep
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM store_aisle WHERE store_id = ?",
+        (keep,)).fetchone()["n"] == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM store WHERE id = ?",
+                        (merge,)).fetchone()["n"] == 0
+    [row] = repo.list_stores(conn)
+    assert row["observed_sessions"] == 2
+
+
+def test_merging_leaves_the_free_text_of_price_untouched(conn):
+    """`price.store` garde « E.Leclerc » : c'est ce qui a été observé.
+
+    `price` est un journal d'observations. Réécrire le texte pour faire
+    joli, c'est exactement ce que le lot 0 refuse au journal des mouvements.
+    """
+    keep = repo.upsert_store(conn, name="Leclerc")
+    merge = repo.upsert_store(conn, name="E.Leclerc")
+    repo.insert_price(conn, article_id=1, observed_on="2026-08-08",
+                      price_per_base_unit=0.002, store="E.Leclerc", source="manual",
+                      store_id=merge)
+
+    repo.merge_stores(conn, keep_id=keep, merge_id=merge)
+
+    row = conn.execute("SELECT store, store_id FROM price WHERE id = 1").fetchone()
+    assert row["store"] == "E.Leclerc"
+    assert row["store_id"] == keep
+
+
+def test_merging_two_aisle_orders_keeps_the_one_of_the_surviving_store(conn):
+    """Deux ordres pour le même rayon : celui du magasin conservé gagne. Il
+    ne peut en rester qu'un, la clé primaire est (store_id, aisle_id)."""
+    keep = repo.upsert_store(conn, name="Leclerc")
+    merge = repo.upsert_store(conn, name="E.Leclerc")
+    aisle_id = repo.list_aisles(conn)[0]["id"]
+    repo.set_store_aisle(conn, store_id=keep, aisle_id=aisle_id, position=1,
+                         source="manual", updated_at="2026-08-01T10:00:00")
+    repo.set_store_aisle(conn, store_id=merge, aisle_id=aisle_id, position=9,
+                         source="learned", updated_at="2026-08-08T10:00:00")
+
+    repo.merge_stores(conn, keep_id=keep, merge_id=merge)
+
+    rows = conn.execute("SELECT * FROM store_aisle").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["position"] == 1 and rows[0]["source"] == "manual"
+
+
+def test_deactivating_a_store_keeps_its_history(conn):
+    """`active = 0` le retire des pastilles, pas des prix ni des parcours."""
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    _done_session(conn, store_id=store_id, name="Leclerc",
+                  started_at="2026-08-01T09:00:00")
+    repo.upsert_store(conn, name="Leclerc", store_id=store_id, active=0)
+
+    assert repo.list_stores(conn) == []
+    assert [row["name"] for row in repo.list_stores(conn, active_only=False)] == ["Leclerc"]
+    assert conn.execute(
+        "SELECT COUNT(*) AS n FROM shopping_session WHERE store_id = ?",
+        (store_id,)).fetchone()["n"] == 1
+
+
+def test_find_store_by_name_is_an_exact_match(conn):
+    store_id = repo.upsert_store(conn, name="Leclerc")
+    assert repo.find_store_by_name(conn, "Leclerc")["id"] == store_id
+    assert repo.find_store_by_name(conn, "leclerc") is None
+    assert repo.find_store_by_name(conn, "Lecler") is None
+    assert repo.get_store(conn, store_id)["name"] == "Leclerc"

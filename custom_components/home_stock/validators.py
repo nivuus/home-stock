@@ -324,3 +324,19 @@ def price_source(value: Any) -> str | None:
         raise vol.Invalid(
             f"unknown price source '{text}'; expected one of {PRICE_SOURCES}")
     return text
+
+
+def store_name(value: Any) -> str:
+    """Le nom d'un magasin : non vide, borné, espaces de bord retirés.
+
+    Un nom vide créerait une pastille anonyme que rien ne distingue d'une
+    autre, et `store.name` est UNIQUE : deux vides se battraient pour la
+    même ligne.
+    """
+    text = bounded_text(value)
+    if text is None:
+        raise vol.Invalid(f"a store needs a name, got {preview(value)}")
+    cleaned = text.strip()
+    if not cleaned:
+        raise vol.Invalid(f"a store needs a name, got {preview(value)}")
+    return cleaned

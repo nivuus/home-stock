@@ -676,10 +676,17 @@ def mark_expiry_announced(conn, batch_id: int, stage: str) -> None:
 
 # --- shopping sessions ------------------------------------------------------
 
-def open_session(conn, *, started_at: str, store: str | None) -> int:
-    """Start a shopping session. The partial unique index refuses a second one."""
+def open_session(conn, *, started_at: str, store: str | None,
+                 store_id: int | None = None) -> int:
+    """Start a shopping session. The partial unique index refuses a second one.
+
+    Both `store` (the free text, as the lot 1 sessions hold it) and
+    `store_id` are written: the text is what was typed that day, the id is
+    the shop it turned out to be.
+    """
     return _insert(conn, "shopping_session",
-                   {"started_at": started_at, "store": store, "state": "shopping"})
+                   {"started_at": started_at, "store": store, "state": "shopping",
+                    "store_id": store_id})
 
 
 def current_session(conn) -> dict[str, Any] | None:
@@ -880,16 +887,117 @@ def recent_shelf_lives(conn, product_id: int, limit: int = 3) -> list[int]:
     return [row["days"] for row in rows if row["days"] is not None and row["days"] >= 0]
 
 
-def list_stores(conn) -> list[str]:
-    """Shops already used, most recently seen first — the panel shows them as chips."""
-    rows = conn.execute(
-        """
-        SELECT store, MAX(observed_on) AS last_seen FROM price
-        WHERE store IS NOT NULL AND store <> ''
-        GROUP BY store ORDER BY last_seen DESC, store
-        """
-    ).fetchall()
-    return [row["store"] for row in rows]
+# --- lot 4 : le magasin, promu de chaîne libre à ligne (amendement A4) -----
+#
+# Alias `st`, jamais `b` : un test scanne littéralement ce paquet à la
+# recherche d'une ligne de batch entière, sans regarder quelle table est
+# derrière l'alias.
+
+def list_stores(conn, *, active_only: bool = True) -> list[dict[str, Any]]:
+    """Shops the panel shows as chips, with what is known about each.
+
+    `observed_sessions` counts only `done` trips: a trip still under way
+    has not taught anything about this shop yet, and counting it would make
+    a brand-new shop look experienced for the length of one visit.
+    """
+    where = " WHERE st.active = 1" if active_only else ""
+    return _rows(conn.execute(
+        "SELECT st.id, st.name, st.position, st.active,"
+        "       COUNT(s.id) AS observed_sessions,"
+        "       MAX(s.started_at) AS last_seen"
+        " FROM store st"
+        " LEFT JOIN shopping_session s"
+        "   ON s.store_id = st.id AND s.state = 'done'"
+        f"{where}"
+        " GROUP BY st.id"
+        " ORDER BY st.position, last_seen DESC, st.name"
+    ))
+
+
+def get_store(conn, store_id: int) -> dict[str, Any] | None:
+    return _row(conn.execute(
+        "SELECT st.* FROM store st WHERE st.id = ?", (store_id,)).fetchone())
+
+
+def find_store_by_name(conn, name: str) -> dict[str, Any] | None:
+    """Exact equality, case included.
+
+    Deciding that « Leclerc » and « leclerc » are the same shop is a guess,
+    and a guess made here would one day merge two shops that really are
+    different, with no trace. The panel merges by hand instead (§ 11.1).
+    """
+    return _row(conn.execute(
+        "SELECT st.* FROM store st WHERE st.name = ?", (name,)).fetchone())
+
+
+def upsert_store(conn, *, name: str, store_id: int | None = None,
+                 position: int | None = None, active: int | None = None) -> int:
+    """Create the shop or update the one named — returns its id."""
+    if store_id is None:
+        existing = find_store_by_name(conn, name)
+        store_id = existing["id"] if existing else None
+    if store_id is None:
+        return _insert(conn, "store", {
+            "name": name,
+            "position": 0 if position is None else position,
+            "active": 1 if active is None else active,
+        })
+    fields: dict[str, Any] = {"name": name}
+    if position is not None:
+        fields["position"] = position
+    if active is not None:
+        fields["active"] = active
+    _update_fields(conn, "store", store_id, fields)
+    return int(store_id)
+
+
+def merge_stores(conn, *, keep_id: int, merge_id: int) -> dict[str, Any]:
+    """Fold one shop into another. `price.store` is NEVER rewritten.
+
+    `price` is a log of observations: each row says what was seen the day it
+    was seen. Rewriting the text to make it tidy is exactly what lot 0
+    refuses to the movement journal.
+    """
+    conn.execute("UPDATE shopping_session SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    conn.execute("UPDATE price SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    # The surviving shop's own order wins: (store_id, aisle_id) is the primary
+    # key, so only one may remain, and the one the owner has been walking is
+    # the one that is right.
+    conn.execute(
+        "DELETE FROM store_aisle WHERE store_id = ? AND aisle_id IN"
+        " (SELECT aisle_id FROM store_aisle WHERE store_id = ?)",
+        (merge_id, keep_id))
+    conn.execute("UPDATE store_aisle SET store_id = ? WHERE store_id = ?",
+                 (keep_id, merge_id))
+    conn.execute("DELETE FROM store WHERE id = ?", (merge_id,))
+    return {"keep_id": keep_id, "merged_id": merge_id}
+
+
+def set_store_aisle(conn, *, store_id: int, aisle_id: int, position: int,
+                    source: str, mean_rank: float | None = None,
+                    observed_sessions: int = 0,
+                    updated_at: str | None = None) -> None:
+    """One aisle's place in one shop's walking order."""
+    conn.execute(
+        "INSERT INTO store_aisle (store_id, aisle_id, position, source,"
+        " mean_rank, observed_sessions, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT (store_id, aisle_id) DO UPDATE SET"
+        "   position = excluded.position, source = excluded.source,"
+        "   mean_rank = excluded.mean_rank,"
+        "   observed_sessions = excluded.observed_sessions,"
+        "   updated_at = excluded.updated_at",
+        (store_id, aisle_id, position, source, mean_rank, observed_sessions,
+         updated_at))
+
+
+def store_aisles(conn, store_id: int) -> list[dict[str, Any]]:
+    """This shop's walking order, in it."""
+    return _rows(conn.execute(
+        "SELECT sa.* FROM store_aisle sa WHERE sa.store_id = ? ORDER BY sa.position",
+        (store_id,)))
 
 
 # =============================================================================

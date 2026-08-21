@@ -1338,15 +1338,18 @@ async def test_the_shops_already_used_can_be_read_without_an_open_session(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     """The chips the session-start screen offers. `session/current` carries
     the same list but answers null when no session exists — which is exactly
-    when a shopper has to pick a shop."""
+    when a shopper has to pick a shop.
+
+    Depuis le lot 4 une pastille porte un `id` (amendement A4) : le panneau
+    envoie un identifiant, pas une chaîne, et deux orthographes restent
+    deux magasins jusqu'à ce que le propriétaire les fusionne.
+    """
     entry = await setup_entry(with_article=True)
 
     def _seed() -> None:
         with entry.runtime_data.manager.db.write() as conn:
-            repo.insert_price(conn, article_id=1, observed_on="2026-08-01",
-                              price_per_base_unit=0.004, source="manual", store="Lidl")
-            repo.insert_price(conn, article_id=1, observed_on="2026-08-12",
-                              price_per_base_unit=0.005, source="manual", store="Leclerc")
+            repo.upsert_store(conn, name="Leclerc", position=0)
+            repo.upsert_store(conn, name="Lidl", position=1)
 
     await hass.async_add_executor_job(_seed)
     client = await hass_ws_client(hass)
@@ -1354,4 +1357,6 @@ async def test_the_shops_already_used_can_be_read_without_an_open_session(
     await client.send_json({"id": 1, "type": "home_stock/stores/list"})
     result = (await client.receive_json())["result"]
 
-    assert result["stores"] == ["Leclerc", "Lidl"]
+    assert [row["name"] for row in result["stores"]] == ["Leclerc", "Lidl"]
+    assert result["stores"][0]["id"]
+    assert result["stores"][0]["observed_sessions"] == 0

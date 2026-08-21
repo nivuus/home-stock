@@ -315,3 +315,72 @@ def test_a_line_without_a_price_records_no_observation_and_no_source(service):
                             price_source="open_prices", idempotency_key=None)
     assert _prices(service) == []
     assert line["price_source"] is None
+
+
+# --- amendement A4 : le magasin promu en table ------------------------------
+
+def _stores(service, **kwargs):
+    from custom_components.home_stock.storage import repositories as repo
+    return repo.list_stores(service.manager.db.read(), **kwargs)
+
+
+def test_starting_a_session_by_name_creates_the_store_once(service):
+    """Deux voyages « Leclerc » = un seul magasin, deux sessions observées."""
+    first = service.start(store="Leclerc")
+    service.close()
+    second = service.start(store="Leclerc")
+    service.close()
+
+    assert first["store_id"] == second["store_id"]
+    [store] = _stores(service)
+    assert store["name"] == "Leclerc"
+    assert store["observed_sessions"] == 2
+
+
+def test_starting_a_session_by_id_ignores_the_name(service):
+    """`store_id` prime : le panneau envoie une pastille, pas une chaîne."""
+    opened = service.start(store="Leclerc")
+    service.close()
+    again = service.start(store="n'importe quoi", store_id=opened["store_id"])
+
+    assert again["store_id"] == opened["store_id"]
+    assert again["store"] == "Leclerc"
+    assert len(_stores(service)) == 1
+
+
+def test_starting_a_session_without_a_store_creates_none(service):
+    opened = service.start(store=None)
+    assert opened["store_id"] is None
+    assert _stores(service) == []
+
+
+def test_the_session_keeps_the_free_text_of_the_store_it_was_given(service):
+    opened = service.start(store="  Leclerc  ")
+    assert opened["store"] == "Leclerc"
+    assert _stores(service)[0]["name"] == "Leclerc"
+
+
+def test_merging_a_store_with_an_open_session_is_refused(service):
+    """« On ne déplace pas le sol sous une session. » Message français."""
+    from custom_components.home_stock.storage import repositories as repo
+    opened = service.start(store="Leclerc")
+    with service.manager.db.write() as conn:
+        other = repo.upsert_store(conn, name="E.Leclerc")
+
+    with pytest.raises(ShoppingError, match="en cours"):
+        service.merge_stores(keep_id=opened["store_id"], merge_id=other)
+    with pytest.raises(ShoppingError, match="en cours"):
+        service.merge_stores(keep_id=other, merge_id=opened["store_id"])
+
+
+def test_merging_two_closed_stores_goes_through(service):
+    from custom_components.home_stock.storage import repositories as repo
+    opened = service.start(store="Leclerc")
+    service.close()
+    with service.manager.db.write() as conn:
+        other = repo.upsert_store(conn, name="E.Leclerc")
+
+    result = service.merge_stores(keep_id=opened["store_id"], merge_id=other)
+
+    assert result["keep_id"] == opened["store_id"]
+    assert len(_stores(service)) == 1
