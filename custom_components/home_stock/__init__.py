@@ -29,7 +29,8 @@ from .storage.database import Database
 from .storage.migrations import apply_migrations
 from .websocket_api import async_register_websocket
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR, Platform.TODO]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR,
+             Platform.TODO, Platform.CALENDAR]
 
 
 @dataclass

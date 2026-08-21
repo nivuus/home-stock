@@ -93,6 +93,11 @@
       "expirations": {
         "name": "To eat"
       }
+    },
+    "calendar": {
+      "meals": {
+        "name": "Meals"
+      }
     }
   }
 }

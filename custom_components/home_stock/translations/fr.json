@@ -93,6 +93,11 @@
       "expirations": {
         "name": "À consommer"
       }
+    },
+    "calendar": {
+      "meals": {
+        "name": "Repas"
+      }
     }
   }
 }

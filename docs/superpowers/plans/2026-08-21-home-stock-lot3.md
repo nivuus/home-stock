@@ -1806,7 +1806,7 @@ git commit -m "feat: validate a meal — cook then eat, in one transaction"
 
 **Poser un repas depuis la carte native.** `async_create_event` reçoit un `summary` et un début. Le créneau se déduit de l'heure : celui dont `default_time` est le plus proche. Le `summary` passe à `matching.candidates()` contre les **recettes** ; au-delà du seuil de présélection, le repas pointe la recette, sinon c'est un repas `note`. Un repas posé depuis Lovelace est donc un repas complet et décrémentable, pas une chaîne de caractères sans suite.
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 ```python
 async def test_the_calendar_entity_exists_with_a_french_name(hass, setup_entry): ...
@@ -1841,15 +1841,15 @@ async def test_deleting_a_done_meal_marks_it_skipped_and_keeps_its_movements(has
 async def test_deleting_an_unknown_uid_raises_rather_than_passing_silently(hass, setup_entry): ...
 ```
 
-- [ ] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_calendar.py -q`
+- [x] **Step 2: Lancer, vérifier l'échec** — `./scripts/test.sh tests/test_calendar.py -q`
 
-- [ ] **Step 3: Écrire `calendar.py`**
+- [x] **Step 3: Écrire `calendar.py`**
 
 Sous-classer `HomeStockEntity, CalendarEntity`, `super().__init__(coordinator, "meals", ENTITY_ID_FORMAT)`. Toutes les lectures SQLite passent par `hass.async_add_executor_job`. Ajouter `Platform.CALENDAR` à `PLATFORMS` **en fin de liste** et la clé `entity.calendar.meals.name` (« Repas ») dans les deux fichiers de traduction.
 
-- [ ] **Step 4: Vert** — `./scripts/test.sh tests/test_calendar.py -q && ./scripts/test.sh -q`
+- [x] **Step 4: Vert** — `./scripts/test.sh tests/test_calendar.py -q && ./scripts/test.sh -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add custom_components/home_stock/calendar.py custom_components/home_stock/__init__.py custom_components/home_stock/translations tests/test_calendar.py
 git commit -m "feat: calendar.home_stock_meals, creatable, movable and deletable"
