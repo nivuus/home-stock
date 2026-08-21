@@ -48,6 +48,28 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
     (re.compile(r"^parts_mine must be between 0 and parts_total$"), "invalid_value",
      lambda m: "Les parts sont incohérentes : on ne mange pas plus de parts "
                "qu'il n'en a été servi."),
+    # --- lot 5 : piles, équipements et consommables -------------------------
+    # L'ordre compte : premier motif qui matche gagne. Ces couples s'ajoutent
+    # EN FIN de tuple, jamais au milieu.
+    (re.compile(r"^keep_percent must not be below low_percent"), "invalid_value",
+     lambda m: "Le seuil de maintien ne peut pas être sous le seuil d'apparition : "
+               "la tâche apparaîtrait et se refermerait à chaque synchronisation."),
+    (re.compile(r"^an untracked battery needs a reason$"), "invalid_value",
+     lambda m: "Ignorer une pile demande un motif — sinon personne ne saura "
+               "pourquoi elle n'est plus suivie."),
+    (re.compile(r"^a built_in battery has no spare$"), "invalid_value",
+     lambda m: "Une batterie intégrée ne se remplace pas : elle n'a pas de pile de rechange."),
+    (re.compile(r"^a primary battery cannot be charged$"), "invalid_value",
+     lambda m: "Une pile jetable ne se recharge pas."),
+    (re.compile(r"^a built_in battery cannot be replaced$"), "invalid_value",
+     lambda m: "Une batterie intégrée ne se remplace pas : on la recharge."),
+    (re.compile(r"^cannot consume a spare without a spare product$"), "invalid_value",
+     lambda m: "Aucune pile de rechange n'est rattachée : impossible d'en sortir "
+               "une du placard."),
+    (re.compile(r"^unknown battery (\d+)$"), "not_found",
+     lambda m: f"Pile {m.group(1)} inconnue."),
+    (re.compile(r"^unknown equipment (\d+)$"), "not_found",
+     lambda m: f"Équipement {m.group(1)} inconnu."),
 )
 
 GENERIC_CODE: Final = "invalid_value"

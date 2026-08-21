@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date
-from typing import Any, Final
+from typing import Any, Final, Mapping
 
 import voluptuous as vol
 
@@ -161,3 +161,110 @@ def iso_date(value: Any) -> str | None:
         raise vol.Invalid(
             f"date attendue au format AAAA-MM-JJ, reçu : {preview(value)}") from err
     return value
+
+
+# --- lot 5 : les invariants de pile, écrits UNE fois pour les deux surfaces ---
+#
+# Le voluptuous d'un service et celui d'un websocket peuvent valider *un champ*
+# de la même façon sans effort ; ils divergent toujours sur les règles qui
+# LIENT deux champs, parce que ce sont les seules qu'on écrit à la main deux
+# fois. `keep_percent >= low_percent` est exactement de celles-là, et un
+# `keep` plus bas qu'un `low` fait clignoter la tâche à chaque synchronisation.
+# D'où une seule fonction, appelée par le service, par le websocket, et par la
+# troisième porte que personne ne pense à compter : l'import, qui écrit 14
+# lignes d'un coup.
+
+MAX_CELL_COUNT: Final = 24
+
+
+def percent_threshold(value: Any) -> float:
+    """A battery threshold: a real, finite number between 0 and 100.
+
+    Accepts the French decimal comma ("25,5"), because these thresholds are
+    typed on a tablet in a French household — and a comma silently refused
+    would read as "the app is broken", not as "use a dot".
+    """
+    if isinstance(value, str):
+        value = value.replace(",", ".")
+    number = finite_float(value)
+    if not 0.0 <= number <= 100.0:
+        raise vol.Invalid(f"percent must be between 0 and 100, got {preview(value)}")
+    return number
+
+
+def cell_count(value: Any) -> int:
+    """How many cells a place holds: a real integer, at least one.
+
+    Stricter than `bounded_int` on purpose, and for the same reason as
+    `parts_count`: a float would truncate silently, and a bool is an integer
+    in Python — `cell_count: true` must not be read as one cell. Zero is
+    refused because a place with no cell is not a place, and it would make a
+    replacement consume nothing while claiming success.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid(f"expected a whole number of cells, got {preview(value)}")
+    if not 1 <= value <= MAX_CELL_COUNT:
+        raise vol.Invalid(
+            f"cell_count must be between 1 and {MAX_CELL_COUNT}, got {value}")
+    return value
+
+
+def tracked_flag(value: Any) -> bool | None:
+    """True, False or None — strictly, and nothing else.
+
+    The three values mean three different things (`suivie`, `écartée avec un
+    motif`, `découverte mais pas décidée`), and the middle one is the only
+    one that demands an `exclusion_reason`. Accepting 0/1/"oui" here would let
+    a caller land in the wrong one of the three without noticing.
+    """
+    if value is None or value is True or value is False:
+        return value
+    raise vol.Invalid(f"expected true, false or null, got {preview(value)}")
+
+
+def check_battery_fields(fields: Mapping[str, Any], *, kind: str) -> None:
+    """The invariants that bind two fields together, checked once for every
+    surface. Raises `vol.Invalid` in English; `messages.py` carries the French.
+
+    Only the keys actually present are checked: this same function validates a
+    full declaration and a partial update.
+    """
+    if "cell_count" in fields and fields["cell_count"] is not None:
+        cell_count(fields["cell_count"])
+
+    low = fields.get("low_percent")
+    keep = fields.get("keep_percent")
+    if low is not None:
+        low = percent_threshold(low)
+    if keep is not None:
+        keep = percent_threshold(keep)
+    if low is not None and keep is not None and keep < low:
+        raise vol.Invalid(
+            f"keep_percent must not be below low_percent: {keep} < {low}")
+
+    if "tracked" in fields:
+        tracked = tracked_flag(fields["tracked"])
+        if tracked is False and not (fields.get("exclusion_reason") or "").strip():
+            raise vol.Invalid("an untracked battery needs a reason")
+
+    if kind == "built_in" and fields.get("product_id") is not None:
+        raise vol.Invalid("a built_in battery has no spare")
+
+    if fields.get("installed_on") is not None:
+        iso_date(fields["installed_on"])
+
+
+def check_battery_event(kind: str, *, battery_kind: str, consume_spare: bool,
+                        product_id: int | None) -> None:
+    """What a given nature of battery is physically able to undergo.
+
+    A disposable cell does not get charged, and a soldered battery does not
+    get replaced — recording either would put an event in an append-only
+    table that describes something that did not happen.
+    """
+    if kind == "charge" and battery_kind == "primary":
+        raise vol.Invalid("a primary battery cannot be charged")
+    if kind == "replacement" and battery_kind == "built_in":
+        raise vol.Invalid("a built_in battery cannot be replaced")
+    if consume_spare and product_id is None:
+        raise vol.Invalid("cannot consume a spare without a spare product")
