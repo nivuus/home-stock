@@ -33,13 +33,14 @@
  *      laquelle `localStorage` marche normalement.)
  *   4. Deux formats, ceux du spec du panneau (§14) — 412 × 915 (le
  *      téléphone qui scanne en rayon) et 1280 × 800 (le bureau, écran
- *      Catalogue/Réglages) — avec des seuils plus stricts que le mur
- *      (`wallpanel` vise 62 px / 5:1 pour une dalle regardée à bout de
- *      bras) : ce panneau se tient en main ou se pilote à la souris, donc
- *      **48 px** de cible tactile et **4,5:1** de contraste — les seuils
- *      WCAG AA standards.
+ *      Catalogue/Réglages) — mesurés avec les MÊMES seuils que le mur
+ *      (`wallpanel` : 62 px de cible tactile) : la tablette cuisine ouvre
+ *      ce même panneau, donc c'est le seuil du mur qui prime pour la cible
+ *      tactile, même si ce panneau se pilote aussi en main ou à la souris.
+ *      Le contraste, lui, reste à **4,5:1**, le seuil WCAG AA standard —
+ *      rien dans la maison n'impose 5:1 en dehors du mur.
  *
- *  Échoue sur : un débordement horizontal, une cible tactile sous 48 px,
+ *  Échoue sur : un débordement horizontal, une cible tactile sous 62 px,
  *  un contraste texte/fond sous 4,5:1, ou du texte tronqué.
  *
  *  Chaque scénario vérifie aussi qu'il a bien ATTEINT l'écran attendu (le
@@ -77,7 +78,7 @@ const SRC = join(RACINE, 'src');
 const TSCONFIG = join(RACINE, 'tsconfig.json');
 const BUNDLE_DEPLOYE = join(RACINE, '..', 'custom_components', 'home_stock', 'panel', 'home-stock-panel.js');
 
-const CIBLE_MIN_PX = 48;
+const CIBLE_MIN_PX = 62;
 const CONTRASTE_MIN = 4.5;
 
 const FORMATS = [
@@ -113,48 +114,117 @@ async function bundlerApplication({ minifier = false } = {}) {
   return resultat.outputFiles[0].text.replaceAll('</script', '<\\/script');
 }
 
-// --- thème HA de secours -----------------------------------------------
+// --- palettes RÉELLES ---------------------------------------------------
 //
-// Le panneau lit ses couleurs dans les variables CSS que Home Assistant pose
-// sur la page (`--primary-color`, `--primary-text-color`…) : aucune instance
-// réelle n'étant accessible ici, ce thème en tient lieu. Choisi pour un
-// contraste correct par construction (un bleu suffisamment sombre pour du
-// texte blanc à 4,5:1, cf. le calcul dans le rapport de tâche) plutôt que
-// pour ressembler exactement au thème par défaut de Home Assistant — ce
-// script vérifie le CODE du panneau, pas le thème de la maison, qui n'est
-// de toute façon pas sous sa main.
-const THEME_CSS = `
+// L'ancien THEME_CSS n'était pas seulement incomplet (cinq variables sur les
+// dix que le panneau lit, d'où des bordures et des fonds annulés à la valeur
+// calculée, et du Times New Roman) : il INVENTAIT sa couleur primaire, un
+// `#01579b` choisi pour passer le seuil de contraste par construction. Le
+// remplacer par « la bonne » palette recréerait le même mensonge, puisque
+// aucun des deux comptes de la maison n'utilise le thème par défaut.
+//
+// Valeurs relevées le 2026-08-22 dans `hass_frontend` de HA 2026.8.2
+// (`--ha-color-neutral-05`, `--ha-color-primary-40`…) et dans
+// `config/themes/graphite/graphite-light.yaml`.
+const PALETTES = [
+  {
+    nom: 'HA clair (défaut)',
+    variables: {
+      '--primary-background-color': '#fafafa',
+      '--secondary-background-color': '#e5e5e5',
+      '--card-background-color': '#ffffff',
+      '--primary-text-color': '#141414',
+      '--secondary-text-color': '#5e5e5e',
+      '--primary-color': '#009ac7',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': '#0000001f',
+      '--error-color': '#db4437',
+      '--warning-color': '#ffa600',
+    },
+  },
+  {
+    nom: 'HA sombre',
+    variables: {
+      '--primary-background-color': '#111111',
+      '--secondary-background-color': '#282828',
+      '--card-background-color': '#1c1c1c',
+      '--primary-text-color': '#e1e1e1',
+      '--secondary-text-color': '#9b9b9b',
+      '--primary-color': '#009ac7',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': '#e1e1e11f',
+      '--error-color': '#db4437',
+      '--warning-color': '#ffa600',
+    },
+  },
+  {
+    // Le thème RÉELLEMENT en service sur un des deux comptes de la maison
+    // (`.storage/frontend.user_data_*` → « Graphite Auto »). Sa primaire est
+    // ORANGE et son texte-sur-primaire est un navy, pas du blanc : c'est
+    // exactement le cas qu'un `#fff` écrit en dur casse.
+    nom: 'Graphite clair (en service)',
+    variables: {
+      '--primary-background-color': 'rgb(234, 235, 238)',
+      '--secondary-background-color': 'rgb(234, 235, 238)',
+      '--card-background-color': 'rgb(255, 255, 255)',
+      '--primary-text-color': 'rgb(19, 21, 54)',
+      '--secondary-text-color': 'rgb(85, 87, 110)',
+      '--primary-color': 'rgb(238, 147, 0)',
+      '--text-primary-color': 'rgb(19, 21, 54)',
+      '--divider-color': 'rgba(19, 21, 54, 0.12)',
+      '--error-color': '#db4437',
+      '--warning-color': '#ffa600',
+    },
+  },
+];
+
+function themeCss(palette) {
+  const lignes = Object.entries(palette.variables)
+    .map(([nom, valeur]) => `    ${nom}: ${valeur};`).join('\n');
+  return `
   :root {
-    --primary-background-color: #ffffff;
-    --secondary-background-color: #eeeeee;
-    --primary-text-color: #212121;
-    --secondary-text-color: #5f5f5f;
-    --primary-color: #01579b;
+${lignes}
+    /* HA impose sa police sur le document ; sans elle le harnais mesurait
+       du Times New Roman et faisait passer le Planning pour du serif. */
+    --ha-font-family-body: Roboto, Noto, sans-serif;
   }
-  html, body { margin: 0; padding: 0; height: 100%; background: var(--primary-background-color); }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--primary-background-color);
+    font-family: var(--ha-font-family-body);
+  }
   home-stock-panel { display: block; height: 100%; }
 `;
+}
 
-function pageHtml(bundleJs) {
+function pageHtml(bundleJs, palette = PALETTES[0]) {
   return `<!doctype html>
 <html><head><meta charset="utf-8">
-<style>${THEME_CSS}</style>
+<style>${themeCss(palette)}</style>
 </head><body>
 <home-stock-panel></home-stock-panel>
 <script type="module">${bundleJs}</script>
 </body></html>`;
 }
 
-/** Sert `html` sur 127.0.0.1, port éphémère — jamais exposé au-delà de la
- *  machine, jamais un vrai réseau. Nécessaire : `page.setContent()`
- *  produit un document d'origine opaque où `window.localStorage` lève une
- *  `SecurityError` à la simple lecture de la propriété, ce qui fait
- *  échouer `connectedCallback()` du panneau AVANT même qu'il construise sa
- *  `FileAttente` — silencieusement, puisque c'est une exception non
- *  interceptée dans un cycle de vie Lit, jamais rapportée comme un défaut
- *  de rendu. Une vraie origine `http://127.0.0.1` n'a pas ce problème. */
-async function servirPageStatique(html) {
-  const serveur = createServer((_requete, reponse) => {
+/** Sert `pagesParChemin` (un objet `{chemin: html}`) sur 127.0.0.1, port
+ *  éphémère — jamais exposé au-delà de la machine, jamais un vrai réseau.
+ *  Une seule page ne suffit plus depuis le balayage multi-palettes : `'/'`
+ *  reste la palette par défaut (compat de tout ce qui n'en connaît qu'une),
+ *  les chemins supplémentaires (`/p1`, `/p2`…) portent les autres. Route sur
+ *  `requete.url`, avec repli sur `'/'` pour tout chemin inconnu — il suffit
+ *  d'ajouter une entrée au dictionnaire pour servir une page de plus.
+ *
+ *  Nécessaire : `page.setContent()` produit un document d'origine opaque où
+ *  `window.localStorage` lève une `SecurityError` à la simple lecture de la
+ *  propriété, ce qui fait échouer `connectedCallback()` du panneau AVANT
+ *  même qu'il construise sa `FileAttente` — silencieusement, puisque c'est
+ *  une exception non interceptée dans un cycle de vie Lit, jamais rapportée
+ *  comme un défaut de rendu. Une vraie origine `http://127.0.0.1` n'a pas ce
+ *  problème. */
+async function servirPagesStatiques(pagesParChemin) {
+  const serveur = createServer((requete, reponse) => {
+    const html = pagesParChemin[requete.url] ?? pagesParChemin['/'];
     reponse.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     reponse.end(html);
   });
@@ -1474,6 +1544,47 @@ async function executerScenariosLarges(navigateur, urlHarnais) {
   return fautes;
 }
 
+// Trois scénarios représentatifs seulement : la suite complète × 3 palettes
+// × 3 formats ferait 219 mesures pour un gain marginal. Ce qui compte ici,
+// c'est qu'aucune des deux autres palettes ne soit JAMAIS mesurée — pas
+// qu'elles le soient partout.
+const NOMS_BALAYAGE = [
+  'Scanner (écran par défaut)',
+  'Liste (quatre rayons, deux origines, trois cochées repliées)',
+  'Bannière de refus (écriture rejetée par le serveur)',
+];
+
+async function executerBalayagePalettes(navigateur, urlsParPalette) {
+  let fautes = 0;
+  let total = 0;
+  for (let i = 1; i < PALETTES.length; i += 1) {
+    console.log(`\n=== Balayage : ${PALETTES[i].nom} ===`);
+    for (const scenario of SCENARIOS.filter((s) => NOMS_BALAYAGE.includes(s.nom))) {
+      total += 1;
+      const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
+      const page = await contexte.newPage();
+      await page.goto(urlsParPalette[i], { waitUntil: 'load' });
+      await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+      const resultat = await page.evaluate(monterEtMesurer, {
+        fixture: scenario.fixture, actions: scenario.actions,
+        cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+        ecranAttendu: scenario.ecranAttendu ?? null,
+        elementAttendu: scenario.elementAttendu ?? null,
+        sansScannerNatif: scenario.sansScannerNatif ?? false,
+      });
+      await contexte.close();
+      if (aDesDefauts(resultat)) {
+        fautes += 1;
+        console.log(`  ✗ ${scenario.nom}`);
+        for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+      } else {
+        console.log(`  ✓ ${scenario.nom}`);
+      }
+    }
+  }
+  return { fautes, total };
+}
+
 const SCENARIOS_MINIFIES = [
   {
     nom: 'Repli clavier du scanner (sans caméra système ni BarcodeDetector)',
@@ -1555,7 +1666,7 @@ async function verifierBundleMinifie(navigateur, urlMinifie) {
 // « aucun défaut trouvé » ci-dessus signifie quelque chose.
 const CASSURES = [
   {
-    nom: 'cible tactile réduite sous 48 px',
+    nom: 'cible tactile réduite sous 62 px',
     css: '.nav-bouton { min-height: 20px !important; min-width: 20px !important; height: 20px !important; padding: 0 !important; }',
     verifie: (r) => r.ciblesTropPetites.length > 0,
   },
@@ -1647,15 +1758,26 @@ async function main() {
       + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
   }
 
-  // Une seule page servie pour tout le run (127.0.0.1, port éphémère) : le
-  // contenu ne change jamais d'un scénario à l'autre — seul ce qu'on y
+  // Trois pages servies pour tout le run sur le MÊME serveur (127.0.0.1,
+  // port éphémère) — une par palette (voir PALETTES) : `'/'` reste la
+  // palette par défaut, celle de tout ce qui n'en connaît qu'une (scénarios
+  // ordinaires, vue dense, auto-vérification). Le contenu ne change jamais
+  // d'un scénario à l'autre au sein d'une même page — seul ce qu'on y
   // injecte après coup (fixture, actions, cassure) varie. Voir
-  // `servirPageStatique` pour pourquoi `page.setContent()` seul ne suffit pas.
-  const { url: urlHarnais, fermer: fermerServeur } = await servirPageStatique(pageHtml(bundle));
+  // `servirPagesStatiques` pour pourquoi `page.setContent()` seul ne suffit
+  // pas.
+  const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques({
+    '/': pageHtml(bundle, PALETTES[0]),
+    '/p1': pageHtml(bundle, PALETTES[1]),
+    '/p2': pageHtml(bundle, PALETTES[2]),
+  });
+  const urlsParPalette = PALETTES.map((_, i) => (i === 0 ? urlHarnais : `${urlHarnais}p${i}`));
   // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
   // celui que `npm run build` déploie réellement. Voir SCENARIOS_MINIFIES.
+  // Ces scénarios-là ne connaissent que la palette par défaut : le bundle
+  // minifié est le même code, la mesure ne dépend pas de la palette.
   const { url: urlMinifie, fermer: fermerServeurMinifie } =
-    await servirPageStatique(pageHtml(bundleMinifie));
+    await servirPagesStatiques({ '/': pageHtml(bundleMinifie, PALETTES[0]) });
 
   const navigateur = await lancerNavigateur();
   try {
@@ -1669,6 +1791,11 @@ async function main() {
     const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie);
     fautes += fautesMinifie;
     total += SCENARIOS_MINIFIES.length;
+    // Le balayage : trois scénarios représentatifs, sous les deux palettes
+    // qu'aucun autre passage ne mesure jamais (voir NOMS_BALAYAGE).
+    const balayage = await executerBalayagePalettes(navigateur, urlsParPalette);
+    fautes += balayage.fautes;
+    total += balayage.total;
 
     let autoOk = true;
     if (!sansAutoVerification) {
