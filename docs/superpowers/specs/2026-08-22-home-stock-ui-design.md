@@ -201,10 +201,11 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 --hs-surface-2                   var(--secondary-background-color, #e5e5e5)
 --hs-divider                     var(--divider-color, #0000001f)
 --hs-accent                      var(--primary-color, #009ac7)
---hs-on-accent                   var(--text-primary-color, #fff)
+--hs-on-accent                   #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-danger                      var(--error-color, #db4437)
---hs-on-danger                   var(--text-primary-color, #fff)
+--hs-on-danger                   #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-warning                     var(--warning-color, #ffa600)
+--hs-on-warning                  #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-font                        var(--ha-font-family-body, Roboto, Noto, sans-serif)
 --hs-touch                       62px
 ```
@@ -212,6 +213,52 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 **Règle 1** : plus aucune variable HA lue directement dans un écran. Un écran
 lit un jeton `--hs-*`, jamais `var(--divider-color)`. Ainsi une variable HA
 absente ne peut plus annuler une déclaration.
+
+### 6.1 bis — La couleur du texte sur un fond de marque se CALCULE
+
+Mesuré sur les palettes réelles, et c'est le point qui invalide l'idée qu'un
+thème « accorde » toujours son fond et son texte :
+
+| Fond | Texte imposé par le thème | Contraste |
+|---|---|---|
+| HA défaut, `--primary-color` `#009ac7` | `--text-primary-color` `#ffffff` | **3,26:1** ❌ |
+| HA défaut, `--error-color` `#db4437` | `#ffffff` | **4,29:1** ❌ |
+| Graphite, `--primary-color` orange | navy | 7,41:1 ✅ |
+| Graphite, `--error-color` rose pâle | navy | 6,11:1 ✅ |
+
+**Home Assistant ne garantit pas la lisibilité de son propre texte-sur-primaire.**
+`--hs-on-accent: var(--text-primary-color)` échoue donc sous le thème par
+défaut, et aucune variable de thème ne donne la bonne réponse.
+
+Trois issues envisagées :
+
+1. **Aucun aplat de marque sous du texte** — tout en contours. Correct partout
+   (17:1), mais un panneau sans un seul bouton plein ressemble précisément à
+   l'inachevé qu'on cherche à corriger. Écartée.
+2. **Choisir une couleur en dur** — c'est le défaut de départ. Écartée.
+3. **Calculer** — retenue.
+
+`src/shell/ui/on-color.ts` lit la couleur RÉSOLUE du fond, calcule sa
+luminance, et pose `--hs-on-accent` / `--hs-on-danger` / `--hs-on-warning` sur
+l'hôte, en clair ou en sombre selon celle qui contraste le mieux. Sous HA
+défaut : sombre sur le cyan (6,4:1 au lieu de 3,26). Sous Graphite : navy sur
+l'orange (7,41:1). Le panneau garde ses aplats **et** reste lisible sous
+n'importe quel thème, y compris un thème que personne ici n'a encore installé.
+
+**La sonde est nécessaire.** `getComputedStyle(el).getPropertyValue('--primary-color')`
+ne rend PAS une couleur : la valeur calculée d'une propriété personnalisée est
+son flux de jetons, donc littéralement `var(--ha-color-primary-40)` sous HA.
+Il faut poser `color: var(--primary-color)` sur un élément sonde et lire son
+`color` calculé, qui, lui, est toujours un `rgb(...)`.
+
+**Conséquence pour les tests** : jsdom ne résout ni `var()` ni les couleurs
+calculées. Les tests unitaires couvrent les fonctions pures (analyse d'une
+couleur, choix de la meilleure des deux) ; le câblage DOM n'est vérifiable que
+dans `verifier-rendu.mjs`, qui tourne dans un vrai Chromium. Le dire plutôt
+que laisser croire que jsdom le couvre.
+
+**Repli** : si la sonde ne rend rien d'exploitable (jsdom, thème absent), les
+jetons gardent la valeur déclarée dans `tokens.ts`. Aucun écran ne casse.
 
 **Règle 2 — jamais de couleur en dur, jamais une paire découplée.** Vérifié sur
 l'installation : les deux comptes de la maison n'utilisent pas le même thème

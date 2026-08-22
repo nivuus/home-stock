@@ -245,17 +245,30 @@ et la liste ci-dessous est l'inventaire de travail du lot :
 
 ---
 
-## Task 2 : la feuille de jetons
+## Task 2 : la feuille de jetons, et la couleur de texte qui se calcule
+
+Deux fichiers, parce qu'ils répondent à la même question. Mesuré sur les palettes
+réelles : `--primary-color` `#009ac7` avec le `--text-primary-color` `#ffffff`
+que HA lui associe donne **3,26:1**, et `--error-color` `#db4437` avec le même
+blanc donne **4,29:1**. Home Assistant ne garantit donc pas la lisibilité de son
+propre texte-sur-primaire, et aucune variable de thème ne donne la bonne
+réponse. On la calcule. Voir § 6.1 bis de la spec.
 
 **Files:**
 - Create: `src/shell/ui/tokens.ts`
+- Create: `src/shell/ui/on-color.ts`
 - Test: `tests/shell-tokens.test.ts`
+- Test: `tests/shell-on-color.test.ts`
 
 **Interfaces:**
 - Consumes: rien.
-- Produces: `export const tokens: CSSResult` — à composer par les écrans en `static styles = [tokens, css\`…\`]`.
+- Produces:
+  - `export const tokens: CSSResult` — à composer par les écrans en `static styles = [tokens, css`…`]`.
+  - `export function parseRgb(couleur: string): [number, number, number] | null`
+  - `export function meilleureCouleurDeTexte(fond: [number, number, number]): string`
+  - `export function appliquerCouleursDeTexte(hote: HTMLElement): void`
 
-- [ ] **Step 1 : écrire le test qui échoue**
+- [ ] **Step 1 : écrire le test des jetons**
 
 `tests/shell-tokens.test.ts` :
 
@@ -264,7 +277,7 @@ import { describe, expect, it } from 'vitest';
 import { tokens } from '../src/shell/ui/tokens';
 
 /** Le texte CSS brut de la feuille — c'est tout ce que jsdom permet
- *  d'inspecter : il ne calcule aucune mise en page, et n'applique pas les
+ *  d'inspecter : il ne calcule aucune mise en page et n'applique pas les
  *  feuilles adoptées d'un shadow root. Les vraies mesures sont le travail de
  *  `outils/verifier-rendu.mjs`. */
 const css = tokens.cssText;
@@ -277,7 +290,7 @@ describe('jetons partagés', () => {
       '--hs-radius-s', '--hs-radius-m', '--hs-radius-l',
       '--hs-text', '--hs-text-2', '--hs-surface', '--hs-surface-2',
       '--hs-divider', '--hs-accent', '--hs-on-accent',
-      '--hs-danger', '--hs-on-danger', '--hs-warning',
+      '--hs-danger', '--hs-on-danger', '--hs-warning', '--hs-on-warning',
       '--hs-font', '--hs-touch',
     ]) {
       expect(css).toContain(`${jeton}:`);
@@ -288,9 +301,9 @@ describe('jetons partagés', () => {
     // C'est l'absence de repli qui a rendu invalides les bordures du Planning
     // sous un thème incomplet : `var(--divider-color)` sans repli annule la
     // déclaration entière à la valeur calculée.
-    // Seules les variables HOME ASSISTANT doivent porter un repli. Les jetons
-    // --hs-* sont définis dans ce même bloc `:host` : ils résolvent toujours,
-    // et leur donner un repli serait une seconde source de vérité.
+    // Seules les variables HOME ASSISTANT sont visées : les jetons --hs-* sont
+    // définis dans ce même bloc `:host`, ils résolvent toujours, et leur donner
+    // un repli créerait une seconde source de vérité.
     const sansRepli = [...css.matchAll(/var\((--(?!hs-)[a-z-]+)\s*\)/g)].map((m) => m[1]);
     expect(sansRepli).toEqual([]);
   });
@@ -299,12 +312,18 @@ describe('jetons partagés', () => {
     expect(css).toContain('--hs-touch: 62px');
   });
 
-  it('n’expose aucune couleur littérale hors des replis', () => {
-    // Une couleur littérale hors d'un `var(..., repli)` est une couleur qui
-    // ignore le thème de l'utilisateur.
+  it('ne pose de couleur littérale QUE sur les trois jetons recalculés', () => {
+    // Les --hs-on-* n'ont pas de variable de thème correcte (§ 6.1 bis) : ils
+    // portent un défaut prudent que `on-color.ts` remplace au montage. Partout
+    // ailleurs, une couleur littérale est une couleur qui ignore le thème.
     const sansVar = css.replace(/var\([^)]*\)/g, '');
-    expect(sansVar).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    expect(sansVar).not.toMatch(/\brgba?\(/);
+    const litteraux = [...sansVar.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g)];
+    expect(litteraux.map((m) => m[1]).sort())
+      .toEqual(['--hs-on-accent', '--hs-on-danger', '--hs-on-warning']);
+    // Et ce défaut est le SOMBRE : sur une couleur de marque inconnue, le
+    // sombre est le pari le moins risqué (la plupart des primaires de thème
+    // sont des teintes moyennes à vives, où le blanc échoue).
+    for (const m of litteraux) expect(m[2]).toBe('#141414');
   });
 });
 ```
@@ -321,17 +340,21 @@ Expected: FAIL — `Failed to resolve import "../src/shell/ui/tokens"`.
 ```ts
 /** La feuille de jetons partagée par les dix-sept écrans.
  *
- *  Deux règles, toutes deux nées d'un défaut constaté :
+ *  Trois règles, toutes nées d'un défaut constaté :
  *
  *  1. CHAQUE variable Home Assistant lue ici porte un repli. Sans repli,
  *     `var(--divider-color)` sous un thème qui ne la définit pas rend la
  *     déclaration entière invalide à la valeur calculée — la bordure ne
  *     devient pas noire, elle DISPARAÎT, sans la moindre erreur.
  *  2. Un fond et son texte voyagent en paire (`--hs-accent` /
- *     `--hs-on-accent`). Les thèmes les accordent ; un `#fff` écrit en dur
- *     casse cet accord. Sous Graphite — en service dans la maison — la
- *     primaire est orange et le texte-sur-primaire un navy : du blanc en dur
- *     y donnerait 2,38:1.
+ *     `--hs-on-accent`). Un `#fff` écrit en dur casse l'accord : sous
+ *     Graphite — en service dans la maison — la primaire est orange, et du
+ *     blanc dessus donne 2,38:1.
+ *  3. Mais l'accord du THÈME ne suffit pas non plus : sous le thème HA par
+ *     défaut, le `--text-primary-color` blanc sur la primaire `#009ac7` ne
+ *     donne que 3,26:1. Les trois `--hs-on-*` portent donc ici un défaut
+ *     prudent, et `on-color.ts` les recalcule au montage à partir de la
+ *     couleur réellement résolue.
  *
  *  Les valeurs de repli sont les défauts RÉELS de HA 2026.8.2, relevés dans
  *  `hass_frontend`, pas des approximations.
@@ -358,10 +381,14 @@ export const tokens = css`
     --hs-divider: var(--divider-color, #0000001f);
 
     --hs-accent: var(--primary-color, #009ac7);
-    --hs-on-accent: var(--text-primary-color, #ffffff);
     --hs-danger: var(--error-color, #db4437);
-    --hs-on-danger: var(--text-primary-color, #ffffff);
     --hs-warning: var(--warning-color, #ffa600);
+
+    /* Recalculés par on-color.ts au montage. Le sombre est le défaut le moins
+       risqué sur une couleur de marque inconnue. */
+    --hs-on-accent: #141414;
+    --hs-on-danger: #141414;
+    --hs-on-warning: #141414;
 
     --hs-font: var(--ha-font-family-body, Roboto, Noto, sans-serif);
 
@@ -375,16 +402,188 @@ export const tokens = css`
 `;
 ```
 
-- [ ] **Step 4 : lancer le test pour vérifier qu'il passe**
+- [ ] **Step 4 : lancer le test des jetons**
 
 Run: `npx vitest run tests/shell-tokens.test.ts`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5 : commit**
+- [ ] **Step 5 : écrire le test des couleurs calculées**
+
+`tests/shell-on-color.test.ts` :
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { meilleureCouleurDeTexte, parseRgb } from '../src/shell/ui/on-color';
+
+describe('analyse d’une couleur résolue', () => {
+  it('lit les formes que rend getComputedStyle', () => {
+    expect(parseRgb('rgb(0, 154, 199)')).toEqual([0, 154, 199]);
+    expect(parseRgb('rgba(238, 147, 0, 1)')).toEqual([238, 147, 0]);
+    expect(parseRgb('  rgb(19,21,54)  ')).toEqual([19, 21, 54]);
+  });
+
+  it('rend null sur ce qu’elle ne sait pas lire', () => {
+    // jsdom ne résout pas var() et rend '' : le module doit alors garder le
+    // défaut du jeton plutôt que poser une couleur au hasard.
+    expect(parseRgb('')).toBeNull();
+    expect(parseRgb('var(--primary-color)')).toBeNull();
+    expect(parseRgb('transparent')).toBeNull();
+  });
+});
+
+describe('choix de la couleur de texte', () => {
+  it('choisit le sombre sur le cyan du thème HA par défaut', () => {
+    // Le cas qui motive tout ce module : HA associe du BLANC à cette
+    // primaire, et blanc sur #009ac7 ne fait que 3,26:1.
+    expect(meilleureCouleurDeTexte([0, 154, 199])).toBe('#141414');
+  });
+
+  it('choisit le sombre sur l’orange de Graphite', () => {
+    expect(meilleureCouleurDeTexte([238, 147, 0])).toBe('#141414');
+  });
+
+  it('choisit le clair sur un fond franchement sombre', () => {
+    expect(meilleureCouleurDeTexte([20, 20, 20])).toBe('#ffffff');
+  });
+
+  it('choisit toujours celle des deux qui contraste le mieux', () => {
+    // Propriété, pas cas particulier : sur cent teintes, la couleur rendue
+    // doit toujours être la meilleure des deux candidates.
+    for (let i = 0; i < 100; i += 1) {
+      const fond: [number, number, number] = [(i * 37) % 256, (i * 91) % 256, (i * 53) % 256];
+      const choisie = meilleureCouleurDeTexte(fond);
+      const autre = choisie === '#ffffff' ? '#141414' : '#ffffff';
+      expect(contraste(fond, parseRgb(choisie)!))
+        .toBeGreaterThanOrEqual(contraste(fond, parseRgb(autre)!));
+    }
+  });
+});
+
+/** Recalculé ici plutôt qu'importé : un test qui réutiliserait la fonction
+ *  testée pour se vérifier lui-même ne prouverait rien. */
+function contraste(a: [number, number, number], b: [number, number, number]): number {
+  const l = (c: [number, number, number]) => {
+    const v = c.map((x) => x / 255).map((u) => (u <= 0.03928 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+  };
+  const [clair, sombre] = l(a) > l(b) ? [l(a), l(b)] : [l(b), l(a)];
+  return (clair + 0.05) / (sombre + 0.05);
+}
+```
+
+Note : `parseRgb('#141414')` doit donc aussi savoir lire une notation hexadécimale, puisque le test l'emploie sur ses propres constantes.
+
+- [ ] **Step 6 : lancer le test pour vérifier qu'il échoue**
+
+Run: `npx vitest run tests/shell-on-color.test.ts`
+Expected: FAIL — module introuvable.
+
+- [ ] **Step 7 : écrire le module**
+
+`src/shell/ui/on-color.ts` :
+
+```ts
+/** La couleur du texte posé sur un aplat de marque, calculée plutôt que
+ *  supposée.
+ *
+ *  Home Assistant ne garantit pas la lisibilité de son propre
+ *  texte-sur-primaire : sous le thème par défaut, `--text-primary-color` vaut
+ *  `#ffffff` et `--primary-color` `#009ac7`, soit 3,26:1 — sous le seuil AA.
+ *  Sous Graphite (en service dans la maison), la paire tient (7,41:1), mais
+ *  rien ne dit qu'elle tiendra sous le prochain thème installé. On mesure.
+ *
+ *  LA SONDE EST NÉCESSAIRE : la valeur calculée d'une propriété personnalisée
+ *  est son flux de jetons, pas une couleur. `getComputedStyle(hôte)
+ *  .getPropertyValue('--primary-color')` rend littéralement
+ *  `var(--ha-color-primary-40)` sous Home Assistant. Il faut poser
+ *  `color: var(--primary-color)` sur un élément et lire son `color` calculé,
+ *  qui, lui, est toujours un `rgb(...)`.
+ *
+ *  jsdom ne résout ni l'un ni l'autre : les tests unitaires couvrent les
+ *  fonctions pures, et le câblage DOM n'est vérifié que par
+ *  `outils/verifier-rendu.mjs`, qui tourne dans un vrai Chromium.
+ */
+
+const CLAIR = '#ffffff';
+const SOMBRE = '#141414';
+
+/** Les paires fond → jeton de texte à recalculer. */
+const PAIRES: ReadonlyArray<readonly [string, string]> = [
+  ['--hs-accent', '--hs-on-accent'],
+  ['--hs-danger', '--hs-on-danger'],
+  ['--hs-warning', '--hs-on-warning'],
+];
+
+export function parseRgb(couleur: string): [number, number, number] | null {
+  const texte = couleur.trim();
+  const fonctionnel = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(texte);
+  if (fonctionnel) {
+    return [Number(fonctionnel[1]), Number(fonctionnel[2]), Number(fonctionnel[3])];
+  }
+  const hexa = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(texte);
+  if (hexa) {
+    const chiffres = hexa[1].length === 3
+      ? hexa[1].split('').map((c) => c + c).join('') : hexa[1];
+    return [0, 2, 4].map((i) => parseInt(chiffres.slice(i, i + 2), 16)) as [number, number, number];
+  }
+  // Tout le reste — '', `var(...)` non résolu, `transparent`, un nom CSS —
+  // n'est pas exploitable : l'appelant garde le défaut du jeton.
+  return null;
+}
+
+function luminance([r, v, b]: [number, number, number]): number {
+  const canal = (x: number) => {
+    const u = x / 255;
+    return u <= 0.03928 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * canal(r) + 0.7152 * canal(v) + 0.0722 * canal(b);
+}
+
+function contraste(a: [number, number, number], b: [number, number, number]): number {
+  const [clair, sombre] = luminance(a) > luminance(b)
+    ? [luminance(a), luminance(b)] : [luminance(b), luminance(a)];
+  return (clair + 0.05) / (sombre + 0.05);
+}
+
+export function meilleureCouleurDeTexte(fond: [number, number, number]): string {
+  return contraste(fond, [255, 255, 255]) > contraste(fond, [20, 20, 20]) ? CLAIR : SOMBRE;
+}
+
+/** Pose les trois `--hs-on-*` sur l'hôte, d'après les couleurs réellement
+ *  résolues. Sans effet là où la sonde ne rend rien (jsdom) : les jetons
+ *  gardent alors leur défaut, et aucun écran ne casse. */
+export function appliquerCouleursDeTexte(hote: HTMLElement): void {
+  const sonde = document.createElement('span');
+  sonde.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
+  hote.appendChild(sonde);
+  try {
+    for (const [fond, cible] of PAIRES) {
+      sonde.style.color = `var(${fond})`;
+      const resolue = parseRgb(getComputedStyle(sonde).color);
+      if (resolue) hote.style.setProperty(cible, meilleureCouleurDeTexte(resolue));
+    }
+  } finally {
+    sonde.remove();
+  }
+}
+```
+
+- [ ] **Step 8 : lancer les deux fichiers de tests**
+
+Run: `npx vitest run tests/shell-tokens.test.ts tests/shell-on-color.test.ts`
+Expected: PASS (4 + 6 tests).
+
+- [ ] **Step 9 : commit**
 
 ```bash
-git add src/shell/ui/tokens.ts tests/shell-tokens.test.ts
-git commit -m "feat(shell): une feuille de jetons où chaque var() porte son repli"
+git add src/shell/ui/tokens.ts src/shell/ui/on-color.ts tests/shell-tokens.test.ts tests/shell-on-color.test.ts
+git commit -m "feat(shell): des jetons à repli obligatoire, et un texte-sur-marque calculé
+
+Home Assistant ne garantit pas la lisibilité de son propre texte-sur-primaire :
+blanc sur #009ac7 fait 3,26:1 sous le thème par défaut. Aucune variable de
+thème ne donne la bonne réponse, donc on la mesure — sonde comprise, la valeur
+calculée d'une propriété personnalisée n'étant pas une couleur mais un flux de
+jetons."
 ```
 
 ---
@@ -2002,7 +2201,24 @@ Et les styles de la coquille, en remplacement de `.navigation` / `.nav-bouton` /
   `];
 ```
 
-Appeler `primeHaComponents()` en tête de `connectedCallback`.
+Appeler `primeHaComponents()` en tête de `connectedCallback`, et
+`appliquerCouleursDeTexte(this)` en tête de `firstUpdated()` — pas dans
+`connectedCallback`, où la sonde ne pourrait pas encore résoudre les jetons de
+la feuille adoptée. Le rappeler à chaque changement de `hass` (Home Assistant
+en fournit un nouvel objet quand le thème change), en sortant tôt si les
+couleurs résolues n'ont pas bougé :
+
+```ts
+  updated(changees: PropertyValues): void {
+    // Le thème peut changer sous nos pieds (bascule clair/sombre, changement
+    // de thème dans le profil) : HA repasse alors un nouvel objet `hass`.
+    // L'appel est bon marché — une sonde, trois lectures — et `on-color.ts`
+    // ne pose rien s'il ne sait pas lire.
+    if (changees.has('hass')) appliquerCouleursDeTexte(this);
+  }
+```
+
+et importer `import { appliquerCouleursDeTexte } from './shell/ui/on-color';`.
 
 - [ ] **Step 6 : lancer les tests de routes**
 
