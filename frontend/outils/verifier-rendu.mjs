@@ -162,18 +162,39 @@ const PALETTES = [
     // (`.storage/frontend.user_data_*` → « Graphite Auto »). Sa primaire est
     // ORANGE et son texte-sur-primaire est un navy, pas du blanc : c'est
     // exactement le cas qu'un `#fff` écrit en dur casse.
+    //
+    // Chaîne de résolution, jeton par jeton, depuis
+    // `config/themes/graphite/graphite-light.yaml` (relecture du
+    // 2026-08-22, round 1 : cinq des dix valeurs posées initialement
+    // étaient inventées, pas relevées — à revérifier ici plutôt qu'à
+    // croire sur parole) :
+    //   --secondary-background-color : l.245 → token-color-background-secondary (l.64)
+    //   --secondary-text-color       : l.211 → token-color-text-secondary (l.57)
+    //   --divider-color              : l.230 → token-color-background-divider (l.71)
+    //                                   → token-color-background-sidebar (l.65)
+    //                                   → token-color-background-base (l.63)
+    //   --error-color                : l.240 → token-color-feedback-error (l.50)
+    //   --warning-color              : l.239 → token-color-feedback-warning (l.49)
+    // Les cinq autres variables (background, card, primary-text,
+    // text-primary, primary) étaient déjà correctes et n'ont pas bougé.
+    //
+    // `--error-color` de Graphite est un ROSE PÂLE (`rgb(234, 114, 135)`),
+    // son `--warning-color` un JAUNE PÂLE (`rgb(255, 219, 117)`) : du texte
+    // blanc posé dessus tombe à 2,89:1. C'est un défaut RÉEL du panneau
+    // (tâche 6 le corrigera) — le harnais doit désormais le voir, pas le
+    // masquer derrière un rouge/orange Material inventés.
     nom: 'Graphite clair (en service)',
     variables: {
       '--primary-background-color': 'rgb(234, 235, 238)',
-      '--secondary-background-color': 'rgb(234, 235, 238)',
+      '--secondary-background-color': 'rgb(245, 245, 245)',
       '--card-background-color': 'rgb(255, 255, 255)',
       '--primary-text-color': 'rgb(19, 21, 54)',
-      '--secondary-text-color': 'rgb(85, 87, 110)',
+      '--secondary-text-color': 'rgba(19, 21, 54, 0.96)',
       '--primary-color': 'rgb(238, 147, 0)',
       '--text-primary-color': 'rgb(19, 21, 54)',
-      '--divider-color': 'rgba(19, 21, 54, 0.12)',
-      '--error-color': '#db4437',
-      '--warning-color': '#ffa600',
+      '--divider-color': 'rgb(234, 235, 238)',
+      '--error-color': 'rgb(234, 114, 135)',
+      '--warning-color': 'rgb(255, 219, 117)',
     },
   },
 ];
