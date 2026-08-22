@@ -45,9 +45,10 @@ export const tokens = css`
     --hs-warning: var(--warning-color, #ffa600);
 
     /* Recalculés par on-color.ts au montage. Le sombre est le défaut le moins
-       risqué sur une couleur de marque inconnue. */
+       risqué sur une couleur de marque inconnue. Pas de --hs-on-danger : le
+       danger ne se pose jamais en aplat sous du texte (spec § 6.1 ter,
+       --error-color tombe pile à 4,29:1 des deux côtés), donc rien ne le lit. */
     --hs-on-accent: #141414;
-    --hs-on-danger: #141414;
     --hs-on-warning: #141414;
 
     --hs-font: var(--ha-font-family-body, Roboto, Noto, sans-serif);

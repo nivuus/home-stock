@@ -42,7 +42,11 @@ export class HsButton extends LitElement {
     .neutral { background: var(--hs-surface-2); color: var(--hs-text);
                border-color: var(--hs-divider); }
     .primary { background: var(--hs-accent); color: var(--hs-on-accent); }
-    .danger  { background: var(--hs-danger); color: var(--hs-on-danger); }
+    /* Pas d'aplat : --error-color tombe pile à 4,29:1 des deux côtés (spec
+       § 6.1 ter), donc aucune couleur de texte ne passerait 4,5:1 dessus. Le
+       danger se dit par une bordure, le texte restant --hs-text. */
+    .danger  { background: var(--hs-surface); color: var(--hs-text);
+               border-color: var(--hs-danger); border-width: 2px; }
   `];
 
   render() {

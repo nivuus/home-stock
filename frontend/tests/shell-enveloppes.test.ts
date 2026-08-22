@@ -84,4 +84,16 @@ describe('hs-button', () => {
     const texte = styles.styles.map((s) => s.cssText).join('');
     expect(texte).toContain('min-height: var(--hs-touch)');
   });
+
+  it('dit le danger par une bordure, jamais par un aplat sous du texte', async () => {
+    // --error-color tombe pile à 4,29:1 des deux côtés (spec § 6.1 ter) :
+    // aucune couleur de texte ne passerait 4,5:1 sur un aplat --hs-danger.
+    const el = await monter('hs-button');
+    const styles = (el.constructor as typeof HTMLElement & { styles: { cssText: string }[] });
+    const texte = styles.styles.map((s) => s.cssText).join('');
+    const regleDanger = /\.danger\s*\{[^}]*\}/.exec(texte)?.[0] ?? '';
+    expect(regleDanger).toContain('border-color: var(--hs-danger)');
+    expect(regleDanger).toContain('color: var(--hs-text)');
+    expect(regleDanger).not.toContain('background: var(--hs-danger)');
+  });
 });

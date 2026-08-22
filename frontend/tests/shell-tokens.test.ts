@@ -15,7 +15,7 @@ describe('jetons partagés', () => {
       '--hs-radius-s', '--hs-radius-m', '--hs-radius-l',
       '--hs-text', '--hs-text-2', '--hs-surface', '--hs-surface-2',
       '--hs-divider', '--hs-accent', '--hs-on-accent',
-      '--hs-danger', '--hs-on-danger', '--hs-warning', '--hs-on-warning',
+      '--hs-danger', '--hs-warning', '--hs-on-warning',
       '--hs-font', '--hs-touch',
     ]) {
       expect(css).toContain(`${jeton}:`);
@@ -41,10 +41,12 @@ describe('jetons partagés', () => {
     // Les --hs-on-* n'ont pas de variable de thème correcte (§ 6.1 bis) : ils
     // portent un défaut prudent que `on-color.ts` remplace au montage. Partout
     // ailleurs, une couleur littérale est une couleur qui ignore le thème.
+    // Pas de --hs-on-danger : le danger ne se pose jamais en aplat sous du
+    // texte (§ 6.1 ter), donc rien ne le lit.
     const sansVar = css.replace(/var\([^)]*\)/g, '');
     const litteraux = [...sansVar.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g)];
     expect(litteraux.map((m) => m[1]).sort())
-      .toEqual(['--hs-on-accent', '--hs-on-danger', '--hs-on-warning']);
+      .toEqual(['--hs-on-accent', '--hs-on-warning']);
     // Et ce défaut est le SOMBRE : sur une couleur de marque inconnue, le
     // sombre est le pari le moins risqué (la plupart des primaires de thème
     // sont des teintes moyennes à vives, où le blanc échoue).

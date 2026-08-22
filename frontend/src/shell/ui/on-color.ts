@@ -25,7 +25,6 @@ const SOMBRE = '#141414';
 /** Les paires fond → jeton de texte à recalculer. */
 const PAIRES: ReadonlyArray<readonly [string, string]> = [
   ['--hs-accent', '--hs-on-accent'],
-  ['--hs-danger', '--hs-on-danger'],
   ['--hs-warning', '--hs-on-warning'],
 ];
 
