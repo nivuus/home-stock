@@ -1934,7 +1934,7 @@ export class HsHeader extends LitElement {
       display: inline-flex; align-items: center; gap: var(--hs-space-1);
       color: var(--hs-text-2); font-size: 0.85rem;
     }
-    /* Pas d'aplat rouge sous ce texte : `--error-color` vaut #db4437 sous le
+    /* Pas d'aplat rouge sous ce texte : --error-color vaut #db4437 sous le
        thème HA par défaut, une luminance au point de bascule exact où blanc et
        noir donnent tous deux 4,29:1 — sous le seuil. Le danger passe par le
        liseré et l'icône ; le texte garde 17:1. Voir spec § 6.1 ter. */
@@ -2253,9 +2253,9 @@ Et les styles de la coquille, en remplacement de `.navigation` / `.nav-bouton` /
   static styles = [tokens, css`
     :host { display: block; height: 100%; background: var(--hs-surface-2); }
     /* Ordre du DOM : la barre AVANT la colonne, pour que le rail se pose
-       naturellement à gauche en `row`. En `column-reverse`, la barre repasse
-       en bas de l'écran sans quitter sa place dans le DOM — donc sans casser
-       l'ordre de tabulation, et sans `dvh` ni `:has()`, absents de Chrome 100
+       naturellement à gauche en row. En column-reverse, la barre repasse en
+       bas de l'écran sans quitter sa place dans le DOM — donc sans casser
+       l'ordre de tabulation, et sans dvh ni :has(), absents de Chrome 100
        (la tablette de la cuisine). */
     .coquille { display: flex; flex-direction: column-reverse; height: 100%; }
     .coquille.large { flex-direction: row; }
