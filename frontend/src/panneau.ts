@@ -822,7 +822,8 @@ export class PanneauGardeManger extends LitElement {
         <div class="colonne">
           <hs-header .current=${this.ecran} .pending=${this.enAttente} .error=${this.erreurFile}
             @retour-demande=${this.surRetour}
-            @erreur-acquittee=${this.surErreurAcquittee}></hs-header>
+            @erreur-acquittee=${this.surErreurAcquittee}
+            @ecran-choisi=${(e: CustomEvent<{ screen: Ecran }>) => this.demanderNavigation(e.detail.screen)}></hs-header>
           <main class="contenu">${this.rendreEcran()}</main>
         </div>
         <!-- EN SURCOUCHE, jamais à la place : rendreEcran() s'exécute quand

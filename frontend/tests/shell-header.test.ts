@@ -59,3 +59,47 @@ describe('en-tête', () => {
     expect(el.shadowRoot!.querySelector('.erreur')!.getAttribute('role')).toBe('alert');
   });
 });
+
+describe('en-tête : ligne secondaire', () => {
+  it('rend les écrans de la famille courante', async () => {
+    const el = await monter({ current: 'piles' });
+    const liens = el.shadowRoot!.querySelectorAll('.sous-nav .sous-lien');
+    expect([...liens].map((n) => n.textContent!.trim()))
+      .toEqual(['Piles', 'Équipements', 'Réglages']);
+  });
+
+  it('marque l’écran courant, et lui seul', async () => {
+    const el = await monter({ current: 'reglages' });
+    const actifs = el.shadowRoot!.querySelectorAll('.sous-lien.actif');
+    expect(actifs).toHaveLength(1);
+    expect(actifs[0].getAttribute('aria-current')).toBe('page');
+    expect(actifs[0].textContent!.trim()).toBe('Réglages');
+  });
+
+  it('ne change pas de contenu entre deux écrans d’une même famille', async () => {
+    // La ligne est stable : seule la marque d'actif se déplace. C'est ce qui
+    // distingue cette navigation de l'ancienne barre, où les boutons bougeaient.
+    const a = await monter({ current: 'piles' });
+    const avant = [...a.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    document.body.innerHTML = '';
+    const b = await monter({ current: 'reglages' });
+    const apres = [...b.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    expect(apres).toEqual(avant);
+  });
+
+  it('émet l’écran choisi', async () => {
+    const el = await monter({ current: 'piles' });
+    const recu = vi.fn();
+    el.addEventListener('ecran-choisi', (e) => recu((e as CustomEvent).detail));
+    (el.shadowRoot!.querySelectorAll('.sous-lien')[2] as HTMLElement).click();
+    expect(recu).toHaveBeenCalledWith({ screen: 'reglages' });
+  });
+
+  it('n’émet rien pour l’écran déjà affiché', async () => {
+    const el = await monter({ current: 'piles' });
+    const recu = vi.fn();
+    el.addEventListener('ecran-choisi', recu);
+    (el.shadowRoot!.querySelectorAll('.sous-lien')[0] as HTMLElement).click();
+    expect(recu).not.toHaveBeenCalled();
+  });
+});

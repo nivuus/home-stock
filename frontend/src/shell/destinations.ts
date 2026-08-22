@@ -69,3 +69,13 @@ export function destinationOf(screen: Ecran): Destination {
 export function familyOf(screen: Ecran): FamilyId {
   return destinationOf(screen).family;
 }
+
+/** Les écrans d'une famille qui figurent dans la ligne secondaire de
+ *  l'en-tête. Ceux qui exigent un paramètre en sont exclus : un bouton nu ne
+ *  saurait pas quel identifiant leur passer, on y entre depuis l'écran qui le
+ *  connaît. Panier et Rangement y restent même sans session ouverte — des
+ *  boutons qui apparaissent et disparaissent font perdre le repère, ce qui
+ *  était le défaut de l'ancienne barre. */
+export function familyScreens(family: FamilyId): Destination[] {
+  return DESTINATIONS.filter((d) => d.family === family && !d.param);
+}

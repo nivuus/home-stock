@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { tokens } from './ui/tokens';
 import './ui/hs-icon';
-import { destinationOf } from './destinations';
+import { destinationOf, familyOf, familyScreens } from './destinations';
 import type { Ecran } from '../panneau';
 
 @customElement('hs-header')
@@ -57,7 +57,51 @@ export class HsHeader extends LitElement {
       font-weight: 600; cursor: pointer;
       font-family: var(--hs-font);
     }
+    .sous-nav {
+      display: flex; flex-wrap: wrap; gap: var(--hs-space-2);
+      padding: 0 var(--hs-space-3) var(--hs-space-2);
+      background: var(--hs-surface);
+      border-bottom: 1px solid var(--hs-divider);
+    }
+    .sous-lien {
+      /* min-width en plus du min-height du brief : un libellé court
+         (« Piles ») retombait à 57 px de large, sous la cible de 62 px —
+         le vérificateur de rendu l'a détecté sur trois scénarios. */
+      min-height: var(--hs-touch); min-width: var(--hs-touch);
+      padding: 0 var(--hs-space-3);
+      border: 1px solid var(--hs-divider); border-radius: var(--hs-radius-s);
+      background: var(--hs-surface-2); color: var(--hs-text);
+      font-family: var(--hs-font); font-size: 0.9rem; cursor: pointer;
+    }
+    /* L'actif se dit par l'aplat et la graisse, JAMAIS par la couleur du
+       libellé : --hs-accent en texte donne 3,26:1 sous HA et 2,38:1 sous
+       Graphite (spec § 6.5). */
+    .sous-lien.actif {
+      background: var(--hs-accent); color: var(--hs-on-accent);
+      border-color: var(--hs-accent); font-weight: 600;
+    }
   `];
+
+  private rendreSousNav() {
+    const ecrans = familyScreens(familyOf(this.current));
+    // Une famille à un seul écran n'a rien à proposer : la ligne serait un
+    // bouton qui ne mène qu'à lui-même.
+    if (ecrans.length < 2) return nothing;
+    return html`
+      <nav class="sous-nav">
+        ${ecrans.map((d) => {
+          const actif = d.screen === this.current;
+          return html`
+            <button class="sous-lien ${actif ? 'actif' : ''}"
+                    aria-current=${actif ? 'page' : nothing}
+                    ?disabled=${actif}
+                    @click=${() => this.dispatchEvent(new CustomEvent('ecran-choisi', {
+                      detail: { screen: d.screen }, bubbles: true, composed: true }))}>
+              ${d.label}
+            </button>`;
+        })}
+      </nav>`;
+  }
 
   render() {
     const destination = destinationOf(this.current);
@@ -74,6 +118,7 @@ export class HsHeader extends LitElement {
             <hs-icon name="clock"></hs-icon>${this.pending} en attente
           </span>` : nothing}
       </div>
+      ${this.rendreSousNav()}
       ${this.error ? html`
         <p class="erreur" role="alert">
           <hs-icon name="alert"></hs-icon>

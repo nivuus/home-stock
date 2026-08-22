@@ -318,4 +318,16 @@ describe('panneau : routes d’URL', () => {
     await el.updateComplete;
     expect(el.ecran).toBe('piles');                  // la racine de « house »
   });
+
+  it('atteint Réglages depuis Piles, sans passer par une URL tapée à la main', async () => {
+    // La régression que ce test interdit : Réglages n'était plus atteignable
+    // dans l'application, seulement en tapant son URL.
+    const el = await monter('/batteries');
+    const entete = el.shadowRoot!.querySelector('hs-header')!;
+    entete.dispatchEvent(new CustomEvent('ecran-choisi', {
+      detail: { screen: 'reglages' }, bubbles: true, composed: true }));
+    await el.updateComplete;
+    expect(el.ecran).toBe('reglages');
+    expect(window.location.pathname).toBe('/home-stock/settings');
+  });
 });

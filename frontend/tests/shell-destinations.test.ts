@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DESTINATIONS, FAMILIES, destinationOf, familyOf }
+import { DESTINATIONS, FAMILIES, destinationOf, familyOf, familyScreens }
   from '../src/shell/destinations';
 import type { Ecran } from '../src/panneau';
 
@@ -45,5 +45,34 @@ describe('table des destinations', () => {
   it('garde un libellé français pour l’utilisateur', () => {
     expect(destinationOf('liste').label).toBe('Liste de courses');
     expect(destinationOf('rangement').label).toBe('Rangement');
+  });
+});
+
+describe('sous-navigation de famille', () => {
+  it('donne les écrans atteignables de chaque famille, dans l’ordre', () => {
+    expect(familyScreens('shopping').map((d) => d.screen))
+      .toEqual(['liste', 'session', 'panier', 'rangement', 'scanner']);
+    expect(familyScreens('stock').map((d) => d.screen)).toEqual(['catalogue', 'journal']);
+    expect(familyScreens('kitchen').map((d) => d.screen)).toEqual(['planning', 'recettes']);
+    expect(familyScreens('house').map((d) => d.screen))
+      .toEqual(['piles', 'equipements', 'reglages']);
+  });
+
+  it('exclut les écrans qui exigent un paramètre', () => {
+    // fiche, recette, validation, ticket, manger : un bouton nu ne saurait pas
+    // quel identifiant leur passer. On y entre depuis l'écran qui le connaît.
+    for (const famille of FAMILIES) {
+      for (const d of familyScreens(famille.id)) expect(d.param).toBeUndefined();
+    }
+  });
+
+  it('couvre TOUT écran sans paramètre — aucun ne doit rester inatteignable', () => {
+    // C'est le test qui interdit la régression : la barre de dix boutons
+    // exposait les dix-sept écrans, les quatre familles n'exposaient que leurs
+    // racines, et six écrans étaient devenus introuvables autrement que par
+    // leur URL.
+    const dansLaNav = FAMILIES.flatMap((f) => familyScreens(f.id).map((d) => d.screen));
+    const sansParametre = DESTINATIONS.filter((d) => !d.param).map((d) => d.screen);
+    expect([...dansLaNav].sort()).toEqual([...sansParametre].sort());
   });
 });

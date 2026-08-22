@@ -1302,6 +1302,29 @@ const SCENARIOS = [
     ecranAttendu: 'home-stock-scanner',
     elementAttendu: { enfant: 'hs-nav-bar', selector: '.badge' },
   },
+  // --- lot 16 : la sous-navigation de famille (Task 16) ---------------------
+  //
+  // Réglages n'avait plus aucun point d'entrée dans l'application : ce
+  // scénario prouve que la ligne secondaire de l'en-tête l'y ramène, avec sa
+  // marque d'actif. La famille Courses (cinq écrans, la plus fournie) est
+  // déjà rendue par « Coquille : barre basse, en-tête sans retour (racine) »
+  // ci-dessus — les mesures de cible tactile et de débordement, communes à
+  // tout scénario, y couvrent donc déjà les cinq boutons sur 412 px : la
+  // ligne a `flex-wrap`, elle passe à la ligne plutôt que de rétrécir sous
+  // 62 px.
+  {
+    nom: 'Coquille : ligne secondaire de la famille Maison, Réglages actif',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+      },
+    },
+    actions: [{ type: 'route', path: '/settings' }],
+    ecranAttendu: 'home-stock-reglages',
+    elementAttendu: { enfant: 'hs-header', selector: '.sous-lien.actif' },
+  },
 ];
 
 // --- ce qui s'exécute DANS la page ------------------------------------------
