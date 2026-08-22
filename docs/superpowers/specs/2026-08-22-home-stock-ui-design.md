@@ -281,8 +281,27 @@ les trois formats passent avec une seule valeur.
 | Enveloppe | Si l'élément HA est défini | Sinon |
 |---|---|---|
 | `<hs-card>` | rend `<ha-card>` | un `div` aux mêmes jetons |
-| `<hs-button>` | rend `<ha-button>` | un `button` aux mêmes jetons |
 | `<hs-icon>` | rend `<ha-svg-icon .path>` | un `<svg>` avec le même `path` |
+| `<hs-button>` | **toujours notre `<button>`** — voir ci-dessous | idem |
+
+**Pourquoi `ha-button` est écarté.** Vérifié dans HA 2026.8.2 (chunk
+`52345.8a897507db31c9f9.js`) : `ha-button` peint son fond sur un élément
+`.button` **interne à son shadow DOM**, à partir de variables
+`--wa-color-*` / `--button-color-*` pilotées par ses propres attributs
+`appearance` et `variant` (défaut `variant = "brand"`). Une classe posée de
+l'extérieur ne style que l'hôte, **derrière** ce bouton interne : nos variantes
+`primary` / `neutral` / `danger` seraient invisibles dès que HA est chargé — un
+bouton « danger » sans rien de dangereux à l'œil.
+
+Deux issues : épouser l'API interne de `ha-button` (`appearance` + `variant`),
+ou ne pas l'employer. La première nous lie à un contrat non public, qui vient
+déjà de changer une fois (mwc → Web Awesome). La seconde ne coûte rien : notre
+`<button>` tire ses couleurs des mêmes jetons HA, donc il a déjà l'air natif, et
+son chemin est écrit, testé et correct.
+
+`ha-card` reste, lui : c'est un conteneur qui style son propre `:host` et
+accepte le style externe. `ha-svg-icon` reste : il est piloté par un `path` que
+nous fournissons.
 
 Le tracé `mdi` vient de `shell/ui/icons.ts` **dans les deux cas** (une quinzaine
 de tracés, quelques centaines d'octets) : on ne dépend jamais du chargement de
