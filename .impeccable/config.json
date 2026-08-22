@@ -13,7 +13,7 @@
         "rule": "side-tab",
         "value": "4px solid var(--hs-danger)",
         "createdAt": "2026-08-22T15:02:39.407Z",
-        "reason": "Meme motif que 3px solid var(--hs-danger) : Ruling 16, § 6.1 ter de la spec. Variante 4px reservee aux bannieres de refus (panneau.ts, ticket.ts), plus larges que les messages en ligne."
+        "reason": "Meme motif que 3px solid var(--hs-danger) : Ruling 16, § 6.1 ter de la spec. Variante 4px reservee aux bannieres de refus (shell/header.ts, ecrans/ticket.ts), plus larges que les messages en ligne. La banniere de refus a quitte panneau.ts pour l'en-tete de la coquille au lot de refonte UI."
       },
       {
         "rule": "side-tab",

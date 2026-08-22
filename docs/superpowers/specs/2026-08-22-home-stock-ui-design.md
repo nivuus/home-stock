@@ -186,8 +186,20 @@ contrôle C11 de `check_grocy_migration` reste rouge à l'issue de ce lot.**
 
 `shell/ui/tokens.ts` exporte un `CSSResult` lit. Chaque écran passe de
 `static styles = css\`…\`` à `static styles = [tokens, css\`…\`]` : **une ligne
-modifiée par écran**, et les dix-sept héritent de la même échelle d'espacement,
-des mêmes rayons, de la même typographie et des mêmes couleurs.
+modifiée par écran**, et les dix-sept héritent des mêmes couleurs, de la même
+typographie et de la même cible tactile.
+
+**Ce qui n'a PAS été substitué, et qu'il faut dire :** l'échelle d'espacement et
+les rayons sont *disponibles*, pas *adoptés*. Relevé le 2026-08-22 sur
+`src/ecrans/` : 342 déclarations `padding` / `margin` / `gap` / `border-radius`
+portent encore une valeur littérale en px, contre **2** lectures de
+`var(--hs-space-*)` ou `var(--hs-radius-*)` ; `--hs-space-5`, `--hs-space-6` et
+`--hs-radius-l` ne sont lus nulle part. La coquille (`shell/`), elle, les
+emploie. Les seuls jetons réellement substitués partout sont les couleurs, la
+police et `--hs-touch` — c'est-à-dire exactement ceux qu'un contrôle automatique
+mesure (contraste, cible tactile). L'espacement, que rien ne mesure, est resté
+en dur : à reprendre écran par écran dans un lot ultérieur, pas à présenter
+comme fait.
 
 Les jetons dérivent des variables HA, avec un repli explicite pour chacune —
 c'est précisément l'absence de repli qui a produit le § 3 :
@@ -201,10 +213,10 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 --hs-surface-2                   var(--secondary-background-color, #e5e5e5)
 --hs-divider                     var(--divider-color, #0000001f)
 --hs-accent                      var(--primary-color, #009ac7)
---hs-on-accent                   #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
+--hs-on-accent                   var(--hs-computed-on-accent, #141414)  /* cf. § 6.1 bis */
 --hs-danger                      var(--error-color, #db4437)
 --hs-warning                     var(--warning-color, #ffa600)
---hs-on-warning                  #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
+--hs-on-warning                  var(--hs-computed-on-warning, #141414) /* cf. § 6.1 bis */
 --hs-font                        var(--ha-font-family-body, Roboto, Noto, sans-serif)
 --hs-touch                       62px
 ```
@@ -268,8 +280,19 @@ Trois issues envisagées :
 3. **Calculer** — retenue.
 
 `src/shell/ui/on-color.ts` lit la couleur RÉSOLUE du fond, calcule sa
-luminance, et pose `--hs-on-accent` / `--hs-on-warning` sur
-l'hôte, en clair ou en sombre selon celle qui contraste le mieux. Sous HA
+luminance, et pose `--hs-computed-on-accent` / `--hs-computed-on-warning` sur
+l'hôte, en clair ou en sombre selon celle qui contraste le mieux. **Par
+indirection, et jamais `--hs-on-*` directement** : la feuille de `tokens.ts`
+est adoptée par chaque composant, donc chaque `:host` enfant redéclare
+`--hs-on-accent` et écrasait la valeur posée sur l'hôte avant qu'elle
+n'atteigne le moindre bouton. Personne ne redéclare `--hs-computed-*` :
+l'héritage la traverse. **La sonde, elle, doit être posée dans le shadow root
+du panneau** — un enfant du light DOM d'un hôte sans `<slot>` n'entre pas dans
+l'arbre aplati et n'a aucun style calculé, donc la sonde y rend la chaîne vide.
+Les deux défauts étaient muets : les trois palettes du harnais ayant toutes une
+primaire claire, elles voulaient toutes le repli, et rien ne distinguait « le
+calcul marche » de « le calcul n'a jamais tourné ». D'où la quatrième palette à
+primaire foncée (`outils/verifier-rendu.mjs`, `PALETTES`). Sous HA
 défaut : sombre sur le cyan (6,4:1 au lieu de 3,26). Sous Graphite : navy sur
 l'orange (7,41:1). Le panneau garde ses aplats **et** reste lisible sous
 n'importe quel thème, y compris un thème que personne ici n'a encore installé.
@@ -312,6 +335,19 @@ les trois formats passent avec une seule valeur.
 | `<hs-card>` | rend `<ha-card>` | un `div` aux mêmes jetons |
 | `<hs-icon>` | rend `<ha-svg-icon .path>` | un `<svg>` avec le même `path` |
 | `<hs-button>` | **toujours notre `<button>`** — voir ci-dessous | idem |
+
+**État réel au 2026-08-22 : les trois existent et sont testées, deux attendent
+leur premier consommateur.** `<hs-icon>` est employée partout (barre, en-tête,
+actions des écrans). `<hs-card>` **n'est montée nulle part**. `<hs-button>` n'est
+montée qu'à un seul endroit (`ecrans/catalogue.ts`, le bouton « voir plus »), et
+toujours sans variante — ses règles `.primary` et `.danger` sont donc du code
+mort pour l'instant. De même, cinq des quinze tracés d'icônes (`plus`, `search`,
+`settings`, `battery`, `menu`) ne sont référencés par aucun écran.
+
+Rien de tout cela n'est à supprimer : ces pièces sont le vocabulaire des écrans
+à venir, et leur coût est de quelques centaines d'octets. Mais la spec ne doit
+pas laisser croire qu'elles sont en service — une enveloppe jamais montée n'a
+jamais été éprouvée par un vrai rendu, seulement par ses tests.
 
 **Pourquoi `ha-button` est écarté.** Vérifié dans HA 2026.8.2 (chunk
 `52345.8a897507db31c9f9.js`) : `ha-button` peint son fond sur un élément
@@ -380,6 +416,29 @@ saurait pas fournir : on y entre depuis l'écran qui le connaît.
 plutôt que d'apparaître et disparaître. C'est précisément le défaut de
 l'ancienne barre : des boutons qui bougent font perdre le repère. Leur écran
 affiche son état vide, ce qui est une réponse honnête.
+
+## 6.4 bis — La fiche article : la caméra garde l'écran, l'utilisateur garde la sortie
+
+**Correction du 2026-08-22.** La coquille était court-circuitée en entier sur
+`fiche` : ni barre, ni en-tête, ni bannière de refus. Le motif venait d'avant
+la coquille (on y scanne, rien ne doit voler l'écran à la caméra) et il était
+tolérable tant qu'on n'y entrait que depuis le scanner, pour en ressortir par
+`article-pret`.
+
+Cette branche en a fait une **destination de plein droit** : `/item/<code>` est
+une URL partageable (§ 5.3) et la cible délibérée de « Quitter quand même ».
+Or l'écran n'émet que `article-pret` et `manger-produit` — jamais un retour — et
+le panneau interdit tout geste de navigation (pas de balayage, pas de bouton
+système). On entrait donc sur cet écran sans plus pouvoir en sortir.
+
+Arbitrage retenu : **l'en-tête revient, la barre reste masquée.** L'en-tête y
+passe en mode `compact` — titre, bouton de retour, bannière de refus, mais pas
+la ligne secondaire de famille. La caméra garde l'essentiel de la hauteur, et le
+retour ramène à la racine de la famille, comme partout ailleurs.
+
+Vérifié aux deux niveaux : `tests/panneau-routes.test.ts` monte `/item/<code>`
+et exige `hs-header` présent, `hs-nav-bar` absent, `.sous-nav` absente ; le
+harnais de rendu mesure la même chose sur ses deux scénarios de fiche.
 
 ## 6.5 — Aucune couleur de marque en texte
 
