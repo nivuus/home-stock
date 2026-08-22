@@ -11,6 +11,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 export type CleCreneau = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 
@@ -223,14 +224,14 @@ export class EcranPlanning extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; color: var(--hs-text); }
     .entete { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .periode { flex: 1; text-align: center; font-weight: 600; }
     .entete button, .poser, .repas-nom, .valider-repas, .annuler-repas {
-      min-height: 48px; padding: 0 12px; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color); font-size: 1rem;
-      background: var(--card-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); padding: 0 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--hs-divider); font-size: 1rem;
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .grille { display: flex; flex-direction: column; gap: 8px; }
     .ligne-jours, .ligne-creneau { display: flex; gap: 8px; align-items: stretch; }
@@ -238,8 +239,9 @@ export class EcranPlanning extends LitElement {
                       font-weight: 600; }
     .jour { flex: 1; text-align: center; font-weight: 600; }
     .case {
+      /* Zone de dépôt, pas une cible tactile : 48px reste volontairement en dur. */
       flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 6px;
-      border: 1px dashed var(--divider-color); border-radius: 8px;
+      border: 1px dashed var(--hs-divider); border-radius: 8px;
       min-height: 48px;
     }
     .repas { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -253,5 +255,5 @@ export class EcranPlanning extends LitElement {
       .creneau, .coin { flex: 0 0 5.5em; }
       .repas { flex-direction: column; align-items: stretch; }
     }
-  `;
+  `];
 }

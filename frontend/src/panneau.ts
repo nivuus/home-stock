@@ -24,6 +24,7 @@ import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { DonneesTicket } from './ecrans/ticket';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
+import { tokens } from './shell/ui/tokens';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
@@ -458,39 +459,45 @@ export class PanneauGardeManger extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; height: 100%; background: var(--primary-background-color); }
+  static styles = [tokens, css`
+    :host { display: block; height: 100%; background: var(--hs-surface-2); }
     /* flex-wrap : jusqu'à six boutons cohabitent ici (Scanner, Panier,
        Ranger, Courses, Catalogue, Réglages). Sur 412 px de large ils ne
        tiennent pas tous sur une ligne, et un dépassement horizontal fait
        échouer le vérificateur de rendu — à juste titre. Ils passent donc à
-       la ligne plutôt que de rétrécir sous la cible de 48 px ou de tronquer
+       la ligne plutôt que de rétrécir sous la cible de 62 px ou de tronquer
        leur libellé. */
     .navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px 0; }
     .nav-bouton {
-      flex: 1 1 auto; min-height: 48px; min-width: 88px; border-radius: 8px; border: none; font-size: 0.95rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      flex: 1 1 auto; min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.95rem;
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text sur
+       --hs-surface, le danger se dit par le liseré. */
     .erreur-file {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin: 8px 12px 0; padding: 8px 12px; border-radius: 8px;
-      background: var(--error-color, #b3261e); color: #fff; font-size: 0.9rem;
+      background: var(--hs-surface); color: var(--hs-text); font-size: 0.9rem;
+      border-left: 4px solid var(--hs-danger);
     }
     .fermer-erreur-file {
-      min-height: 48px; min-width: 48px; border-radius: 8px; border: none;
-      background: rgba(255, 255, 255, 0.2); color: #fff; font-weight: 600;
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px;
+      background: var(--hs-surface); color: var(--hs-text); font-weight: 600;
+      border: 2px solid var(--hs-danger);
     }
     .confirmation-quitter-rangement {
       display: flex; flex-direction: column; gap: 8px; padding: 12px;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
     .confirmation-quitter-rangement p { margin: 0; }
     .confirmer-quitter, .annuler-quitter {
-      min-height: 48px; width: 100%; border-radius: 8px; border: none; font-size: 0.95rem;
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none; font-size: 0.95rem;
     }
-    .confirmer-quitter { background: var(--error-color, #b3261e); color: #fff; }
-    .annuler-quitter { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-  `;
+    .confirmer-quitter {
+      background: var(--hs-surface); color: var(--hs-text); border: 2px solid var(--hs-danger);
+    }
+    .annuler-quitter { background: var(--hs-accent); color: var(--hs-on-accent); }
+  `];
 
   private rendreEcran() {
     if (this.ecran === 'fiche' && this.resultatCourant) {

@@ -190,10 +190,13 @@ describe('<home-stock-recettes>', () => {
     expect(textes(element, '.badge.relire')).toEqual([]);
   });
 
-  it('offre des cibles tactiles d’au moins 48 px', async () => {
+  it('offre des cibles tactiles d’au moins 62 px', async () => {
     const element = monter();
     await stabiliser(element);
-    const styles = (element.constructor as any).styles.cssText;
-    expect(styles).toContain('min-height: 48px');
+    // `static styles` est désormais un tableau [tokens, css`…`] (Task 6) :
+    // il faut le concaténer, pas lire un unique `.cssText`.
+    const styles = ((element.constructor as any).styles as { cssText: string }[])
+      .map((s) => s.cssText).join('');
+    expect(styles).toContain('min-height: var(--hs-touch)');
   });
 });

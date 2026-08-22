@@ -16,6 +16,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 /** Une revendication : pourquoi cette ligne est là. */
 export type Revendication = {
@@ -256,26 +257,26 @@ export class EcranListe extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .bandeau {
       display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
       justify-content: space-between; margin-bottom: 8px;
     }
     .magasin { font-weight: 600; margin: 0; }
     .compte { font-size: 1.2rem; font-weight: 700; margin: 0; }
-    .confiance { font-size: 0.8rem; color: var(--secondary-text-color); margin: 0; flex-basis: 100%; }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0 8px; }
+    .confiance { font-size: 0.8rem; color: var(--hs-text-2); margin: 0; flex-basis: 100%; }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 4px 0 8px; }
     .ajout { display: flex; gap: 8px; margin-bottom: 8px; }
-    .champ-ajout { flex: 1; min-height: 48px; box-sizing: border-box; font-size: 1rem; padding: 4px 8px; }
+    .champ-ajout { flex: 1; min-height: var(--hs-touch); box-sizing: border-box; font-size: 1rem; padding: 4px 8px; }
     .ajouter {
-      min-height: 48px; min-width: 88px; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
-    .vide { color: var(--secondary-text-color); text-align: center; }
+    .vide { color: var(--hs-text-2); text-align: center; }
     .rayon-nom {
       margin: 16px 0 4px; font-size: 0.9rem; text-transform: uppercase;
-      color: var(--secondary-text-color); letter-spacing: 0.04em;
+      color: var(--hs-text-2); letter-spacing: 0.04em;
     }
 
     /* --- la vue dense (lot 6) ---------------------------------------------
@@ -290,20 +291,20 @@ export class EcranListe extends LitElement {
     .rayons-colonnes .rayon { break-inside: avoid; }
     .ligne {
       display: flex; align-items: center; gap: 8px; padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color, #ddd);
+      border-bottom: 1px solid var(--hs-divider);
     }
-    .ligne-cochee .nom { text-decoration: line-through; color: var(--secondary-text-color); }
+    .ligne-cochee .nom { text-decoration: line-through; color: var(--hs-text-2); }
     .cocher, .decocher {
-      min-width: 48px; min-height: 48px; border-radius: 8px; border: none; font-size: 1.3rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color); flex-shrink: 0;
+      min-width: var(--hs-touch); min-height: var(--hs-touch); border-radius: 8px; border: none; font-size: 1.3rem;
+      background: var(--hs-surface-2); color: var(--hs-text); flex-shrink: 0;
     }
     .infos { flex: 1; min-width: 0; }
     .nom { margin: 0; }
-    .quantite { margin: 2px 0 0; font-size: 0.9rem; color: var(--secondary-text-color); }
-    .origines { margin: 2px 0 0; font-size: 0.8rem; color: var(--secondary-text-color); }
+    .quantite { margin: 2px 0 0; font-size: 0.9rem; color: var(--hs-text-2); }
+    .origines { margin: 2px 0 0; font-size: 0.8rem; color: var(--hs-text-2); }
     .retirer {
-      min-width: 48px; min-height: 48px; border-radius: 8px; border: none; font-size: 1.2rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color); flex-shrink: 0;
+      min-width: var(--hs-touch); min-height: var(--hs-touch); border-radius: 8px; border: none; font-size: 1.2rem;
+      background: var(--hs-surface-2); color: var(--hs-text); flex-shrink: 0;
     }
-  `;
+  `];
 }

@@ -22,6 +22,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { formaterNombre } from '../nombres';
+import { tokens } from '../shell/ui/tokens';
 
 export type Granularite = 'day' | 'week' | 'month';
 
@@ -472,91 +473,105 @@ export class EcranJournal extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .titre { margin: 0 0 8px; font-size: 1.2rem; }
     .granularites { display: flex; gap: 8px; margin-bottom: 8px; }
     .granularite {
-      flex: 1 1 auto; min-height: 48px; border-radius: 8px; border: none; font-size: 0.9rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      flex: 1 1 auto; min-height: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.9rem;
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
-    .granularite-active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .granularite-active { background: var(--hs-accent); color: var(--hs-on-accent); }
     .entree-ouvrir {
-      display: flex; width: 100%; gap: 8px; align-items: baseline; min-height: 48px;
+      display: flex; width: 100%; gap: 8px; align-items: baseline; min-height: var(--hs-touch);
       border: none; background: transparent; color: inherit; font: inherit;
       text-align: left; padding: 0;
     }
     .corrigee .entree-nom, .corrigee .entree-quantite { text-decoration: line-through; }
-    .contrepassation { color: var(--secondary-text-color); }
+    .contrepassation { color: var(--hs-text-2); }
     .detail {
       margin: 4px 0 8px; padding: 8px; border-radius: 8px;
-      background: var(--secondary-background-color);
+      background: var(--hs-surface-2);
     }
     .annonce { margin: 0 0 8px; }
-    .refus { margin: 0 0 8px; color: var(--secondary-text-color); font-size: 0.9rem; }
+    .refus { margin: 0 0 8px; color: var(--hs-text-2); font-size: 0.9rem; }
     .corriger, .corriger-repas, .confirmer-correction, .annuler-correction {
-      display: block; width: 100%; min-height: 48px; border-radius: 8px; border: none;
+      display: block; width: 100%; min-height: var(--hs-touch); border-radius: 8px; border: none;
       margin-top: 8px; font-size: 1rem;
     }
     .corriger, .corriger-repas, .confirmer-correction {
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .annuler-correction {
-      background: var(--card-background-color, #fff); color: var(--primary-text-color);
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .objectifs { list-style: none; margin: 4px 0 0; padding: 0; }
     .objectif { font-size: 0.95rem; }
-    .objectif-depasse { color: var(--error-color, #b3261e); }
-    .objectif-semaine { font-size: 0.9rem; color: var(--secondary-text-color); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .objectif-depasse {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px;
+    }
+    .objectif-semaine { font-size: 0.9rem; color: var(--hs-text-2); }
     /* La cible tactile de .barre est fixe (colonne pleine hauteur ici,
        ligne pleine largeur sous 700 px) — jamais la grandeur du seau, qui ne
        viendrait qu'agrandir les gros jours et rétrécir les petits sous les
-       48 px. Quatorze seaux sur 412 px ne tiennent pas en colonnes larges de
-       48 px (14 x 48 > 372 px de contenu disponible) : sous 700 px, le
+       62 px. Quatorze seaux sur 412 px ne tiennent pas en colonnes larges de
+       62 px (14 x 62 > 372 px de contenu disponible) : sous 700 px, le
        graphe passe donc en liste de lignes empilées, chacune pleine largeur,
        où c'est la largeur du remplissage qui porte la valeur. */
     .barres {
-      display: flex; gap: 4px; margin: 8px 0 16px;
-      padding: 8px; border-radius: 8px; background: var(--secondary-background-color); box-sizing: border-box;
+      display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 16px;
+      padding: 8px; border-radius: 8px; background: var(--hs-surface-2); box-sizing: border-box;
     }
     .barre {
-      flex: 1 1 auto; min-width: 12px; height: 120px; min-height: 48px; box-sizing: border-box;
+      /* Cible tactile réelle, pas juste visuelle : min-width tient la
+         colonne à 62 px. Quand quatorze seaux ne rentrent plus sur une
+         ligne dans la colonne « série » de la vue dense, ils passent à la
+         ligne (flex-wrap) plutôt que d'écraser des cibles sous le seuil ou
+         de faire défiler la page horizontalement (défaut Task 6). */
+      flex: 1 1 auto; min-width: var(--hs-touch); height: 120px; min-height: var(--hs-touch); box-sizing: border-box;
       display: flex; align-items: flex-end; border: none; border-radius: 4px; background: transparent; padding: 0;
     }
     .barre-remplissage {
       display: block; width: 100%; height: var(--part); min-height: 4px;
-      border-radius: 4px 4px 0 0; background: var(--primary-color); pointer-events: none;
+      border-radius: 4px 4px 0 0; background: var(--hs-accent); pointer-events: none;
     }
     @media (max-width: 700px) {
       .barres { flex-direction: column; }
-      .barre { flex: none; width: 100%; height: auto; min-height: 48px; align-items: stretch; }
+      .barre { flex: none; width: 100%; height: auto; min-height: var(--hs-touch); align-items: stretch; }
       .barre-remplissage { width: var(--part); height: 100%; min-width: 4px; min-height: 0; border-radius: 0 4px 4px 0; }
     }
     .jour { margin-top: 8px; }
-    .titre-jour { margin: 0 0 8px; font-size: 1rem; color: var(--secondary-text-color); }
+    .titre-jour { margin: 0 0 8px; font-size: 1rem; color: var(--hs-text-2); }
     .entrees { list-style: none; margin: 0 0 8px; padding: 0; }
     .entree {
-      display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 48px;
-      padding: 8px 0; border-bottom: 1px solid var(--divider-color, #ddd);
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: var(--hs-touch);
+      padding: 8px 0; border-bottom: 1px solid var(--hs-divider);
     }
     .entree-nom { flex: 1 1 auto; }
-    .entree-quantite, .entree-kcal { color: var(--secondary-text-color); font-size: 0.85rem; }
+    .entree-quantite, .entree-kcal { color: var(--hs-text-2); font-size: 0.85rem; }
     .entree-parts {
       font-size: 0.8rem; padding: 2px 6px; border-radius: 999px;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
-    .entree.jete { color: var(--error-color, #b3261e); }
-    .vide { color: var(--secondary-text-color); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .entree.jete { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; }
+    .vide { color: var(--hs-text-2); }
     .total-kcal { margin: 4px 0 0; font-size: 1.1rem; font-weight: 600; }
-    .total-cout { margin: 2px 0; color: var(--secondary-text-color); }
-    .non-chiffre { color: var(--error-color, #b3261e); font-size: 0.85rem; }
+    .total-cout { margin: 2px 0; color: var(--hs-text-2); }
+    .non-chiffre {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.85rem;
+    }
 
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
        Deux tiers pour la série, un tiers pour le détail — et ce n'est pas un
-       goût : quatorze barres à 48 px de cible tactile réclament 700 px, ce
-       qu'une demi-largeur de 1280 ne donne pas. Le vérificateur de rendu l'a
-       signalé avant qu'on s'en aperçoive. Largeur minimale nulle sur les deux
-       colonnes, sans quoi une entrée longue pousserait la grille hors cadre. */
+       goût : quatorze barres à 62 px de cible tactile réclament plus de
+       700 px, ce qu'une demi-largeur de 1280 ne donne pas. Le vérificateur de
+       rendu l'a signalé avant qu'on s'en aperçoive. Largeur minimale nulle
+       sur les deux colonnes, sans quoi une entrée longue pousserait la
+       grille hors cadre. */
     .deux-colonnes {
       display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
       gap: 16px; align-items: start;
@@ -564,5 +579,5 @@ export class EcranJournal extends LitElement {
     .colonne-serie, .colonne-detail { min-width: 0; }
     .deux-colonnes .barres { margin-top: 0; }
     .deux-colonnes .jour { margin-top: 0; }
-  `;
+  `];
 }

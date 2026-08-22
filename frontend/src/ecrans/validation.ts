@@ -18,6 +18,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { analyserNombre, formaterNombre } from '../nombres';
+import { tokens } from '../shell/ui/tokens';
 
 /** Repris du lot 2 (`consommation.ts`) : la même borne, parce que c'est la
  *  même question posée au même endroit. */
@@ -311,44 +312,46 @@ export class EcranValidation extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; color: var(--hs-text); }
     h1 { font-size: 1.4rem; margin: 0 0 12px; }
     h2 { font-size: 1.05rem; margin: 16px 0 6px; }
     ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
     .ligne {
-      display: flex; align-items: center; gap: 10px; min-height: 48px;
+      display: flex; align-items: center; gap: 10px; min-height: var(--hs-touch);
       padding: 4px 8px; border-radius: 8px;
-      border: 1px solid var(--divider-color);
+      border: 1px solid var(--hs-divider);
     }
     .ligne-quantite { font-weight: 600; min-width: 6em; }
     .ligne-nom { flex: 1; }
     .ligne-statut { opacity: 0.75; font-size: 0.85rem; }
-    .statut-short { border-color: var(--error-color, #a01b1b); }
+    .statut-short { border-color: var(--hs-danger); }
     .retirer, .valider, .annuler {
-      min-height: 48px; padding: 0 16px; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color); font-size: 1rem;
-      background: var(--card-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); padding: 0 16px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--hs-divider); font-size: 1rem;
+      background: var(--hs-surface); color: var(--hs-text);
     }
-    .valider { background: var(--primary-color, #03a9f4); color: #fff; }
+    .valider { background: var(--hs-accent); color: var(--hs-on-accent); }
     .valider[disabled] { opacity: 0.4; cursor: default; }
     .plat dl { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; }
     .plat dt { opacity: 0.75; font-size: 0.85rem; }
     .plat dd { margin: 0; font-weight: 600; }
     .mangees { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; }
-    .parts-mangees { min-height: 48px; font-size: 1rem; padding: 4px 8px;
+    .parts-mangees { min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px;
                      box-sizing: border-box; }
-    .partage-bascule { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+    .partage-bascule { display: flex; align-items: center; gap: 8px; min-height: var(--hs-touch); }
     .partage-bascule input { width: 22px; height: 22px; }
     .compteurs { display: flex; gap: 12px; }
-    .parts-total, .parts-moi { min-height: 48px; font-size: 1rem; padding: 4px 8px;
+    .parts-total, .parts-moi { min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px;
                                box-sizing: border-box; width: 100%; }
-    .blocage, .erreur { color: var(--error-color, #a01b1b); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .blocage, .erreur { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; }
     .sans-retour { font-weight: 600; }
     .actions { display: flex; gap: 8px; margin-top: 16px; }
     @media (max-width: 700px) {
       .ligne { flex-wrap: wrap; }
       .compteurs { flex-direction: column; }
     }
-  `;
+  `];
 }

@@ -39,6 +39,7 @@ import type { FileAttente } from '../file-attente';
 import { analyserNombre } from '../nombres';
 import type { UniteBase } from './fiche';
 import type { Emplacement } from './rangement';
+import { tokens } from '../shell/ui/tokens';
 
 export type Rayon = { id: number; name: string; position: number };
 
@@ -494,53 +495,55 @@ export class EcranCatalogue extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .recherche {
-      display: block; width: 100%; min-height: 48px; box-sizing: border-box; font-size: 1rem;
-      padding: 4px 12px; border-radius: 8px; border: 1px solid var(--divider-color, #ddd); margin-bottom: 8px;
+      display: block; width: 100%; min-height: var(--hs-touch); box-sizing: border-box; font-size: 1rem;
+      padding: 4px 12px; border-radius: 8px; border: 1px solid var(--hs-divider); margin-bottom: 8px;
     }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 8px; }
-    .vide { color: var(--secondary-text-color); text-align: center; }
-    .erreur { color: var(--error-color, #b3261e); font-size: 0.9rem; }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 0 0 8px; }
+    .vide { color: var(--hs-text-2); text-align: center; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.9rem; }
     .reessayer {
-      min-height: 48px; width: 100%; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .ligne {
       display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color, #ddd);
+      border-bottom: 1px solid var(--hs-divider);
     }
     .infos { flex: 1; min-width: 0; }
     .nom { margin: 0 0 4px; font-weight: 600; }
-    .meta { margin: 0; color: var(--secondary-text-color); font-size: 0.85rem; }
+    .meta { margin: 0; color: var(--hs-text-2); font-size: 0.85rem; }
     .modifier {
-      min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff); flex-shrink: 0;
+      min-height: var(--hs-touch); min-width: var(--hs-touch); padding: 0 16px; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent); flex-shrink: 0;
     }
     .manger {
-      min-height: 48px; min-width: 48px; padding: 0 16px; border-radius: 8px; border: none;
-      background: var(--secondary-background-color); color: var(--primary-text-color); flex-shrink: 0;
+      min-height: var(--hs-touch); min-width: var(--hs-touch); padding: 0 16px; border-radius: 8px; border: none;
+      background: var(--hs-surface-2); color: var(--hs-text); flex-shrink: 0;
     }
     .edition {
       flex: 1 0 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 8px;
-      padding: 12px; border-radius: 8px; background: var(--secondary-background-color);
+      padding: 12px; border-radius: 8px; background: var(--hs-surface-2);
       box-sizing: border-box;
     }
     .champ { display: block; font-size: 0.85rem; }
     .champ-nom, .champ-rayon, .champ-emplacement, .champ-seuil, .champ-conservation {
-      display: block; width: 100%; min-height: 48px; box-sizing: border-box; font-size: 1rem;
+      display: block; width: 100%; min-height: var(--hs-touch); box-sizing: border-box; font-size: 1rem;
       padding: 4px 8px; margin-top: 4px;
     }
-    .champ-lecture-seule { color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0; }
-    .etat-envoi { color: var(--secondary-text-color); font-size: 0.85rem; }
+    .champ-lecture-seule { color: var(--hs-text-2); font-size: 0.85rem; margin: 4px 0; }
+    .etat-envoi { color: var(--hs-text-2); font-size: 0.85rem; }
     .actions-edition { display: flex; flex-wrap: wrap; gap: 8px; }
     .enregistrer, .annuler {
-      min-height: 48px; flex: 1; border-radius: 8px; border: none; font-size: 0.95rem;
+      min-height: var(--hs-touch); flex: 1; border-radius: 8px; border: none; font-size: 0.95rem;
     }
-    .enregistrer { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .enregistrer { background: var(--hs-accent); color: var(--hs-on-accent); }
     .enregistrer:disabled { opacity: 0.5; }
-    .annuler { background: var(--secondary-background-color); color: var(--primary-text-color); border: 1px solid var(--divider-color, #ddd); }
+    .annuler { background: var(--hs-surface-2); color: var(--hs-text); border: 1px solid var(--hs-divider); }
 
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
        La liste reste ENTIÈREMENT visible pendant l'édition : le volet se pose
@@ -550,13 +553,13 @@ export class EcranCatalogue extends LitElement {
     .dense { display: flex; align-items: flex-start; gap: 16px; }
     .tableau { flex: 1 1 auto; min-width: 0; border-collapse: collapse; table-layout: fixed; }
     .tableau th, .tableau td {
-      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--divider-color, #ddd);
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--hs-divider);
       overflow-wrap: anywhere;
     }
-    .tableau th { font-size: 0.85rem; color: var(--secondary-text-color); font-weight: 600; }
+    .tableau th { font-size: 0.85rem; color: var(--hs-text-2); font-weight: 600; }
     .tableau .nom { font-weight: 600; }
     .tableau .ligne { height: 48px; }
-    .ligne-editee { background: var(--secondary-background-color); }
+    .ligne-editee { background: var(--hs-surface-2); }
     .cellule-actions { white-space: nowrap; width: 1%; }
     .cellule-actions .manger, .cellule-actions .modifier { padding: 0 12px; }
     .volet-edition {
@@ -564,5 +567,5 @@ export class EcranCatalogue extends LitElement {
       max-height: calc(100vh - 24px); overflow-y: auto;
     }
     .volet-edition .edition { margin-top: 0; }
-  `;
+  `];
 }

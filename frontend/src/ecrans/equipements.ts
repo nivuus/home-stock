@@ -14,6 +14,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 export type Equipement = {
   id: number;
@@ -150,8 +151,8 @@ export class EcranEquipements extends LitElement {
     });
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); box-sizing: border-box; }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; color: var(--hs-text); box-sizing: border-box; }
     * { box-sizing: border-box; max-width: 100%; }
     /* Un entity_id est long et sans espace (sensor.browser_mod_606bfd06_
        browser_battery) : sans coupure, il pousse la page au-delà des 412 px
@@ -161,40 +162,40 @@ export class EcranEquipements extends LitElement {
     .libelle, .detail, .verbe, .lien { overflow-wrap: anywhere; }
     h2 { font-size: 1rem; margin: 12px 0 8px; }
     .equipement {
-      display: block; width: 100%; min-height: 62px; text-align: left;
+      display: block; width: 100%; min-height: var(--hs-touch); text-align: left;
       margin-bottom: 8px; padding: 10px 12px; border: none; border-radius: 8px;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      background: var(--hs-surface-2); color: var(--hs-text);
       font-size: 0.95rem;
     }
     .libelle { display: block; font-weight: 600; }
     .detail { display: block; font-size: 0.85rem; }
     button.action {
-      min-height: 62px; width: 100%; border-radius: 8px; border: none;
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none;
       margin-bottom: 8px; font-size: 0.95rem;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
-    button.delier { background: var(--secondary-background-color); color: var(--primary-text-color); }
+    button.delier { background: var(--hs-surface-2); color: var(--hs-text); }
     .lien { word-break: break-all; }
 
     /* --- la vue dense (lot 6), au-delà de 1000 px ------------------------- */
     .tableau { width: 100%; border-collapse: collapse; table-layout: fixed; }
     .tableau th, .tableau td {
-      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--divider-color, #ddd);
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--hs-divider);
       overflow-wrap: anywhere; font-size: 0.9rem;
     }
-    .tableau th { font-size: 0.85rem; color: var(--secondary-text-color); font-weight: 600; }
-    .tableau .ligne { height: 62px; }
+    .tableau th { font-size: 0.85rem; color: var(--hs-text-2); font-weight: 600; }
+    .tableau .ligne { height: var(--hs-touch); }
     /* Le bouton d'ouverture garde la classe de la carte étroite : c'est le
        MÊME geste, et un seul sélecteur le désigne dans les deux mises en page
        — y compris pour le vérificateur de rendu, qui n'a pas à connaître deux
        noms pour une seule action. */
     .tableau .ouvrir {
-      display: block; width: 100%; min-height: 48px; text-align: left; border: none;
+      display: block; width: 100%; min-height: var(--hs-touch); text-align: left; border: none;
       border-radius: 8px; padding: 8px; margin-bottom: 0; font-size: 0.95rem;
       font-weight: 600;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
-  `;
+  `];
 
   private rendreFiche(fiche: FicheEquipement) {
     return html`

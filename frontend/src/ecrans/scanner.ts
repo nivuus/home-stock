@@ -9,6 +9,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { choisirScanner, type Scanner } from '../scan';
 import { libellesChamps } from './fiche';
+import { tokens } from '../shell/ui/tokens';
 
 export type ResumeDerniereFiche = {
   nom: string;
@@ -132,39 +133,41 @@ export class EcranScanner extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .session-banniere {
-      background: var(--secondary-background-color); padding: 8px 12px; border-radius: 8px;
+      background: var(--hs-surface-2); padding: 8px 12px; border-radius: 8px;
       margin: 0 0 12px; text-align: center;
     }
     .bouton-scan {
       display: block; width: 100%; min-height: 96px; font-size: 1.4rem; font-weight: 600;
-      border-radius: 16px; border: none; background: var(--primary-color);
-      color: var(--text-primary-color, #fff);
+      border-radius: 16px; border: none; background: var(--hs-accent);
+      color: var(--hs-on-accent);
     }
     .bouton-scan:disabled { opacity: 0.6; }
-    .erreur { color: var(--error-color, #b3261e); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; }
     .derniere-fiche {
-      margin: 16px 0; padding: 8px; border-radius: 8px; background: var(--secondary-background-color);
+      margin: 16px 0; padding: 8px; border-radius: 8px; background: var(--hs-surface-2);
       display: flex; flex-direction: column; align-items: center; gap: 4px;
     }
     .derniere-fiche img { max-height: 72px; max-width: 100%; border-radius: 6px; }
     .derniere-fiche-ignores, .derniere-fiche-quantite {
-      color: var(--secondary-text-color); font-size: 0.85rem; text-align: center;
+      color: var(--hs-text-2); font-size: 0.85rem; text-align: center;
     }
     .en-attente {
-      text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 8px 0 0;
+      text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 8px 0 0;
     }
     .bouton-saisie {
-      display: block; width: 100%; min-height: 48px; margin-top: 16px; border-radius: 8px;
-      border: 1px solid var(--divider-color, #ccc); background: transparent; color: var(--primary-text-color);
+      display: block; width: 100%; min-height: var(--hs-touch); margin-top: 16px; border-radius: 8px;
+      border: 1px solid var(--hs-divider); background: transparent; color: var(--hs-text);
     }
     .saisie-manuelle { display: flex; gap: 8px; margin-top: 8px; }
-    .champ-code { flex: 1; min-height: 48px; font-size: 1rem; padding: 4px 8px; box-sizing: border-box; }
+    .champ-code { flex: 1; min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px; box-sizing: border-box; }
     .valider-saisie {
-      min-height: 48px; min-width: 62px; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
-  `;
+  `];
 }
