@@ -195,22 +195,36 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 ```
 --hs-space-1 … --hs-space-6      échelle d'espacement (4 / 8 / 12 / 16 / 24 / 32)
 --hs-radius-s / -m / -l          rayons
---hs-text                        var(--primary-text-color, #212121)
---hs-text-2                      var(--secondary-text-color, #5f5f5f)
+--hs-text                        var(--primary-text-color, #141414)
+--hs-text-2                      var(--secondary-text-color, #5e5e5e)
 --hs-surface                     var(--card-background-color, #fff)
---hs-surface-2                   var(--secondary-background-color, #f5f5f5)
---hs-divider                     var(--divider-color, #e0e0e0)
---hs-accent                      var(--primary-color, #03a9f4)
+--hs-surface-2                   var(--secondary-background-color, #e5e5e5)
+--hs-divider                     var(--divider-color, #0000001f)
+--hs-accent                      var(--primary-color, #009ac7)
 --hs-on-accent                   var(--text-primary-color, #fff)
---hs-danger                      var(--error-color, #b3261e)
+--hs-danger                      var(--error-color, #db4437)
+--hs-on-danger                   var(--text-primary-color, #fff)
 --hs-warning                     var(--warning-color, #ffa600)
---hs-font                        var(--ha-font-family-body, Roboto, sans-serif)
+--hs-font                        var(--ha-font-family-body, Roboto, Noto, sans-serif)
 --hs-touch                       62px
 ```
 
-**Règle** : plus aucune variable HA lue directement dans un écran. Un écran lit
-un jeton `--hs-*`, jamais `var(--divider-color)`. Ainsi une variable HA absente
-ne peut plus annuler une déclaration.
+**Règle 1** : plus aucune variable HA lue directement dans un écran. Un écran
+lit un jeton `--hs-*`, jamais `var(--divider-color)`. Ainsi une variable HA
+absente ne peut plus annuler une déclaration.
+
+**Règle 2 — jamais de couleur en dur, jamais une paire découplée.** Vérifié sur
+l'installation : les deux comptes de la maison n'utilisent pas le même thème
+(`Graphite Auto` pour l'un, `default` pour l'autre). Sous Graphite clair,
+`--primary-color` est un **orange** `rgb(238, 147, 0)` et `--text-primary-color`
+un **navy** `rgb(19, 21, 54)` — 7,41:1, correct. Mais `panneau.ts` écrit
+aujourd'hui `background: var(--error-color, #b3261e); color: #fff` : le `#fff`
+en dur **casse la paire que le thème avait faite**. Sous le thème HA par défaut,
+la paire elle-même ne tient pas (blanc `#fff` sur `#009ac7` = **3,26:1**).
+
+Donc : un fond `--hs-accent` impose son texte `--hs-on-accent`, un fond
+`--hs-danger` impose `--hs-on-danger`, et aucun `#rrggbb` littéral n'apparaît
+ailleurs que dans le repli d'un `var()` de la liste ci-dessus.
 
 `--hs-touch` vaut 62 px (contrainte Fire 7), donc au-dessus des 48 px actuels :
 les trois formats passent avec une seule valeur.
@@ -271,12 +285,31 @@ c'est là qu'est le bruit.
 
 ### 8.1 Réparer le harnais — préalable
 
-`THEME_CSS` de `verifier-rendu.mjs` reçoit les dix variables et une
-`font-family`, alignées sur le thème par défaut de HA.
+`THEME_CSS` ne définit pas seulement trop peu de variables : il en **invente**
+la valeur. Son `--primary-color: #01579b` a été choisi pour passer le seuil de
+contraste par construction (le commentaire de la ligne 120 le dit). Le
+remplacer par « la bonne » palette recréerait le même mensonge sous un autre
+nom, puisque aucun des deux comptes de la maison n'utilise le thème par défaut.
+
+`THEME_CSS` devient donc `themeCss(palette)`, et le harnais connaît **trois
+palettes réelles**, relevées dans `hass_frontend` et dans
+`config/themes/graphite/` :
+
+| Palette | `--primary-color` | `--text-primary-color` | Blanc sur primaire |
+|---|---|---|---|
+| `ha-clair` | `#009ac7` | `#ffffff` | 3,26:1 |
+| `ha-sombre` | `#009ac7` | `#ffffff` | 3,26:1 |
+| `graphite-clair` | `rgb(238,147,0)` | `rgb(19,21,54)` | 7,41:1 |
+
+La suite complète tourne sous `ha-clair`. Un balayage supplémentaire — coquille
+plus trois écrans représentatifs — tourne sous les deux autres, pour que ni le
+mode sombre ni le thème réellement en service ne soient jamais mesurés.
 
 **Ce changement seul doit faire apparaître des défauts de contraste jusqu'ici
-masqués.** C'est attendu, et c'est le but : ils seront traités à mesure. Un
-harnais réparé qui ne signalerait rien serait le résultat suspect.
+masqués** — à commencer par tout texte blanc posé sur `--primary-color`, qui
+tombe à 3,26:1 sous le thème HA par défaut. C'est attendu, et c'est le but : ils
+seront traités à mesure, en appliquant la règle 2 du § 6.1. Un harnais réparé
+qui ne signalerait rien serait le résultat suspect.
 
 ### 8.2 Le rendu de production doit être mesuré
 
