@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "3px solid var(--hs-danger)",
+        "createdAt": "2026-08-22T15:02:30.349Z",
+        "reason": "Ruling 16 de la refonte UI (docs/superpowers/specs/2026-08-22-home-stock-ui-design.md, § 6.1 ter) : --error-color vaut #db4437 sous le theme HA par defaut, dont la luminance tombe au point de bascule exact — blanc dessus 4,29:1, noir dessus 4,29:1, aucune couleur de texte ne passe 4,5:1. Un aplat danger sous du texte est donc impossible. Le lisere est le porteur de substitution, choisi pour une contrainte mesuree et non pour l'esthetique. Applique aux messages d'erreur uniquement."
+      },
+      {
+        "rule": "side-tab",
+        "value": "4px solid var(--hs-danger)",
+        "createdAt": "2026-08-22T15:02:39.407Z",
+        "reason": "Meme motif que 3px solid var(--hs-danger) : Ruling 16, § 6.1 ter de la spec. Variante 4px reservee aux bannieres de refus (panneau.ts, ticket.ts), plus larges que les messages en ligne."
+      },
+      {
+        "rule": "side-tab",
+        "value": "3px solid var(--hs-warning)",
+        "createdAt": "2026-08-22T15:02:40.232Z",
+        "reason": "Meme motif : --warning-color echoue aussi en texte comme en fond sur les palettes HA clair (1,96:1) et Graphite (1,34:1), verifie par calcul WCAG. Le lisere est le porteur de substitution."
+      }
+    ]
+  }
+}
