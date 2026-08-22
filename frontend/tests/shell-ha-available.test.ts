@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isDefined, primeHaComponents, resetForTests, whenDefined }
+import { isDefined, pendingCountForTests, primeHaComponents, resetForTests, whenDefined }
   from '../src/shell/ui/ha-available';
 
 afterEach(() => {
   resetForTests();
+  // `vi.restoreAllMocks()` plutôt qu'un `espion.mockRestore()` local en fin
+  // de test : si une assertion lève AVANT ce restore (précisément le
+  // scénario que l'espion sert à détecter), un `afterEach` global le
+  // rattrape quand même — un `mockRestore()` en dernière ligne d'un test en
+  // échec ne s'exécute jamais, et l'espion pollue les tests suivants.
+  vi.restoreAllMocks();
 });
 
 describe('détection des composants Home Assistant', () => {
@@ -57,19 +63,25 @@ describe('détection des composants Home Assistant', () => {
     // l'aveugle pour laisser le `.then()` interne du module s'exécuter.
     for (let tour = 0; tour < 5; tour += 1) await Promise.resolve();
     for (const rappel of [a, b, c]) expect(rappel).toHaveBeenCalledTimes(1);
+  });
 
-    const appelsAvantTardif = espion.mock.calls.filter(([n]) => n === nom).length;
-    // La table interne doit être purgée après résolution : un nouvel
-    // abonnement sur ce nom ne doit plus rien y ajouter — `isDefined`
-    // répond déjà vrai, donc `whenDefined` sort tout de suite (l'appelant
-    // sait déjà qu'il peut rendre l'élément réel, il n'a pas besoin d'un
-    // rappel). Ni rappel, ni nouvelle promesse native.
-    const tardif = vi.fn();
-    whenDefined(nom, tardif);
-    expect(tardif).not.toHaveBeenCalled();
-    expect(espion.mock.calls.filter(([n]) => n === nom)).toHaveLength(appelsAvantTardif);
+  it('purge la table d’attente après résolution', async () => {
+    // `whenDefined` court-circuite sur `isDefined` dès que l'élément existe
+    // (couvert ailleurs) : appeler `whenDefined` APRÈS résolution ne prouve
+    // donc rien sur la purge, cette voie ne touche jamais `abonnes`. Seul
+    // `pendingCountForTests` (une fenêtre réservée aux tests sur l'état
+    // interne) observe réellement si l'entrée a été retirée.
+    const nom = `ha-card-purge-${Math.random().toString(36).slice(2)}`;
+    whenDefined(nom, vi.fn());
+    whenDefined(nom, vi.fn());
+    whenDefined(nom, vi.fn());
+    // Trois abonnés sur le MÊME nom : une seule entrée dans la table.
+    expect(pendingCountForTests()).toBe(1);
 
-    espion.mockRestore();
+    customElements.define(nom, class extends HTMLElement {});
+    for (let tour = 0; tour < 5; tour += 1) await Promise.resolve();
+
+    expect(pendingCountForTests()).toBe(0);
   });
 
   it('appelle loadCardHelpers une seule fois, et survit à son absence', () => {

@@ -67,3 +67,11 @@ export function resetForTests(): void {
   abonnes.clear();
   amorcageDemande = false;
 }
+
+/** Uniquement pour les tests : le nombre de noms encore en attente. La purge
+ *  de `abonnes` n'est observable par aucune API publique — `whenDefined`
+ *  court-circuite sur `isDefined` dès que l'élément existe — et un test qui
+ *  prétendrait la vérifier sans y accéder mesurerait autre chose. */
+export function pendingCountForTests(): number {
+  return abonnes.size;
+}
