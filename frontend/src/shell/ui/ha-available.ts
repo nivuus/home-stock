@@ -40,15 +40,26 @@ export function whenDefined(name: string, onDefined: Rappel): void {
 /** Tente une fois de forcer le chunk Lovelace, qui enregistre `ha-card` et
  *  ses voisins. `loadCardHelpers` est lui-même posé par ce chunk : son
  *  absence signifie simplement qu'on est arrivé sans passer par Lovelace,
- *  et c'est exactement le cas où les replis servent. Jamais une erreur. */
+ *  et c'est exactement le cas où les replis servent. Jamais une erreur.
+ *
+ *  Le `try` synchrone est nécessaire en plus du `.catch` : `loadCardHelpers`
+ *  vient d'un chunk tiers, rien ne garantit qu'il renvoie toujours une
+ *  promesse plutôt que de lever avant même d'en créer une. Un jet immédiat
+ *  et un rejet différé sont la même situation de notre point de vue — pas
+ *  de Lovelace, les replis prennent le relais — donc les deux doivent mener
+ *  au même repli silencieux. */
 export function primeHaComponents(win: Window = window): void {
   if (amorcageDemande) return;
   amorcageDemande = true;
   const charger = (win as unknown as { loadCardHelpers?: () => Promise<unknown> }).loadCardHelpers;
   if (typeof charger !== 'function') return;
-  void Promise.resolve(charger.call(win)).catch(() => {
-    // Rien à faire : les enveloppes rendent leur repli, qui est correct.
-  });
+  try {
+    void Promise.resolve(charger.call(win)).catch(() => {
+      // Rien à faire : les enveloppes rendent leur repli, qui est correct.
+    });
+  } catch {
+    // Idem, pour le jet synchrone : les enveloppes rendent leur repli.
+  }
 }
 
 /** Uniquement pour les tests : l'état ci-dessus est un module singleton. */

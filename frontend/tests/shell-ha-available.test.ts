@@ -33,17 +33,43 @@ describe('détection des composants Home Assistant', () => {
     expect(rendreANouveau).toHaveBeenCalledTimes(1);
   });
 
-  it('n’abonne qu’une fois par élément, même avec plusieurs instances', async () => {
+  it('n’ouvre qu’UNE promesse native, quel que soit le nombre d’abonnés', async () => {
+    // Le test précédent (appeler a et b une fois chacun) était creux : il
+    // resterait vrai même avec une promesse native PAR abonné. La propriété
+    // qui compte, c'est l'appel natif lui-même — on l'espionne.
     const nom = `ha-card-partage-${Math.random().toString(36).slice(2)}`;
+    const espion = vi.spyOn(customElements, 'whenDefined');
     const a = vi.fn();
     const b = vi.fn();
+    const c = vi.fn();
     whenDefined(nom, a);
     whenDefined(nom, b);
+    whenDefined(nom, c);
+    // C'est CELA la propriété : trois abonnés, une seule promesse native.
+    expect(espion.mock.calls.filter(([n]) => n === nom)).toHaveLength(1);
+
     customElements.define(nom, class extends HTMLElement {});
-    await customElements.whenDefined(nom);
-    await Promise.resolve();
-    expect(a).toHaveBeenCalledTimes(1);
-    expect(b).toHaveBeenCalledTimes(1);
+    // On attend la résolution SANS repasser par `customElements.whenDefined`
+    // ici : cet appel est lui-même intercepté par l'espion, il fausserait
+    // le compte ci-dessous. `isDefined(nom)` est déjà vrai juste après
+    // `define()` (synchrone), donc on ne peut pas s'en servir comme
+    // condition d'arrêt ; on vide plutôt une poignée de microtasks à
+    // l'aveugle pour laisser le `.then()` interne du module s'exécuter.
+    for (let tour = 0; tour < 5; tour += 1) await Promise.resolve();
+    for (const rappel of [a, b, c]) expect(rappel).toHaveBeenCalledTimes(1);
+
+    const appelsAvantTardif = espion.mock.calls.filter(([n]) => n === nom).length;
+    // La table interne doit être purgée après résolution : un nouvel
+    // abonnement sur ce nom ne doit plus rien y ajouter — `isDefined`
+    // répond déjà vrai, donc `whenDefined` sort tout de suite (l'appelant
+    // sait déjà qu'il peut rendre l'élément réel, il n'a pas besoin d'un
+    // rappel). Ni rappel, ni nouvelle promesse native.
+    const tardif = vi.fn();
+    whenDefined(nom, tardif);
+    expect(tardif).not.toHaveBeenCalled();
+    expect(espion.mock.calls.filter(([n]) => n === nom)).toHaveLength(appelsAvantTardif);
+
+    espion.mockRestore();
   });
 
   it('appelle loadCardHelpers une seule fois, et survit à son absence', () => {
@@ -57,5 +83,30 @@ describe('détection des composants Home Assistant', () => {
     // Une fenêtre SANS loadCardHelpers : c'est le cas de la tablette qui
     // ouvre /home-stock directement. Ne doit pas lever.
     expect(() => primeHaComponents({} as unknown as Window)).not.toThrow();
+  });
+
+  it('survit à un rejet asynchrone de loadCardHelpers', async () => {
+    // Le chunk Lovelace peut échouer à se charger (réseau, cache…) : le
+    // rejet doit être avalé, pas remonter en rejet non intercepté.
+    const loadCardHelpers = vi.fn().mockRejectedValue(new Error('chunk indisponible'));
+    const fenetre = { loadCardHelpers } as unknown as Window;
+    expect(() => primeHaComponents(fenetre)).not.toThrow();
+    // Laisse le rejet se propager jusqu'au `.catch` du module ; si celui-ci
+    // manquait, vitest signalerait un rejet non intercepté sur ce test.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(loadCardHelpers).toHaveBeenCalledTimes(1);
+  });
+
+  it('survit à un jet SYNCHRONE de loadCardHelpers', () => {
+    // `loadCardHelpers` est fourni par un chunk tiers : rien ne garantit
+    // qu'il renvoie toujours une promesse. S'il lève avant même de créer
+    // cette promesse, ça doit rester un cas « pas de Lovelace », pas une
+    // exception qui remonte.
+    const loadCardHelpers = vi.fn(() => {
+      throw new Error('chunk cassé');
+    });
+    const fenetre = { loadCardHelpers } as unknown as Window;
+    expect(() => primeHaComponents(fenetre)).not.toThrow();
+    expect(loadCardHelpers).toHaveBeenCalledTimes(1);
   });
 });
