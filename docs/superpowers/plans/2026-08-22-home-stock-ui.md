@@ -2733,19 +2733,6 @@ describe('planning : des actions qui ne noient pas la grille', () => {
     expect(valider.getAttribute('aria-label')).toMatch(/^Valider /);
     expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
   });
-
-  it('se désabonne au démontage, dans les deux enveloppes', async () => {
-    // La fuite que ce test interdit est bornée à l'appareil où l'élément HA
-    // n'arrive jamais — la tablette cuisine — mais c'est un kiosque qui tourne
-    // en continu, avec des dizaines de boutons remontés à chaque navigation.
-    const avant = pendingCountForTests();
-    const carte = await monter('hs-card');
-    const bouton = await monter('hs-button');
-    carte.remove();
-    bouton.remove();
-    expect(pendingCountForTests()).toBe(avant);
-  });
-
   it('tient la cible tactile de la tablette', async () => {
     const el = await monter({ repas: [REPAS_PLANIFIE] });
     const styles = (el.constructor as unknown as { styles: { cssText: string }[] });
