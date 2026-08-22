@@ -40,6 +40,7 @@ import { analyserNombre } from '../nombres';
 import type { UniteBase } from './fiche';
 import type { Emplacement } from './rangement';
 import { tokens } from '../shell/ui/tokens';
+import '../shell/ui/hs-button';
 
 export type Rayon = { id: number; name: string; position: number };
 
@@ -180,6 +181,15 @@ export class EcranCatalogue extends LitElement {
   @state() private erreurChargement: string | null = null;
   @state() private recherche = '';
 
+  /** Le nombre de lignes rendues à la fois. Trois cents lignes en produisaient
+   *  25 949 px sur 412 px de large : le navigateur les met toutes en page à
+   *  chaque frappe dans la recherche. Cinquante suffisent à remplir l'écran
+   *  le plus haut, et le bouton « voir plus » évite un défilement infini que
+   *  la tablette (pas de geste) ne saurait pas piloter. */
+  private static readonly FENETRE = 50;
+
+  @state() private nbAffiches = EcranCatalogue.FENETRE;
+
   @state() private produitEditeId: number | null = null;
   @state() private produitEnEdition: Produit | null = null;
   @state() private brouillon: Brouillon | null = null;
@@ -227,6 +237,12 @@ export class EcranCatalogue extends LitElement {
 
   private get produitsFiltres(): Produit[] {
     return filtrerProduits(this.produits, this.recherche, this.nomRayon);
+  }
+
+  /** La recherche filtre AVANT la fenêtre : un produit cherché doit se
+   *  trouver, même s'il est le trois-centième. */
+  private get produitsVisibles(): Produit[] {
+    return this.produitsFiltres.slice(0, this.nbAffiches);
   }
 
   private async ouvrirEdition(produit: Produit): Promise<void> {
@@ -442,7 +458,13 @@ export class EcranCatalogue extends LitElement {
     return html`
       <input class="recherche" type="search" placeholder="Rechercher un produit ou un rayon…"
         .value=${this.recherche}
-        @input=${(e: InputEvent) => { this.recherche = (e.target as HTMLInputElement).value; }} />
+        @input=${(e: InputEvent) => {
+          this.recherche = (e.target as HTMLInputElement).value;
+          // Une recherche change l'ensemble filtré : repartir de la première
+          // fenêtre, sinon un « voir plus » d'avant la frappe resterait
+          // affiché sur une liste devenue plus courte.
+          this.nbAffiches = EcranCatalogue.FENETRE;
+        }} />
 
       ${this.enAttente > 0 ? html`
         <p class="en-attente">${this.enAttente} envoi${this.enAttente > 1 ? 's' : ''} en attente de réseau</p>
@@ -476,12 +498,13 @@ export class EcranCatalogue extends LitElement {
               <th>Conservation</th><th class="colonne-actions"></th>
             </tr>
           </thead>
-          <tbody>${this.produitsFiltres.map((p) => this.rendreLigneTableau(p))}</tbody>
+          <tbody>${this.produitsVisibles.map((p) => this.rendreLigneTableau(p))}</tbody>
         </table>
         ${edite !== null ? html`
           <aside class="volet-edition">${this.rendreEdition(edite)}</aside>
         ` : nothing}
       </div>
+      ${this.rendreVoirPlus()}
     `;
   }
 
@@ -490,8 +513,21 @@ export class EcranCatalogue extends LitElement {
     return html`
       ${this.rendreEntete()}
       <div class="liste">
-        ${this.produitsFiltres.map((p) => this.rendreLigne(p))}
+        ${this.produitsVisibles.map((p) => this.rendreLigne(p))}
       </div>
+      ${this.rendreVoirPlus()}
+    `;
+  }
+
+  /** Le bouton de fenêtrage, identique dans les deux mises en page — seul le
+   *  nombre de lignes déjà affichées diffère selon `produitsVisibles`. */
+  private rendreVoirPlus() {
+    const restants = this.produitsFiltres.length - this.nbAffiches;
+    if (restants <= 0) return nothing;
+    return html`
+      <hs-button full @click=${() => { this.nbAffiches += EcranCatalogue.FENETRE; }}>
+        Voir ${Math.min(EcranCatalogue.FENETRE, restants)} produits de plus (${restants} restants)
+      </hs-button>
     `;
   }
 
@@ -499,7 +535,11 @@ export class EcranCatalogue extends LitElement {
     :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .recherche {
       display: block; width: 100%; min-height: var(--hs-touch); box-sizing: border-box; font-size: 1rem;
-      padding: 4px 12px; border-radius: 8px; border: 1px solid var(--hs-divider); margin-bottom: 8px;
+      padding: var(--hs-space-2) 12px; border-radius: 8px; border: 1px solid var(--hs-divider);
+      margin-bottom: 8px;
+      /* Collante : sur trois cents produits, retaper une lettre ne doit pas
+         obliger à remonter tout en haut pour corriger la recherche. */
+      position: sticky; top: 0; z-index: 1; background: var(--hs-surface);
     }
     .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 0 0 8px; }
     .vide { color: var(--hs-text-2); text-align: center; }
