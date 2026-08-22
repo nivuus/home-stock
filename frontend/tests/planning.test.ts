@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../src/ecrans/planning';
+import { feuilleDe, regleDe } from './aides-style';
 
 const REPAS = [
   { id: 1, uid: 'u1', day: '2026-08-21', slot_key: 'dinner', position: 0,
@@ -188,14 +189,25 @@ describe('<home-stock-planning>', () => {
     expect(large.debut).toBe('2026-08-28');
   });
 
-  it('offre des cibles tactiles d’au moins 62 px', async () => {
+  it('offre des cibles tactiles d’au moins 62 px, sur CHAQUE geste de la grille', async () => {
     const element = monter();
     await stabiliser(element);
-    // `static styles` est désormais un tableau [tokens, css`…`] (Task 6) :
-    // il faut le concaténer, pas lire un unique `.cssText`.
-    const styles = ((element.constructor as any).styles as { cssText: string }[])
-      .map((s) => s.cssText).join('');
-    expect(styles).toContain('min-height: var(--hs-touch)');
+    // Chercher `min-height: var(--hs-touch)` dans la feuille ENTIÈRE ne prouve
+    // rien : une seule autre règle qui le porte garde le test vert pendant que
+    // le bouton visé retombe à 20 px (sonde du 2026-08-22). On isole donc
+    // CHAQUE règle par son sélecteur avant de la sonder — la technique de
+    // `tests/catalogue.test.ts` et `tests/shell-enveloppes.test.ts`, ici
+    // généralisée aux listes de sélecteurs.
+    const feuille = feuilleDe(element.constructor);
+    for (const selecteur of [
+      '.entete button',
+      '.poser',
+      '.repas-nom',
+      '.valider-repas',
+      '.annuler-repas',
+    ]) {
+      expect(regleDe(feuille, selecteur), selecteur).toContain('min-height: var(--hs-touch)');
+    }
   });
 });
 
@@ -227,11 +239,8 @@ describe('planning : des actions qui ne noient pas la grille', () => {
     expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
   });
 
-  it('tient la cible tactile de la tablette', async () => {
-    const el = await monter({ repas: [REPAS[0]] });
-    await stabiliser(el);
-    const styles = ((el.constructor as any).styles as { cssText: string }[]);
-    const texte = styles.map((s) => s.cssText).join('');
-    expect(texte).toContain('min-height: var(--hs-touch)');
-  });
+  // Pas de test de cible tactile ici : la Task 14 en avait recopié un, mot
+  // pour mot, depuis la Task 6 — deux titres, un seul corps, et aucun des
+  // deux ne sondait sa propre règle. `.valider-repas` et `.annuler-repas`
+  // sont désormais couverts, nommément, par le test unique du bloc ci-dessus.
 });

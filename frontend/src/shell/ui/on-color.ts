@@ -22,10 +22,14 @@
 const CLAIR = '#ffffff';
 const SOMBRE = '#141414';
 
-/** Les paires fond → jeton de texte à recalculer. */
+/** Les paires fond → jeton à POSER. La cible est `--hs-computed-on-*`, jamais
+ *  `--hs-on-*` : ce dernier est redéclaré par le `:host` de chaque composant
+ *  (la feuille de `tokens.ts` est adoptée partout), donc une valeur posée sur
+ *  l'hôte y était écrasée avant d'atteindre le moindre bouton. Voir le
+ *  commentaire des deux jetons dans `tokens.ts`. */
 const PAIRES: ReadonlyArray<readonly [string, string]> = [
-  ['--hs-accent', '--hs-on-accent'],
-  ['--hs-warning', '--hs-on-warning'],
+  ['--hs-accent', '--hs-computed-on-accent'],
+  ['--hs-warning', '--hs-computed-on-warning'],
 ];
 
 export function parseRgb(couleur: string): [number, number, number] | null {
@@ -63,13 +67,23 @@ export function meilleureCouleurDeTexte(fond: [number, number, number]): string 
   return contraste(fond, [255, 255, 255]) > contraste(fond, [20, 20, 20]) ? CLAIR : SOMBRE;
 }
 
-/** Pose les trois `--hs-on-*` sur l'hôte, d'après les couleurs réellement
- *  résolues. Sans effet là où la sonde ne rend rien (jsdom) : les jetons
- *  gardent alors leur défaut, et aucun écran ne casse. */
+/** Pose les deux `--hs-computed-on-*` sur l'hôte, d'après les couleurs
+ *  réellement résolues ; `tokens.ts` les lit en tête de `--hs-on-accent` et
+ *  `--hs-on-warning`. Sans effet là où la sonde ne rend rien (jsdom) : les
+ *  jetons gardent alors leur repli, et aucun écran ne casse. */
 export function appliquerCouleursDeTexte(hote: HTMLElement): void {
+  // DANS LE SHADOW ROOT, jamais dans le light DOM de l'hôte. Le panneau ne
+  // rend aucun `<slot>` : un enfant posé dans son light DOM n'entre pas dans
+  // l'arbre aplati, donc Chrome ne lui calcule AUCUN style et
+  // `getComputedStyle(sonde).color` rend la chaîne vide. Le module rendait
+  // alors `null` à chaque appel et ne posait jamais rien — mesuré le
+  // 2026-08-22 sur un vrai Chromium, sous une primaire indigo : le bouton de
+  // scan gardait le repli sombre, à 1,39:1. Le shadow root, lui, est rendu, et
+  // les propriétés personnalisées de `:host` y descendent.
+  const racine = hote.shadowRoot ?? hote;
   const sonde = document.createElement('span');
   sonde.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
-  hote.appendChild(sonde);
+  racine.appendChild(sonde);
   try {
     for (const [fond, cible] of PAIRES) {
       sonde.style.color = `var(${fond})`;

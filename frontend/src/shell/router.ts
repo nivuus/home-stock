@@ -6,6 +6,8 @@ import { DESTINATIONS, destinationOf } from './destinations';
 
 export type Route = { screen: Ecran; param: string | null };
 
+/** Le chemin de repli : celui qu'atteint une route inconnue, et celui que le
+ *  panneau pose quand personne ne lui a rien demandé. */
 export const DEFAULT_PATH = '/list';
 
 const PAR_SEGMENT = new Map(DESTINATIONS.map((d) => [d.segment, d]));
@@ -25,6 +27,21 @@ export function parsePath(path: string): Route | null {
   // `recipeId` rendrait un écran vide. On préfère la retombée sur la racine.
   if (morceaux.length < 2) return null;
   return { screen: destination.screen, param: morceaux[1] };
+}
+
+/** Le MÊME repli, en écran — dérivé du chemin, jamais écrit une seconde fois.
+ *  `panneau.ts` navigue par écran, pas par chaîne : il écrivait donc `'liste'`
+ *  en dur à deux endroits, de sorte que changer `DEFAULT_PATH` ne changeait
+ *  rien du tout et que son test restait vert quand même. Le dériver ici rend
+ *  le lien réel : `DEFAULT_PATH` est désormais lu, et une valeur qui ne
+ *  désigne aucun écran fait du bruit au chargement du module plutôt qu'une
+ *  navigation muette vers nulle part. */
+export const DEFAULT_SCREEN: Ecran = ecranDeRepli();
+
+function ecranDeRepli(): Ecran {
+  const route = parsePath(DEFAULT_PATH);
+  if (!route) throw new Error(`DEFAULT_PATH ne désigne aucun écran : ${DEFAULT_PATH}`);
+  return route.screen;
 }
 
 export function pathOf(screen: Ecran, param: string | number | null = null): string {

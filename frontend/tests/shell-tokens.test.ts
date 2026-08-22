@@ -37,19 +37,34 @@ describe('jetons partagés', () => {
     expect(css).toContain('--hs-touch: 62px');
   });
 
-  it('ne pose de couleur littérale QUE sur les trois jetons recalculés', () => {
+  it('ne pose aucune couleur littérale hors des replis des deux jetons recalculés', () => {
     // Les --hs-on-* n'ont pas de variable de thème correcte (§ 6.1 bis) : ils
-    // portent un défaut prudent que `on-color.ts` remplace au montage. Partout
+    // portent un repli prudent que `on-color.ts` remplace au montage. Partout
     // ailleurs, une couleur littérale est une couleur qui ignore le thème.
     // Pas de --hs-on-danger : le danger ne se pose jamais en aplat sous du
     // texte (§ 6.1 ter), donc rien ne le lit.
+    // On efface d'abord les `var(…)` — c'est-à-dire aussi les replis, qui y
+    // sont désormais — puis on exige qu'il ne reste RIEN.
     const sansVar = css.replace(/var\([^)]*\)/g, '');
     const litteraux = [...sansVar.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g)];
-    expect(litteraux.map((m) => m[1]).sort())
-      .toEqual(['--hs-on-accent', '--hs-on-warning']);
-    // Et ce défaut est le SOMBRE : sur une couleur de marque inconnue, le
-    // sombre est le pari le moins risqué (la plupart des primaires de thème
-    // sont des teintes moyennes à vives, où le blanc échoue).
-    for (const m of litteraux) expect(m[2]).toBe('#141414');
+    expect(litteraux.map((m) => m[1])).toEqual([]);
+  });
+
+  it('lit les --hs-on-* PAR INDIRECTION, avec leur repli sombre', () => {
+    // Le point de tout le mécanisme, et ce qu'aucun contrôle n'attrapait :
+    // cette feuille est adoptée par CHAQUE composant, donc chaque `:host`
+    // enfant redéclare ces jetons — un `--hs-on-accent: #141414` littéral y
+    // écrase la valeur que `on-color.ts` pose en style inline sur l'hôte, et
+    // le calcul n'atteint jamais un seul bouton (sonde du 2026-08-22 sur le
+    // bundle déployé : hôte #ff0000, hs-nav-bar #141414).
+    // `--hs-computed-on-*` n'est déclaré dans aucun `:host` : l'héritage le
+    // traverse. Le repli reste obligatoire — sans lui, jsdom et tout thème où
+    // la sonde ne rend rien perdraient la couleur de texte entière.
+    for (const jeton of ['accent', 'warning']) {
+      expect(css).toContain(`--hs-on-${jeton}: var(--hs-computed-on-${jeton}, #141414)`);
+    }
+    // Et rien ne redéclare `--hs-computed-on-*` ici : le déclarer dans ce
+    // `:host` reproduirait exactement le défaut corrigé.
+    expect(css).not.toMatch(/--hs-computed-on-[a-z]+\s*:/);
   });
 });

@@ -12,7 +12,7 @@
  *     blanc dessus donne 2,38:1.
  *  3. Mais l'accord du THÈME ne suffit pas non plus : sous le thème HA par
  *     défaut, le `--text-primary-color` blanc sur la primaire `#009ac7` ne
- *     donne que 3,26:1. Les trois `--hs-on-*` portent donc ici un défaut
+ *     donne que 3,26:1. Les deux `--hs-on-*` portent donc ici un défaut
  *     prudent, et `on-color.ts` les recalcule au montage à partir de la
  *     couleur réellement résolue.
  *
@@ -44,12 +44,21 @@ export const tokens = css`
     --hs-danger: var(--error-color, #db4437);
     --hs-warning: var(--warning-color, #ffa600);
 
-    /* Recalculés par on-color.ts au montage. Le sombre est le défaut le moins
-       risqué sur une couleur de marque inconnue. Pas de --hs-on-danger : le
-       danger ne se pose jamais en aplat sous du texte (spec § 6.1 ter,
-       --error-color tombe pile à 4,29:1 des deux côtés), donc rien ne le lit. */
-    --hs-on-accent: #141414;
-    --hs-on-warning: #141414;
+    /* Recalculés par on-color.ts au montage, PAR INDIRECTION — et l'indirection
+       est le tout du mécanisme. Cette feuille est adoptée par CHAQUE composant :
+       chaque :host enfant redéclare donc les jetons nommés ici, et une valeur
+       posée en style inline sur home-stock-panel était écrasée au niveau de
+       l'enfant. Sonde du 2026-08-22 sur le bundle déployé : l'hôte portait
+       #ff0000, hs-nav-bar lisait #141414 — sur 44 lectures, une seule recevait
+       la valeur calculée. --hs-computed-on-* n'est déclaré dans aucun :host :
+       l'héritage depuis l'hôte le traverse, et le repli ci-dessous ne sert que
+       si rien n'a été calculé (jsdom, sonde illisible).
+       Le sombre est le défaut le moins risqué sur une couleur de marque
+       inconnue. Pas de --hs-on-danger : le danger ne se pose jamais en aplat
+       sous du texte (spec § 6.1 ter, --error-color tombe pile à 4,29:1 des deux
+       côtés), donc rien ne le lit. */
+    --hs-on-accent: var(--hs-computed-on-accent, #141414);
+    --hs-on-warning: var(--hs-computed-on-warning, #141414);
 
     --hs-font: var(--ha-font-family-body, Roboto, Noto, sans-serif);
 

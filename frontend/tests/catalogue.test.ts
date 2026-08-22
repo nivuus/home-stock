@@ -728,9 +728,13 @@ describe('catalogue : la liste ne se rend pas en entier', () => {
 
     saisir(el, 'input.recherche', 'Produit 1');
     await el.updateComplete;
-    // La recherche « Produit 1 » trouve dix produits (1, 10-19, 100-199…) —
-    // largement sous la fenêtre par défaut : si elle n'avait pas été remise
-    // à cinquante, ce test ne le distinguerait pas d'un oubli.
+    // La recherche « Produit 1 » trouve CENT ONZE produits sur les trois cents
+    // (1, 10-19, 100-199, 120-199 compris) — soit largement PLUS que la
+    // fenêtre par défaut. C'est précisément ce qui rend l'assertion
+    // discriminante : sans remise à cinquante, la fenêtre agrandie par
+    // « voir plus » laisserait passer les cent onze. Un filtre qui ne
+    // rendrait que dix résultats, lui, tiendrait sous cinquante dans les deux
+    // cas et ne prouverait rien.
     expect(el.shadowRoot!.querySelectorAll('.ligne').length).toBeLessThanOrEqual(50);
   });
 });

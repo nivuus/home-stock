@@ -109,10 +109,50 @@ describe('panneau : routes d’URL', () => {
     expect(evenements).toHaveLength(1);
   });
 
-  it('rend la barre et l’en-tête sur tout écran sauf la fiche', async () => {
+  it('rend la barre et l’en-tête sur un écran ordinaire', async () => {
     const el = await monter('/list');
     expect(el.shadowRoot!.querySelector('hs-nav-bar')).not.toBeNull();
     expect(el.shadowRoot!.querySelector('hs-header')).not.toBeNull();
+  });
+
+  /** Amène le panneau sur la fiche par son URL, et rend son en-tête rendu. */
+  async function enteteDeLaFiche(el: Awaited<ReturnType<typeof monter>>) {
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+    expect(el.ecran).toBe('fiche');
+    expect(el.shadowRoot!.querySelector('home-stock-fiche')).not.toBeNull();
+    const entete = el.shadowRoot!.querySelector('hs-header') as HTMLElement
+      & { updateComplete: Promise<unknown> };
+    expect(entete, 'l’en-tête de la fiche').not.toBeNull();
+    await entete.updateComplete;
+    return entete;
+  }
+
+  it('laisse une SORTIE sur la fiche : en-tête oui, barre non', async () => {
+    // `/item/<code>` est une URL partageable, et la cible délibérée de
+    // « Quitter quand même » : on y arrive sans être passé par le scanner.
+    // L'écran, lui, n'émet que `article-pret` et `manger-produit` — jamais un
+    // retour. Sans en-tête, et sous la contrainte « aucun geste de
+    // navigation », on y entrait sans pouvoir en sortir.
+    const el = await monter('/item/3229820129488');
+    const entete = await enteteDeLaFiche(el);
+
+    // La caméra garde l'essentiel : ni barre, ni ligne secondaire.
+    expect(el.shadowRoot!.querySelector('hs-nav-bar')).toBeNull();
+    expect(entete.shadowRoot!.querySelector('.sous-nav')).toBeNull();
+    // Mais le titre et la sortie sont là.
+    expect(entete.shadowRoot!.querySelector('.titre')!.textContent!.trim()).toBe('Article');
+    expect(entete.shadowRoot!.querySelector('.retour')).not.toBeNull();
+  });
+
+  it('ramène à la racine de sa famille depuis la fiche', async () => {
+    const el = await monter('/item/3229820129488');
+    const entete = await enteteDeLaFiche(el);
+
+    (entete.shadowRoot!.querySelector('.retour') as HTMLButtonElement).click();
+    await el.updateComplete;
+
+    expect(el.ecran).toBe('liste');
   });
 
   // --- le garde-fou du rangement vaut AUSSI pour les routes -----------------

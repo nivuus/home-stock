@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PATH, parsePath, pathOf } from '../src/shell/router';
+import { DEFAULT_PATH, DEFAULT_SCREEN, parsePath, pathOf } from '../src/shell/router';
 import { DESTINATIONS } from '../src/shell/destinations';
 
 describe('routeur', () => {
@@ -57,5 +57,12 @@ describe('routeur', () => {
   it('sait où retomber', () => {
     expect(DEFAULT_PATH).toBe('/list');
     expect(parsePath(DEFAULT_PATH)).toEqual({ screen: 'liste', param: null });
+  });
+
+  it('dit le même repli en écran qu’en chemin', () => {
+    // `panneau.ts` navigue par ÉCRAN : c'est `DEFAULT_SCREEN` qu'il lit, aux
+    // deux endroits où il écrivait `'liste'` en dur. Sans ce lien, changer
+    // `DEFAULT_PATH` ne changeait rien et son test restait vert quand même.
+    expect(DEFAULT_SCREEN).toBe(parsePath(DEFAULT_PATH)!.screen);
   });
 });

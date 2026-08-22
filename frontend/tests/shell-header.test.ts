@@ -64,7 +64,7 @@ describe('en-tête : ligne secondaire', () => {
   it('rend les écrans de la famille courante', async () => {
     const el = await monter({ current: 'piles' });
     const liens = el.shadowRoot!.querySelectorAll('.sous-nav .sous-lien');
-    expect([...liens].map((n) => n.textContent!.trim()))
+    expect(Array.from(liens).map((n) => n.textContent!.trim()))
       .toEqual(['Piles', 'Équipements', 'Réglages']);
   });
 
@@ -80,10 +80,10 @@ describe('en-tête : ligne secondaire', () => {
     // La ligne est stable : seule la marque d'actif se déplace. C'est ce qui
     // distingue cette navigation de l'ancienne barre, où les boutons bougeaient.
     const a = await monter({ current: 'piles' });
-    const avant = [...a.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    const avant = Array.from(a.shadowRoot!.querySelectorAll('.sous-lien')).map((n) => n.textContent!.trim());
     document.body.innerHTML = '';
     const b = await monter({ current: 'reglages' });
-    const apres = [...b.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    const apres = Array.from(b.shadowRoot!.querySelectorAll('.sous-lien')).map((n) => n.textContent!.trim());
     expect(apres).toEqual(avant);
   });
 

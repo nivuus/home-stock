@@ -30,7 +30,7 @@ import { primeHaComponents } from './shell/ui/ha-available';
 import { appliquerCouleursDeTexte } from './shell/ui/on-color';
 import { tokens } from './shell/ui/tokens';
 import { FAMILIES, destinationOf, familyOf, type FamilyId } from './shell/destinations';
-import { parsePath, pathOf } from './shell/router';
+import { DEFAULT_SCREEN, parsePath, pathOf } from './shell/router';
 import type { IconName } from './shell/ui/icons';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
@@ -137,7 +137,7 @@ export class PanneauGardeManger extends LitElement {
     // Une route inconnue vaut la racine — mais elle la vaut EN PASSANT PAR LE
     // MÊME GARDE-FOU : c'était le second contournement, aussi silencieux que
     // le premier.
-    const cible: Ecran = route ? route.screen : 'liste';
+    const cible: Ecran = route ? route.screen : DEFAULT_SCREEN;
     if (avecGardeFou && this.departARisque(cible)) {
       // On retient le CHEMIN, pas la cible : lui seul porte le paramètre, et
       // le rejouer tel quel évite d'avoir un second endroit qui sait traduire
@@ -165,7 +165,7 @@ export class PanneauGardeManger extends LitElement {
     if (!route) {
       // `replace` : une route inconnue ne mérite pas une entrée d'historique
       // dans laquelle le bouton Retour viendrait retomber.
-      this.naviguerVers('liste', null, true);
+      this.naviguerVers(DEFAULT_SCREEN, null, true);
       return;
     }
     this.ecran = route.screen;
@@ -820,18 +820,28 @@ export class PanneauGardeManger extends LitElement {
   }
 
   render() {
-    // La fiche occupe l’écran entier : c’était déjà le cas (l’ancienne
-    // `rendreNavigation` rendait `nothing` sur `fiche`), et pour la même
-    // raison — on y scanne, la coquille ne doit rien voler à la caméra.
-    if (this.ecran === 'fiche') return this.rendreEcran();
+    // La fiche laisse l’écran à la caméra : sa barre de navigation reste
+    // masquée, et l’en-tête y passe en `compact` (titre, retour, bannière —
+    // pas de ligne secondaire).
+    //
+    // Mais l’en-tête, LUI, revient. La fiche n’est plus un cul-de-sac de
+    // passage : `/item/<code>` est une URL partageable, et c’est la cible
+    // délibérée de « Quitter quand même ». Sans en-tête, et sous la contrainte
+    // « aucun geste de navigation » (pas de balayage, pas de bouton système),
+    // on y entrait sans plus pouvoir en sortir — l’écran n’émet que
+    // `article-pret` et `manger-produit`, jamais un retour. Le retour de
+    // l’en-tête ramène à la racine de la famille, comme partout ailleurs.
+    const pleinEcran = this.ecran === 'fiche';
     return html`
       <div class="coquille ${this.large ? 'large' : ''}">
+        ${pleinEcran ? nothing : html`
         <hs-nav-bar class="navigation" .current=${this.ecran} .rail=${this.large}
           .badges=${this.pastilles} .action=${this.actionPrimaire}
           @famille-choisie=${this.surFamilleChoisie}
-          @action-primaire=${() => this.demanderNavigation('scanner')}></hs-nav-bar>
+          @action-primaire=${() => this.demanderNavigation('scanner')}></hs-nav-bar>`}
         <div class="colonne">
           <hs-header .current=${this.ecran} .pending=${this.enAttente} .error=${this.erreurFile}
+            .compact=${pleinEcran}
             @retour-demande=${this.surRetour}
             @erreur-acquittee=${this.surErreurAcquittee}
             @ecran-choisi=${(e: CustomEvent<{ screen: Ecran }>) => this.demanderNavigation(e.detail.screen)}></hs-header>
@@ -847,18 +857,45 @@ export class PanneauGardeManger extends LitElement {
       </div>`;
   }
 
+  /** Les références de `hass` qui témoignent d’un changement de THÈME, à la
+   *  dernière mesure. Voir `themeAChange`. */
+  private empreinteTheme: readonly unknown[] = [];
+
+  /** Home Assistant remplace l’objet `hass` à CHAQUE changement d’état de la
+   *  maison — sur la tablette de la cuisine, plusieurs fois par seconde. Or
+   *  `appliquerCouleursDeTexte` n’est pas gratuit : il monte une sonde dans
+   *  l’hôte et lit son `color` calculé, ce qui force un recalcul de style
+   *  synchrone, deux fois (une par paire). Rejouer ça sur chaque état de
+   *  lampe était du travail pur perte.
+   *
+   *  HA, lui, ne remplace `hass.themes` et `hass.selectedTheme` que quand le
+   *  thème bouge vraiment : une comparaison de RÉFÉRENCES suffit, et elle ne
+   *  coûte rien. `darkMode` est comparé à part parce qu’une bascule
+   *  clair/sombre change la valeur sans changer l’objet qui la porte. */
+  private themeAChange(): boolean {
+    const empreinte = [this.hass?.themes, this.hass?.themes?.darkMode, this.hass?.selectedTheme];
+    const change = empreinte.length !== this.empreinteTheme.length
+      || empreinte.some((valeur, i) => valeur !== this.empreinteTheme[i]);
+    this.empreinteTheme = empreinte;
+    return change;
+  }
+
   firstUpdated(): void {
     // Pas dans `connectedCallback` : la sonde de `on-color` a besoin de la
     // feuille adoptée pour résoudre `var(--hs-accent)`, et elle n’existe
     // qu’après le premier rendu.
     appliquerCouleursDeTexte(this);
+    // Prend l’empreinte du thème AU MONTAGE : sans ça, le `updated()` du même
+    // cycle de vie la verrait vide, la croirait changée, et referait le calcul
+    // une seconde fois pour rien.
+    this.themeAChange();
   }
 
   updated(changees: PropertyValues): void {
     // Le thème peut changer sous nos pieds (bascule clair/sombre, changement
-    // de thème dans le profil) : HA repasse alors un nouvel objet `hass`.
-    // L’appel est bon marché — une sonde, trois lectures — et `on-color.ts`
-    // ne pose rien s’il ne sait pas lire.
-    if (changees.has('hass')) appliquerCouleursDeTexte(this);
+    // de thème dans le profil) : HA repasse alors un nouvel objet `hass`. Mais
+    // il en repasse un à chaque état de la maison — d’où le filtre.
+    // `on-color.ts` ne pose rien s’il ne sait pas lire.
+    if (changees.has('hass') && this.themeAChange()) appliquerCouleursDeTexte(this);
   }
 }

@@ -14,6 +14,10 @@ export class HsHeader extends LitElement {
   @property({ type: Number }) pending = 0;
   /** Le message du serveur, déjà en français : on ne le reformule pas. */
   @property({ attribute: false }) error: string | null = null;
+  /** Réduit l'en-tête à l'essentiel : titre, retour, bannière de refus — sans
+   *  la ligne secondaire. Pour la fiche article, où l'écran appartient à la
+   *  caméra : elle a besoin d'une SORTIE, pas d'un sommaire de famille. */
+  @property({ type: Boolean }) compact = false;
 
   static styles = [tokens, css`
     :host { display: block; }
@@ -83,6 +87,7 @@ export class HsHeader extends LitElement {
   `];
 
   private rendreSousNav() {
+    if (this.compact) return nothing;
     const ecrans = familyScreens(familyOf(this.current));
     // Une famille à un seul écran n'a rien à proposer : la ligne serait un
     // bouton qui ne mène qu'à lui-même.
