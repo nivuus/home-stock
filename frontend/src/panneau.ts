@@ -1,4 +1,4 @@
-import { LitElement, html, css, type PropertyValues } from 'lit';
+import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { Connexion, type Hass } from './connexion';
 import { FileAttente } from './file-attente';
@@ -124,6 +124,25 @@ export class PanneauGardeManger extends LitElement {
 
   private appliquerChemin(chemin: string): void {
     const route = parsePath(chemin);
+    // Une route inconnue vaut la racine — mais elle la vaut EN PASSANT PAR LE
+    // MÊME GARDE-FOU : c'était le second contournement, aussi silencieux que
+    // le premier.
+    const cible: Ecran = route ? route.screen : 'liste';
+    if (this.departARisque(cible)) {
+      this.armer(cible, route?.param ?? null);
+      // L'URL vient de bouger sous nos pieds (bouton Retour du navigateur,
+      // geste système d'Android, URL tapée) et l'écran, lui, ne bouge pas :
+      // on repose donc celle du rangement, pour qu'écran et URL ne divergent
+      // jamais. `replace`, pas `push` — un départ refusé ne mérite aucune
+      // entrée d'historique.
+      //
+      // PAS DE BOUCLE : ce `replaceState` fera repasser Home Assistant par
+      // `route`, mais `naviguerVers` vient d'y poser `dernierChemin`, donc
+      // `willUpdate` sortira tout de suite sur son test d'égalité. C'est
+      // exactement ce que couvre le test « ne boucle pas ».
+      this.naviguerVers('rangement', null, true);
+      return;
+    }
     if (!route) {
       // `replace` : une route inconnue ne mérite pas une entrée d'historique
       // dans laquelle le bouton Retour viendrait retomber.
@@ -152,12 +171,25 @@ export class PanneauGardeManger extends LitElement {
    *  passe le ticket entier. Il faut donc aller le chercher — `ticketOuvert`
    *  est un objet, pas un numéro. */
   private async chargerTicket(id: number): Promise<void> {
+    // `agentConfigure` dit si une entité `ai_task` est réglée, ce qui concerne
+    // la PHOTO d'un ticket, pas la lecture d'un ticket déjà pris — et aucune
+    // route ne le sait, `receipt/get` ne le rend pas. On le repose donc à son
+    // défaut : hériter du `false` d'un `ticket-ouvert` précédent cacherait,
+    // derrière « aucune entité de lecture n'est configurée », un ticket qui se
+    // charge parfaitement.
+    this.agentTicketConfigure = true;
+    this.ticketOuvert = null;
     try {
       this.ticketOuvert = await this.connexion!.appeler<DonneesTicket>(
         'home_stock/receipt/get', { receipt_id: id });
     } catch {
-      // Hors ligne, ou ticket disparu : l'écran dira lui-même qu'il n'a rien
-      // à montrer, plutôt que de renvoyer l'utilisateur ailleurs sans raison.
+      // Surtout pas un `catch` muet : l'écran resterait vide sans dire
+      // pourquoi, et ce lot passe son temps à débusquer des pannes muettes.
+      // On le dit par la bannière de l'en-tête, le canal qui existe déjà pour
+      // ça — plutôt qu'en reposant l'écran précédent, qui déplacerait
+      // l'utilisateur sans expliquer ce qui a échoué juste après qu'il a
+      // délibérément demandé CE ticket.
+      this.erreurFile = `Ticket n° ${id} introuvable ou injoignable.`;
     }
   }
 
@@ -461,10 +493,25 @@ export class PanneauGardeManger extends LitElement {
   /** Change d'écran, sauf s'il faut d'abord prévenir (voir plus haut). Le
    *  garde-fou s'arme AVANT toute navigation : ni l'URL, ni l'historique, ni
    *  `ecran` ne bougent tant que le second appui n'est pas venu. */
+  /** Vrai quand quitter l'écran courant pour cette cible-là perdrait des
+   *  articles rapportés seuls. Partagé par les DEUX portes d'entrée de la
+   *  navigation — les gestes de l'application et les routes d'URL — parce
+   *  qu'un garde-fou posé sur une seule des deux n'en est pas un. */
+  private departARisque(cible: Ecran): boolean {
+    return this.ecran === 'rangement' && cible !== 'rangement'
+      && this.enAttenteRangement.length > 0;
+  }
+
+  private armer(cible: Ecran, param: string | number | null): void {
+    this.navigationArmee = cible;
+    this.parametreArme = param;
+  }
+
   private demanderNavigation(cible: Ecran, param: string | number | null = null): void {
-    if (this.ecran === 'rangement' && cible !== 'rangement' && this.enAttenteRangement.length > 0) {
-      this.navigationArmee = cible;
-      this.parametreArme = param;
+    // Ici, rien n'a encore bougé : ni l'URL ni l'historique n'ont à être
+    // reposés, contrairement à `appliquerChemin`.
+    if (this.departARisque(cible)) {
+      this.armer(cible, param);
       return;
     }
     this.naviguerVers(cible, param);
@@ -568,13 +615,21 @@ export class PanneauGardeManger extends LitElement {
        bas de l’écran sans quitter sa place dans le DOM — donc sans casser
        l’ordre de tabulation, et sans dvh ni :has(), absents de Chrome 100
        (la tablette de la cuisine). */
-    .coquille { display: flex; flex-direction: column-reverse; height: 100%; }
+    /* position: relative — la confirmation de départ se pose EN SURCOUCHE
+       par-dessus, sans démonter l'écran en dessous (voir render). */
+    .coquille { position: relative; display: flex; flex-direction: column-reverse; height: 100%; }
     .coquille.large { flex-direction: row; }
     .colonne { flex: 1; display: flex; flex-direction: column; min-height: 0; }
     .contenu { flex: 1; overflow-y: auto; }
     .navigation { flex: 0 0 auto; }
+    /* Une surcouche opaque, qui couvre AUSSI la barre : tant qu'un départ est
+       armé, aucune autre destination n'est à un doigt de distance. Pas de
+       dialog natif : Chrome 100 (la tablette de la cuisine) ne l'a pas. Pas
+       d'inset non plus, les quatre côtés se disent très bien. */
     .confirmation-quitter-rangement {
-      display: flex; flex-direction: column; gap: var(--hs-space-2);
+      position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 2;
+      display: flex; flex-direction: column; justify-content: center;
+      gap: var(--hs-space-2);
       padding: var(--hs-space-3);
       background: var(--hs-surface); color: var(--hs-text);
     }
@@ -710,9 +765,6 @@ export class PanneauGardeManger extends LitElement {
     // `rendreNavigation` rendait `nothing` sur `fiche`), et pour la même
     // raison — on y scanne, la coquille ne doit rien voler à la caméra.
     if (this.ecran === 'fiche') return this.rendreEcran();
-    // La confirmation prend l’écran : tant qu’un départ est armé, aucune
-    // autre destination ne doit être à un doigt de distance.
-    if (this.navigationArmee) return this.rendreConfirmationQuitter();
     return html`
       <div class="coquille ${this.large ? 'large' : ''}">
         <hs-nav-bar class="navigation" .current=${this.ecran} .rail=${this.large}
@@ -723,6 +775,13 @@ export class PanneauGardeManger extends LitElement {
             @erreur-acquittee=${this.surErreurAcquittee}></hs-header>
           <main class="contenu">${this.rendreEcran()}</main>
         </div>
+        <!-- EN SURCOUCHE, jamais à la place : rendreEcran() s'exécute quand
+             même, donc l'écran de rangement reste MONTÉ. Le démonter jetterait
+             les emplacements que l'utilisateur vient de saisir à la main
+             (emplacementChoisi, un état local de home-stock-rangement) —
+             perdus par le bouton qui dit « je veux continuer », le pire des
+             deux pour perdre quelque chose. -->
+        ${this.navigationArmee ? this.rendreConfirmationQuitter() : nothing}
       </div>`;
   }
 

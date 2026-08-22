@@ -870,6 +870,10 @@ const SCENARIOS = [
     },
     actions: [{ type: 'dispatch-code-lu', code: '3229820129488' }],
     ecranAttendu: 'home-stock-fiche',
+    // La fiche occupe l'écran ENTIER : on y scanne, la coquille ne doit rien
+    // voler à la caméra. Le test unitaire ne prouvait que la moitié positive
+    // (« la barre est là partout ailleurs ») ; voici l'autre moitié.
+    elementAbsent: { enfant: null, selector: 'hs-nav-bar' },
   },
   {
     nom: 'Panier (plusieurs lignes, plusieurs rayons)',
@@ -1231,6 +1235,32 @@ const SCENARIOS = [
     actions: [{ type: 'route', path: '/log' }],
     ecranAttendu: 'home-stock-journal',
     elementAttendu: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    // La surcouche de confirmation n'était mesurée par RIEN : ni sa cible
+    // tactile, ni son contraste, ni son débordement. Et `ecranAttendu` vaut
+    // ici `home-stock-rangement` : c'est la preuve, dans un vrai navigateur,
+    // que la confirmation se pose PAR-DESSUS l'écran sans le démonter — donc
+    // que « Rester ici » ne jette pas les emplacements déjà saisis.
+    nom: 'Coquille : confirmation de départ, en surcouche du rangement',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/lookup': RESULTAT_LOOKUP_CONNU,
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '1234567890123' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018,
+        mode: 'rangement', offDroppedFields: [],
+      } },
+      { type: 'click-nav', ecran: 'liste' },
+    ],
+    ecranAttendu: 'home-stock-rangement',
+    elementAttendu: { enfant: null, selector: '.confirmation-quitter-rangement' },
   },
   {
     nom: 'Coquille : pastille de compte sur Courses',
