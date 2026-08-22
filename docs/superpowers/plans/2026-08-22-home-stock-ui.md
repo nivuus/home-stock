@@ -970,7 +970,10 @@ git commit -m "feat(shell): des icônes dont nous portons les tracés, ha-svg-ic
 - Test: `tests/shell-enveloppes.test.ts`
 
 **Interfaces:**
-- Consumes: `tokens` (Task 2), `isDefined`/`whenDefined` (Task 3).
+- Consumes: `tokens` (Task 2), `isDefined`/`whenDefined`/`pendingCountForTests` (Task 3).
+  ⚠️ `whenDefined(nom, rappel)` **rend une fonction de désabonnement** (signature
+  étendue au round de correction de la Task 4) : ne pas l'appeler au démontage
+  refait la fuite que cette signature existe pour éviter.
 - Produces:
   - `<hs-card>` — un `<slot>`, rien d'autre.
   - `<hs-button variant="primary"|"neutral"|"danger" ?disabled ?full>` — un `<slot>`. Émet le `click` natif ; ne le réémet jamais.
@@ -981,7 +984,7 @@ git commit -m "feat(shell): des icônes dont nous portons les tracés, ha-svg-ic
 
 ```ts
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resetForTests } from '../src/shell/ui/ha-available';
+import { pendingCountForTests, resetForTests } from '../src/shell/ui/ha-available';
 import '../src/shell/ui/hs-card';
 import '../src/shell/ui/hs-button';
 
@@ -1039,6 +1042,18 @@ describe('hs-button', () => {
     expect(surClic).not.toHaveBeenCalled();
   });
 
+  it('se désabonne au démontage, dans les deux enveloppes', async () => {
+    // La fuite que ce test interdit est bornée à l'appareil où l'élément HA
+    // n'arrive jamais — la tablette cuisine — mais c'est un kiosque qui tourne
+    // en continu, avec des dizaines de boutons remontés à chaque navigation.
+    const avant = pendingCountForTests();
+    const carte = await monter('hs-card');
+    const bouton = await monter('hs-button');
+    carte.remove();
+    bouton.remove();
+    expect(pendingCountForTests()).toBe(avant);
+  });
+
   it('tient la cible tactile de la tablette', async () => {
     const el = await monter('hs-button');
     const styles = (el.constructor as typeof HTMLElement & { styles: { cssText: string }[] });
@@ -1068,9 +1083,22 @@ const HA_CARD = 'ha-card';
 
 @customElement('hs-card')
 export class HsCard extends LitElement {
+  /** Le désabonnement rendu par `whenDefined`, à rappeler au démontage. Sans
+   *  lui, chaque montage empile un rappel qui n'est vidé qu'à la définition de
+   *  l'élément — or sur la tablette de la cuisine, qui ouvre `/home-stock`
+   *  sans passer par Lovelace, `ha-card` n'est JAMAIS défini. Le kiosque
+   *  tourne en continu : la table grossirait sans fin. */
+  private desabonner?: () => void;
+
   connectedCallback(): void {
     super.connectedCallback();
-    whenDefined(HA_CARD, () => this.requestUpdate());
+    this.desabonner = whenDefined(HA_CARD, () => this.requestUpdate());
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.desabonner?.();
+    this.desabonner = undefined;
   }
 
   static styles = [tokens, css`
@@ -1111,9 +1139,20 @@ export class HsButton extends LitElement {
   /** Occupe toute la largeur disponible. */
   @property({ type: Boolean }) full = false;
 
+  /** Même raison que dans `hs-card` : `whenDefined` rend un désabonnement, et
+   *  ne pas l'appeler fait fuir la table sur l'appareil où `ha-button` ne se
+   *  charge jamais. */
+  private desabonner?: () => void;
+
   connectedCallback(): void {
     super.connectedCallback();
-    whenDefined(HA_BUTTON, () => this.requestUpdate());
+    this.desabonner = whenDefined(HA_BUTTON, () => this.requestUpdate());
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.desabonner?.();
+    this.desabonner = undefined;
   }
 
   static styles = [tokens, css`
@@ -2622,6 +2661,18 @@ describe('planning : des actions qui ne noient pas la grille', () => {
     const valider = el.shadowRoot!.querySelector('.valider-repas')!;
     expect(valider.getAttribute('aria-label')).toMatch(/^Valider /);
     expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
+  });
+
+  it('se désabonne au démontage, dans les deux enveloppes', async () => {
+    // La fuite que ce test interdit est bornée à l'appareil où l'élément HA
+    // n'arrive jamais — la tablette cuisine — mais c'est un kiosque qui tourne
+    // en continu, avec des dizaines de boutons remontés à chaque navigation.
+    const avant = pendingCountForTests();
+    const carte = await monter('hs-card');
+    const bouton = await monter('hs-button');
+    carte.remove();
+    bouton.remove();
+    expect(pendingCountForTests()).toBe(avant);
   });
 
   it('tient la cible tactile de la tablette', async () => {
