@@ -44,6 +44,16 @@ describe('routeur', () => {
     }
   });
 
+  it('ignore un paramètre surnuméraire à l’écriture aussi : pathOf ne le porte pas', () => {
+    expect(pathOf('liste', 42)).toBe('/list');
+  });
+
+  it('lève plutôt que de fabriquer un chemin illisible pour un écran paramétré sans paramètre', () => {
+    for (const d of DESTINATIONS.filter((d) => d.param)) {
+      expect(() => pathOf(d.screen)).toThrow();
+    }
+  });
+
   it('sait où retomber', () => {
     expect(DEFAULT_PATH).toBe('/list');
     expect(parsePath(DEFAULT_PATH)).toEqual({ screen: 'liste', param: null });

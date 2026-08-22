@@ -29,6 +29,13 @@ export function parsePath(path: string): Route | null {
 
 export function pathOf(screen: Ecran, param: string | number | null = null): string {
   const destination = destinationOf(screen);
-  if (!destination.param || param === null || param === undefined) return `/${destination.segment}`;
+  if (!destination.param) return `/${destination.segment}`;
+  // Un écran paramétré sans son paramètre produirait un chemin que `parsePath`
+  // rend `null` : une URL illisible, donc une navigation qui retombe
+  // silencieusement sur la racine. Même parti pris que `destinationOf` : le
+  // bruit d'une exception plutôt qu'une panne muette.
+  if (param === null || param === undefined) {
+    throw new Error(`L'écran « ${screen} » exige un paramètre : pathOf(${screen}, …)`);
+  }
   return `/${destination.segment}/${param}`;
 }
