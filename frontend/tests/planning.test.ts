@@ -112,13 +112,16 @@ describe('<home-stock-planning>', () => {
   });
 
   it('annule un repas planifié en deux appuis', async () => {
+    // Les boutons sont passés en icônes (Task 14) : plus de texte
+    // « Confirmer » à lire, le second appui se lit dans l'aria-label.
     const element = monter();
     await stabiliser(element);
     const bouton = element.shadowRoot.querySelector('.annuler-repas');
     bouton.click();
     await stabiliser(element);
     expect(element.file.ajouter).not.toHaveBeenCalled();
-    expect(textes(element, '.annuler-repas')).toContain('Confirmer');
+    expect(element.shadowRoot.querySelector('.annuler-repas').getAttribute('aria-label'))
+      .toMatch(/^Confirmer /);
 
     element.shadowRoot.querySelector('.annuler-repas').click();
     await stabiliser(element);
@@ -193,5 +196,42 @@ describe('<home-stock-planning>', () => {
     const styles = ((element.constructor as any).styles as { cssText: string }[])
       .map((s) => s.cssText).join('');
     expect(styles).toContain('min-height: var(--hs-touch)');
+  });
+});
+
+describe('planning : des actions qui ne noient pas la grille', () => {
+  // Le brief de cette tâche portait un quatrième test, « se désabonne au
+  // démontage, dans les deux enveloppes », copié depuis
+  // `tests/shell-enveloppes.test.ts` (monte `hs-card`/`hs-button` via un
+  // `monter(balise)` qui n'existe pas ici, importe `pendingCountForTests`
+  // sans l'importer). `planning.ts` ne porte aucun abonnement `whenDefined`
+  // propre — c'est `hs-icon` qui gère ce cycle de vie, déjà couvert par les
+  // tests de `shell-ha-available` et `shell-enveloppes`. Test omis ici :
+  // il ne vérifie rien de ce fichier.
+
+  it('rend les actions en icônes, pas en libellés répétés', async () => {
+    const el = await monter({ repas: [REPAS[0]] });
+    await stabiliser(el);
+    const valider = el.shadowRoot!.querySelector('.valider-repas')!;
+    expect(valider.querySelector('hs-icon')).not.toBeNull();
+    expect(valider.textContent!.trim()).toBe('');
+  });
+
+  it('garde l’action annonçable, et nommant SON repas', async () => {
+    // Cinquante-six boutons « Valider » identiques ne se distinguent pas au
+    // lecteur d'écran : chacun doit dire lequel il valide.
+    const el = await monter({ repas: [REPAS[0]] });
+    await stabiliser(el);
+    const valider = el.shadowRoot!.querySelector('.valider-repas')!;
+    expect(valider.getAttribute('aria-label')).toMatch(/^Valider /);
+    expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
+  });
+
+  it('tient la cible tactile de la tablette', async () => {
+    const el = await monter({ repas: [REPAS[0]] });
+    await stabiliser(el);
+    const styles = ((el.constructor as any).styles as { cssText: string }[]);
+    const texte = styles.map((s) => s.cssText).join('');
+    expect(texte).toContain('min-height: var(--hs-touch)');
   });
 });
