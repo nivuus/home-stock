@@ -31,6 +31,7 @@ from .const import (
     GROCY_STOCK_REF_PREFIX,
     REASON_PURCHASE,
 )
+from .grocy.refs import grocy_product_id
 from .grocy.units import base_unit
 from .storage import repositories as repo
 
@@ -271,7 +272,10 @@ def _catalogue_within(conn) -> dict[int, CatalogueEntry]:
         " JOIN article AS art ON art.product_id = prod.id AND art.is_generic = 1"
         " WHERE prod.external_ref IS NOT NULL"
     ):
-        catalogue[int(row["ref"])] = CatalogueEntry(
+        grocy_id = grocy_product_id(row["ref"])
+        if grocy_id is None:
+            continue                # `grocy:spare:` — pas un produit Grocy
+        catalogue[grocy_id] = CatalogueEntry(
             product_id=row["product_id"], article_id=row["article_id"],
             name=row["name"], base_unit=row["base_unit"],
             default_location_id=row["default_location_id"])
