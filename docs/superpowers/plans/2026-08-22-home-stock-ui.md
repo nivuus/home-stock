@@ -2630,6 +2630,36 @@ ${this.action ? html`
 
 > ⚠️ `box-shadow` est la **seule** exception admise à l'interdiction de couleur littérale : une ombre n'a pas de jeton et ne participe à aucun contraste texte/fond. L'ajouter à la liste d'exclusions du `grep` de la Task 6, Step 4.
 
+- [ ] **Step 3 bis : retirer le Scanner de la sous-navigation**
+
+Il devient l'action flottante : l'y laisser en pastille le mettrait **deux fois**
+sur le même écran. Or `familyScreens` ne filtre que sur `!d.param`, et le
+scanner n'a pas de paramètre — il y figure donc encore.
+
+Mesuré sur la capture actuelle : la famille Courses a cinq pastilles, qui
+passent sur **deux rangées** sur 412 px (~145 px), en plus des ~62 px de la
+barre de titre. Le retirer ramène la famille à quatre.
+
+Ajoute à `Destination` un drapeau explicite plutôt qu'une exception cachée dans
+`familyScreens` :
+
+```ts
+  /** Écarté de la ligne secondaire parce qu'il est offert autrement — le
+   *  scanner est l'action flottante de sa famille, l'y remettre en pastille
+   *  le proposerait deux fois sur le même écran. */
+  hiddenInFamilyNav?: boolean;
+```
+
+`{ screen: 'scanner', …, hiddenInFamilyNav: true }`, et `familyScreens` filtre
+aussi dessus.
+
+**Le test de couverture de la Task 16 doit rester vrai** : il compare la
+sous-navigation à l'ensemble des écrans sans paramètre, et le scanner en sort.
+Adapte-le pour qu'il exige que **tout écran sans paramètre soit dans la ligne
+OU explicitement marqué `hiddenInFamilyNav`** — pas pour qu'il ignore le
+scanner en dur. C'est ce test qui interdit à la régression des six écrans
+inatteignables de revenir : il doit continuer d'attraper un écran oublié.
+
 - [ ] **Step 4 : offrir l'action depuis le panneau**
 
 Dans `panneau.ts` :
