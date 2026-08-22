@@ -288,7 +288,10 @@ describe('jetons partagés', () => {
     // C'est l'absence de repli qui a rendu invalides les bordures du Planning
     // sous un thème incomplet : `var(--divider-color)` sans repli annule la
     // déclaration entière à la valeur calculée.
-    const sansRepli = [...css.matchAll(/var\((--[a-z-]+)\s*\)/g)].map((m) => m[1]);
+    // Seules les variables HOME ASSISTANT doivent porter un repli. Les jetons
+    // --hs-* sont définis dans ce même bloc `:host` : ils résolvent toujours,
+    // et leur donner un repli serait une seconde source de vérité.
+    const sansRepli = [...css.matchAll(/var\((--(?!hs-)[a-z-]+)\s*\)/g)].map((m) => m[1]);
     expect(sansRepli).toEqual([]);
   });
 
@@ -1840,7 +1843,7 @@ import './shell/header';
 import { primeHaComponents } from './shell/ui/ha-available';
 import { tokens } from './shell/ui/tokens';
 import type { IconName } from './shell/ui/icons';
-import { FAMILIES, destinationOf, familyOf, type FamilyId } from './shell/destinations';
+import { FAMILIES, familyOf, type FamilyId } from './shell/destinations';
 import { parsePath, pathOf } from './shell/router';
 ```
 
@@ -1964,8 +1967,7 @@ Supprimer `rendreNavigation()` et `rendreErreurFile()`. Nouveau `render()` :
    *  `history.back()`, qui ramènerait à l'écran précédent quelle que soit sa
    *  famille et ferait sauter l'utilisateur d'un bout à l'autre du panneau. */
   private surRetour = (): void => {
-    this.demanderNavigation(destinationOf(
-      FAMILIES.find((f) => f.id === familyOf(this.ecran))!.root).screen);
+    this.demanderNavigation(FAMILIES.find((f) => f.id === familyOf(this.ecran))!.root);
   };
 ```
 
@@ -2068,6 +2070,8 @@ const DEFINIR_HA_MINIMAL = `
 `;
 ```
 
+Cette page se sert par le **routage de chemins posé en Task 1** : ajouter une entrée de plus à `pagesParChemin` (par exemple `/ha`), dont le HTML insère `DEFINIR_HA_MINIMAL` dans un `<script>` **avant** celui du bundle, et pointer les scénarios de ce jeu sur cette URL.
+
 Run: `node outils/verifier-rendu.mjs`
 Expected: PASS sur tous les jeux.
 
@@ -2113,15 +2117,19 @@ describe('catalogue : la liste ne se rend pas en entier', () => {
       default_location_id: null, default_shelf_life_days: null,
       aisle_id: null, min_stock: null, stock: 0,
     }));
-    const el = await monterCatalogue(produits);
-    const lignes = el.shadowRoot!.querySelectorAll('.ligne-produit');
+    const el = await monterCatalogue({ large: false, produits });
+    // La classe est `.ligne` — vérifié dans catalogue.ts : `<article class="ligne">`
+    // en étroit, `<tr class="ligne …">` en dense.
+    const lignes = el.shadowRoot!.querySelectorAll('.ligne');
     expect(lignes.length).toBeGreaterThan(0);
     expect(lignes.length).toBeLessThan(80);
   });
 
   it('garde la recherche atteignable en tête de liste', async () => {
-    const el = await monterCatalogue([]);
-    const recherche = el.shadowRoot!.querySelector('.recherche');
+    const el = await monterCatalogue({ large: false, produits: [] });
+    // `.recherche` est l'<input> LUI-MÊME, pas un conteneur : c'est donc lui
+    // qui devient collant.
+    const recherche = el.shadowRoot!.querySelector('input.recherche');
     expect(recherche).not.toBeNull();
     const styles = (el.constructor as unknown as { styles: { cssText: string }[] });
     expect(styles.styles.map((s) => s.cssText).join('')).toContain('position: sticky');
@@ -2135,8 +2143,8 @@ describe('catalogue : la liste ne se rend pas en entier', () => {
       default_location_id: null, default_shelf_life_days: null,
       aisle_id: null, min_stock: null, stock: 0,
     }));
-    const el = await monterCatalogue(produits);
-    const champ = el.shadowRoot!.querySelector('.recherche input') as HTMLInputElement;
+    const el = await monterCatalogue({ large: false, produits });
+    const champ = el.shadowRoot!.querySelector('input.recherche') as HTMLInputElement;
     champ.value = 'Produit 287';
     champ.dispatchEvent(new Event('input'));
     await el.updateComplete;
@@ -2145,7 +2153,7 @@ describe('catalogue : la liste ne se rend pas en entier', () => {
 });
 ```
 
-(`monterCatalogue` existe déjà dans ce fichier de tests ; s'il ne prend pas encore une liste de produits en paramètre, l'y ajouter.)
+**Vérifié** : `monterCatalogue` existe (ligne 523 de `tests/catalogue.test.ts`) mais ne prend que `{ large, file }`. Lui ajouter une clé `produits` optionnelle, qui alimente la réponse de `home_stock/products/list`.
 
 - [ ] **Step 2 : lancer le test pour vérifier qu'il échoue**
 
@@ -2171,7 +2179,9 @@ Expected: FAIL — 300 lignes rendues, pas de `position: sticky`.
   }
 ```
 
-Remettre `nbAffiches` à `FENETRE` à chaque changement de la recherche. Ajouter sous la liste :
+**Les DEUX rendus mappent `produitsFiltres`** — `render()` en étroit (ligne 492) et `rendreDense()` en large (ligne 478, le `<tbody>`). Remplacer `this.produitsFiltres.map(...)` par `this.produitsVisibles.map(...)` **aux deux endroits** : n'en corriger qu'un laisserait le bureau rendre trois cents lignes.
+
+Remettre `nbAffiches` à `FENETRE` à chaque changement de la recherche. Ajouter sous la liste, dans les deux rendus :
 
 ```ts
 ${this.produitsFiltres.length > this.nbAffiches ? html`
@@ -2378,7 +2388,9 @@ Ajouter à `tests/planning.test.ts` :
 ```ts
 describe('planning : des actions qui ne noient pas la grille', () => {
   it('rend les actions en icônes, pas en libellés répétés', async () => {
-    const el = await monterPlanningCharge();
+    // L'aide existante s'appelle `monter({ repas })` (ligne 16 de
+    // tests/planning.test.ts) — il n'y a pas de `monterPlanningCharge`.
+    const el = await monter({ repas: [REPAS_PLANIFIE] });
     const valider = el.shadowRoot!.querySelector('.valider-repas')!;
     expect(valider.querySelector('hs-icon')).not.toBeNull();
     expect(valider.textContent!.trim()).toBe('');
@@ -2387,20 +2399,22 @@ describe('planning : des actions qui ne noient pas la grille', () => {
   it('garde l’action annonçable, et nommant SON repas', async () => {
     // Cinquante-six boutons « Valider » identiques ne se distinguent pas au
     // lecteur d'écran : chacun doit dire lequel il valide.
-    const el = await monterPlanningCharge();
+    const el = await monter({ repas: [REPAS_PLANIFIE] });
     const valider = el.shadowRoot!.querySelector('.valider-repas')!;
     expect(valider.getAttribute('aria-label')).toMatch(/^Valider /);
     expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
   });
 
   it('tient la cible tactile de la tablette', async () => {
-    const el = await monterPlanningCharge();
+    const el = await monter({ repas: [REPAS_PLANIFIE] });
     const styles = (el.constructor as unknown as { styles: { cssText: string }[] });
     const texte = styles.styles.map((s) => s.cssText).join('');
     expect(texte).toContain('min-height: var(--hs-touch)');
   });
 });
 ```
+
+`REPAS_PLANIFIE` est la constante de repas déjà employée par ce fichier de tests ; réutiliser celle qui s'y trouve plutôt que d'en écrire une nouvelle.
 
 - [ ] **Step 2 : lancer le test pour vérifier qu'il échoue**
 
