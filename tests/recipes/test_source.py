@@ -91,9 +91,14 @@ async def test_the_filter_route_has_no_category_and_that_is_not_an_error():
 
 
 async def test_the_key_from_the_options_lands_in_the_url():
+    """La clé réglée dans les options atteint bien la route.
+
+    La version n'est plus figée ici : « 9973533 » n'est pas la clé de test
+    publique, donc elle part sur v2 — c'est `base_url_for` qui en décide, et
+    les tests de bascule plus bas qui tiennent cette règle."""
     client, transport = _client((200, SEARCH), key="9973533")
     await client.search("chicken")
-    assert "/api/json/v1/9973533/search.php" in transport.urls[0]
+    assert "/9973533/search.php" in transport.urls[0]
 
 
 async def test_the_user_agent_and_the_timeout_are_sent():
@@ -230,3 +235,42 @@ async def test_the_real_contract_has_not_moved():
     assert card is not None
     assert card["strMeal"] == "Teriyaki Chicken Casserole"
     assert all(f"strIngredient{i}" in card for i in range(1, 21))
+
+
+# --- la version de route se déduit de la clé --------------------------------
+
+async def test_the_public_test_key_stays_on_v1():
+    """« 1 » est la clé de test publique, et v2 la refuse : une installation
+    sans abonnement doit rester sur la route qui lui répond."""
+    client, transport = _client((200, SEARCH), key="1")
+    await client.search("pasta")
+    assert transport.urls[0].startswith("https://www.themealdb.com/api/json/v1/1/")
+
+
+async def test_a_premium_key_goes_to_v2():
+    """Une clé qui n'est pas « 1 » est une clé d'abonné, et le catalogue
+    élargi ne vit que sur v2 : mesuré le 2026-08-22, `filter.php?i=chicken`
+    rend 20 fiches sur v1 contre 21 sur v2 avec la MÊME clé. Rester sur v1
+    avec une clé payante, c'est payer sans rien recevoir."""
+    client, transport = _client((200, SEARCH), key="65432107")
+    await client.search("pasta")
+    assert transport.urls[0].startswith(
+        "https://www.themealdb.com/api/json/v2/65432107/")
+
+
+async def test_every_route_follows_the_same_version():
+    """Les trois routes, pas seulement la recherche : une seule d'entre elles
+    restée sur v1 rendrait un import incomplet sans le dire."""
+    client, transport = _client((200, FILTER), (200, LOOKUP), key="65432107")
+    await client.by_ingredient("chicken")
+    await client.lookup("52772")
+    assert all(url.startswith("https://www.themealdb.com/api/json/v2/")
+               for url in transport.urls), transport.urls
+
+
+async def test_the_key_is_still_quoted_into_the_route():
+    """La bascule ne doit pas défaire ce que le lot 3 tenait : la clé reste
+    dans le chemin, la valeur cherchée reste échappée."""
+    client, transport = _client((200, SEARCH), key="65432107")
+    await client.search("pâtes fraîches")
+    assert "p%C3%A2tes%20fra%C3%AEches" in transport.urls[0]

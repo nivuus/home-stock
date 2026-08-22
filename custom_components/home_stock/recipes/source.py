@@ -21,7 +21,26 @@ from urllib.parse import quote
 
 from ..off.client import OffTransport
 
+# Deux routes, et c'est la CLÉ qui choisit — jamais un réglage de plus.
+#
+# « 1 » est la clé de test publique de TheMealDB ; v2 la refuse. Toute autre
+# clé est une clé d'abonné, et le catalogue élargi comme les routes exclusives
+# (`latest.php`, `randomselection.php`, les multi-filtres) ne vivent que sur
+# v2. Mesuré le 2026-08-22 avec une même clé d'abonné : `filter.php?i=chicken`
+# rend 20 fiches sur v1 contre 21 sur v2. Rester sur v1 avec une clé payante,
+# c'est payer sans rien recevoir ; forcer v2 sans clé, c'est casser toute
+# installation qui n'en a pas — d'où le choix par la clé, fait UNE fois à la
+# construction plutôt qu'essayé puis repris à chaque appel : le contrat du
+# lot 1 est une tentative et pas de reprise, et il ne bouge pas ici.
 BASE_URL: Final = "https://www.themealdb.com/api/json/v1/{key}/"
+PREMIUM_BASE_URL: Final = "https://www.themealdb.com/api/json/v2/{key}/"
+TEST_KEY: Final = "1"
+
+
+def base_url_for(key: str) -> str:
+    """La racine qui répondra à cette clé."""
+    return (BASE_URL if key.strip() == TEST_KEY else PREMIUM_BASE_URL).format(
+        key=key.strip())
 TIMEOUT: Final = 10.0
 BULK_INTERVAL: Final = 8.0          # same interval as the OFF ingestion
 
@@ -75,8 +94,7 @@ class MealDbClient:
         self._last_call: float | None = None
 
     def _url(self, route: str, parameter: str, value: str) -> str:
-        return (BASE_URL.format(key=self._key)
-                + f"{route}?{parameter}={quote(value)}")
+        return base_url_for(self._key) + f"{route}?{parameter}={quote(value)}"
 
     async def _get(self, url: str) -> dict[str, Any] | None:
         """One attempt. Any failure whatsoever reads as "nothing found".
