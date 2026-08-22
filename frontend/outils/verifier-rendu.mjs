@@ -31,15 +31,17 @@
  *      monter silencieusement ; voir le rapport de tâche. Le petit serveur
  *      local ci-dessus donne une vraie origine `http://127.0.0.1`, sous
  *      laquelle `localStorage` marche normalement.)
- *   4. Deux formats, ceux du spec du panneau (§14) — 412 × 915 (le
+ *   4. Trois formats — les deux du spec du panneau (§14), 412 × 915 (le
  *      téléphone qui scanne en rayon) et 1280 × 800 (le bureau, écran
- *      Catalogue/Réglages) — avec des seuils plus stricts que le mur
- *      (`wallpanel` vise 62 px / 5:1 pour une dalle regardée à bout de
- *      bras) : ce panneau se tient en main ou se pilote à la souris, donc
- *      **48 px** de cible tactile et **4,5:1** de contraste — les seuils
- *      WCAG AA standards.
+ *      Catalogue/Réglages), plus le 1920 × 1080 ajouté au lot 6 pour
+ *      l'étirement (voir FORMATS) — mesurés avec les MÊMES seuils que le mur
+ *      (`wallpanel` : 62 px de cible tactile) : la tablette cuisine ouvre
+ *      ce même panneau, donc c'est le seuil du mur qui prime pour la cible
+ *      tactile, même si ce panneau se pilote aussi en main ou à la souris.
+ *      Le contraste, lui, reste à **4,5:1**, le seuil WCAG AA standard —
+ *      rien dans la maison n'impose 5:1 en dehors du mur.
  *
- *  Échoue sur : un débordement horizontal, une cible tactile sous 48 px,
+ *  Échoue sur : un débordement horizontal, une cible tactile sous 62 px,
  *  un contraste texte/fond sous 4,5:1, ou du texte tronqué.
  *
  *  Chaque scénario vérifie aussi qu'il a bien ATTEINT l'écran attendu (le
@@ -77,7 +79,7 @@ const SRC = join(RACINE, 'src');
 const TSCONFIG = join(RACINE, 'tsconfig.json');
 const BUNDLE_DEPLOYE = join(RACINE, '..', 'custom_components', 'home_stock', 'panel', 'home-stock-panel.js');
 
-const CIBLE_MIN_PX = 48;
+const CIBLE_MIN_PX = 62;
 const CONTRASTE_MIN = 4.5;
 
 const FORMATS = [
@@ -113,48 +115,233 @@ async function bundlerApplication({ minifier = false } = {}) {
   return resultat.outputFiles[0].text.replaceAll('</script', '<\\/script');
 }
 
-// --- thème HA de secours -----------------------------------------------
+/** La table des destinations, lue DANS LA SOURCE plutôt que recopiée ici.
+ *  Une seconde table à tenir synchronisée est exactement ce que
+ *  `src/shell/destinations.ts` a supprimé (voir son commentaire de tête) : un
+ *  libellé recopié qui dérive, et c'est le harnais qui ment. esbuild sait
+ *  déjà lire ce fichier ; il n'importe que des types, donc il se bundle seul. */
+async function chargerDestinations() {
+  const resultat = await esbuild.build({
+    entryPoints: [join(SRC, 'shell', 'destinations.ts')],
+    bundle: true, write: false, format: 'esm', target: 'es2022',
+    tsconfig: TSCONFIG, logLevel: 'silent',
+  });
+  const base64 = Buffer.from(resultat.outputFiles[0].text, 'utf8').toString('base64');
+  return import(`data:text/javascript;base64,${base64}`);
+}
+
+/** Traduit les actions d'un scénario en gestes que la page sait exécuter.
+ *  La navigation ne se fait plus par un bouton texte par écran, mais par
+ *  FAMILLE : le scénario nomme l'ÉCRAN voulu, et le harnais trouve sa famille
+ *  dans la table, comme le ferait un utilisateur qui sait où ranger les
+ *  choses. Un écran absent de la table est une faute d'écriture du scénario,
+ *  pas un défaut de rendu : on lève ici, en Node, avant même d'ouvrir la page.
+ *
+ *  (Ce qui reste SILENCIEUX, volontairement, c'est un bouton de famille
+ *  introuvable dans la barre : c'est le contrôle « écran jamais atteint » qui
+ *  doit l'attraper, et l'auto-vérification en fait la preuve.) */
+function preparerActions(actions, familleParEcran) {
+  return actions.map((action) => {
+    if (action.type !== 'click-nav' || action.famille) return action;
+    const famille = familleParEcran.get(action.ecran);
+    if (!famille) {
+      throw new Error(`Scénario : écran hors de la table des destinations — ${action.ecran}`);
+    }
+    return { ...action, famille };
+  });
+}
+
+// --- palettes RÉELLES ---------------------------------------------------
 //
-// Le panneau lit ses couleurs dans les variables CSS que Home Assistant pose
-// sur la page (`--primary-color`, `--primary-text-color`…) : aucune instance
-// réelle n'étant accessible ici, ce thème en tient lieu. Choisi pour un
-// contraste correct par construction (un bleu suffisamment sombre pour du
-// texte blanc à 4,5:1, cf. le calcul dans le rapport de tâche) plutôt que
-// pour ressembler exactement au thème par défaut de Home Assistant — ce
-// script vérifie le CODE du panneau, pas le thème de la maison, qui n'est
-// de toute façon pas sous sa main.
-const THEME_CSS = `
+// L'ancien THEME_CSS n'était pas seulement incomplet (cinq variables sur les
+// dix que le panneau lit, d'où des bordures et des fonds annulés à la valeur
+// calculée, et du Times New Roman) : il INVENTAIT sa couleur primaire, un
+// `#01579b` choisi pour passer le seuil de contraste par construction. Le
+// remplacer par « la bonne » palette recréerait le même mensonge, puisque
+// aucun des deux comptes de la maison n'utilise le thème par défaut.
+//
+// Valeurs relevées le 2026-08-22 dans `hass_frontend` de HA 2026.8.2
+// (`--ha-color-neutral-05`, `--ha-color-primary-40`…) et dans
+// `config/themes/graphite/graphite-light.yaml`.
+const PALETTES = [
+  {
+    nom: 'HA clair (défaut)',
+    variables: {
+      '--primary-background-color': '#fafafa',
+      '--secondary-background-color': '#e5e5e5',
+      '--card-background-color': '#ffffff',
+      '--primary-text-color': '#141414',
+      '--secondary-text-color': '#5e5e5e',
+      '--primary-color': '#009ac7',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': '#0000001f',
+      '--error-color': '#db4437',
+      '--warning-color': '#ffa600',
+    },
+  },
+  {
+    nom: 'HA sombre',
+    variables: {
+      '--primary-background-color': '#111111',
+      '--secondary-background-color': '#282828',
+      '--card-background-color': '#1c1c1c',
+      '--primary-text-color': '#e1e1e1',
+      '--secondary-text-color': '#9b9b9b',
+      '--primary-color': '#009ac7',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': '#e1e1e11f',
+      '--error-color': '#db4437',
+      '--warning-color': '#ffa600',
+    },
+  },
+  {
+    // Le thème RÉELLEMENT en service sur un des deux comptes de la maison
+    // (`.storage/frontend.user_data_*` → « Graphite Auto »). Sa primaire est
+    // ORANGE et son texte-sur-primaire est un navy, pas du blanc : c'est
+    // exactement le cas qu'un `#fff` écrit en dur casse.
+    //
+    // Chaîne de résolution, jeton par jeton, depuis
+    // `config/themes/graphite/graphite-light.yaml` (relecture du
+    // 2026-08-22, round 1 : cinq des dix valeurs posées initialement
+    // étaient inventées, pas relevées — à revérifier ici plutôt qu'à
+    // croire sur parole) :
+    //   --secondary-background-color : l.245 → token-color-background-secondary (l.64)
+    //   --secondary-text-color       : l.211 → token-color-text-secondary (l.57)
+    //   --divider-color              : l.230 → token-color-background-divider (l.71)
+    //                                   → token-color-background-sidebar (l.65)
+    //                                   → token-color-background-base (l.63)
+    //   --error-color                : l.240 → token-color-feedback-error (l.50)
+    //   --warning-color              : l.239 → token-color-feedback-warning (l.49)
+    // Les cinq autres variables (background, card, primary-text,
+    // text-primary, primary) étaient déjà correctes et n'ont pas bougé.
+    //
+    // `--error-color` de Graphite est un ROSE PÂLE (`rgb(234, 114, 135)`),
+    // son `--warning-color` un JAUNE PÂLE (`rgb(255, 219, 117)`) : du texte
+    // blanc posé dessus tombe à 2,89:1. C'est un défaut RÉEL du panneau
+    // (tâche 6 le corrigera) — le harnais doit désormais le voir, pas le
+    // masquer derrière un rouge/orange Material inventés.
+    nom: 'Graphite clair (en service)',
+    variables: {
+      '--primary-background-color': 'rgb(234, 235, 238)',
+      '--secondary-background-color': 'rgb(245, 245, 245)',
+      '--card-background-color': 'rgb(255, 255, 255)',
+      '--primary-text-color': 'rgb(19, 21, 54)',
+      '--secondary-text-color': 'rgba(19, 21, 54, 0.96)',
+      '--primary-color': 'rgb(238, 147, 0)',
+      '--text-primary-color': 'rgb(19, 21, 54)',
+      '--divider-color': 'rgb(234, 235, 238)',
+      '--error-color': 'rgb(234, 114, 135)',
+      '--warning-color': 'rgb(255, 219, 117)',
+    },
+  },
+  {
+    // LA PALETTE QUI FALSIFIE. Les trois ci-dessus ont toutes une primaire
+    // CLAIRE, donc toutes veulent le texte sombre — c'est-à-dire exactement
+    // le repli de `tokens.ts`. Neutraliser `on-color.ts` entièrement les
+    // laissait donc toutes les trois vertes : le balayage ne mesurait rien du
+    // calcul, seulement son repli (relecture du 2026-08-22).
+    //
+    // Celle-ci a une primaire FONCÉE, et c'est le seul point qui compte :
+    //   #1a237e (Material Indigo 900, une primaire de thème parfaitement
+    //   ordinaire) contre le repli sombre #141414 → 1,39:1, très loin des
+    //   4,5:1 exigés ; contre le blanc → 13,24:1.
+    // Le repli est donc FAUX ici, et seule la couleur calculée passe. Casser
+    // `appliquerCouleursDeTexte` fait tomber ce balayage-ci, et lui seul.
+    //
+    // Contrairement aux trois autres, elle n'est relevée nulle part : elle est
+    // CONSTRUITE pour ce contrôle. Ses autres valeurs sont choisies pour ne
+    // rien masquer — texte #14161f à 18:1 sur la carte, secondaire #4a4f63 à
+    // 8,1:1, erreur #b3261e à 6,5:1 : si ce balayage échoue, ce sera sur la
+    // paire accent/texte, pas sur du bruit de palette.
+    nom: 'Primaire foncée (indigo — le repli sombre y est FAUX)',
+    variables: {
+      '--primary-background-color': '#eef0f6',
+      '--secondary-background-color': '#dfe2ee',
+      '--card-background-color': '#ffffff',
+      '--primary-text-color': '#14161f',
+      '--secondary-text-color': '#4a4f63',
+      '--primary-color': '#1a237e',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': 'rgba(20, 22, 31, 0.14)',
+      '--error-color': '#b3261e',
+      '--warning-color': '#ffb300',
+    },
+  },
+];
+
+function themeCss(palette) {
+  const lignes = Object.entries(palette.variables)
+    .map(([nom, valeur]) => `    ${nom}: ${valeur};`).join('\n');
+  return `
   :root {
-    --primary-background-color: #ffffff;
-    --secondary-background-color: #eeeeee;
-    --primary-text-color: #212121;
-    --secondary-text-color: #5f5f5f;
-    --primary-color: #01579b;
+${lignes}
+    /* HA impose sa police sur le document ; sans elle le harnais mesurait
+       du Times New Roman et faisait passer le Planning pour du serif. */
+    --ha-font-family-body: Roboto, Noto, sans-serif;
   }
-  html, body { margin: 0; padding: 0; height: 100%; background: var(--primary-background-color); }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--primary-background-color);
+    font-family: var(--ha-font-family-body);
+  }
   home-stock-panel { display: block; height: 100%; }
 `;
+}
 
-function pageHtml(bundleJs) {
+/** Les éléments `ha-*` que Home Assistant charge avec son chunk Lovelace, en
+ *  version minimale. Sans eux, le harnais et jsdom mesurent TOUJOURS le repli
+ *  des enveloppes, jamais `<ha-card>` ni `<ha-svg-icon>` — c'est-à-dire jamais
+ *  ce que voit l'utilisateur qui arrive depuis Lovelace, soit le cas courant
+ *  (`default_panel: lovelace`). Défini AVANT le bundle : `hs-icon` et
+ *  `hs-card` décident au premier rendu, synchronement. */
+const DEFINIR_HA_MINIMAL = `
+  for (const nom of ['ha-card', 'ha-button', 'ha-svg-icon']) {
+    if (!customElements.get(nom)) {
+      customElements.define(nom, class extends HTMLElement {
+        connectedCallback() {
+          if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = '<slot></slot>';
+        }
+      });
+    }
+  }
+`;
+
+/** Le corps est VIDE : chaque scénario monte son propre `<home-stock-panel>`
+ *  avec son `hass` factice (voir `monterEtMesurer`). Un élément statique
+ *  traînait ici, monté SANS `hass` — il levait donc une TypeError à chaque
+ *  chargement (`new Connexion(undefined)`, puis `actualiserSession`), ce qui
+ *  ne se voyait nulle part tant que rien n'écoutait les erreurs de page.
+ *  Depuis que `ouvrirPage` les écoute, il aurait fallu filtrer cette
+ *  erreur-là — la retirer vaut mieux : rien n'en dépendait, et un filtre est
+ *  toujours une porte par laquelle une VRAIE erreur peut passer. */
+function pageHtml(bundleJs, palette = PALETTES[0], avantLeBundle = '') {
   return `<!doctype html>
 <html><head><meta charset="utf-8">
-<style>${THEME_CSS}</style>
+<style>${themeCss(palette)}</style>
 </head><body>
-<home-stock-panel></home-stock-panel>
+${avantLeBundle ? `<script>${avantLeBundle}</script>` : ''}
 <script type="module">${bundleJs}</script>
 </body></html>`;
 }
 
-/** Sert `html` sur 127.0.0.1, port éphémère — jamais exposé au-delà de la
- *  machine, jamais un vrai réseau. Nécessaire : `page.setContent()`
- *  produit un document d'origine opaque où `window.localStorage` lève une
- *  `SecurityError` à la simple lecture de la propriété, ce qui fait
- *  échouer `connectedCallback()` du panneau AVANT même qu'il construise sa
- *  `FileAttente` — silencieusement, puisque c'est une exception non
- *  interceptée dans un cycle de vie Lit, jamais rapportée comme un défaut
- *  de rendu. Une vraie origine `http://127.0.0.1` n'a pas ce problème. */
-async function servirPageStatique(html) {
-  const serveur = createServer((_requete, reponse) => {
+/** Sert `pagesParChemin` (un objet `{chemin: html}`) sur 127.0.0.1, port
+ *  éphémère — jamais exposé au-delà de la machine, jamais un vrai réseau.
+ *  Une seule page ne suffit plus depuis le balayage multi-palettes : `'/'`
+ *  reste la palette par défaut (compat de tout ce qui n'en connaît qu'une),
+ *  les chemins supplémentaires (`/p1`, `/p2`…) portent les autres. Route sur
+ *  `requete.url`, avec repli sur `'/'` pour tout chemin inconnu — il suffit
+ *  d'ajouter une entrée au dictionnaire pour servir une page de plus.
+ *
+ *  Nécessaire : `page.setContent()` produit un document d'origine opaque où
+ *  `window.localStorage` lève une `SecurityError` à la simple lecture de la
+ *  propriété, ce qui fait échouer `connectedCallback()` du panneau AVANT
+ *  même qu'il construise sa `FileAttente` — silencieusement, puisque c'est
+ *  une exception non interceptée dans un cycle de vie Lit, jamais rapportée
+ *  comme un défaut de rendu. Une vraie origine `http://127.0.0.1` n'a pas ce
+ *  problème. */
+async function servirPagesStatiques(pagesParChemin) {
+  const serveur = createServer((requete, reponse) => {
+    const html = pagesParChemin[requete.url] ?? pagesParChemin['/'];
     reponse.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     reponse.end(html);
   });
@@ -724,6 +911,13 @@ const SCENARIOS = [
     },
     actions: [{ type: 'dispatch-code-lu', code: '3229820129488' }],
     ecranAttendu: 'home-stock-fiche',
+    // La caméra garde l'essentiel : pas de barre de navigation. Mais la fiche
+    // n'est plus un cul-de-sac — `/item/<code>` est une URL partageable et la
+    // cible de « Quitter quand même », donc l'en-tête y rend son bouton de
+    // retour. C'est cette SORTIE qu'on exige ici, mesurée pour de vrai : sans
+    // elle, on entre sur cet écran sans plus pouvoir en sortir.
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
+    elementAbsent: { enfant: null, selector: 'hs-nav-bar' },
   },
   {
     nom: 'Panier (plusieurs lignes, plusieurs rayons)',
@@ -732,7 +926,7 @@ const SCENARIOS = [
         'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', LIGNES_PANIER),
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Panier' }],
+    actions: [{ type: 'route', path: '/cart' }],
     ecranAttendu: 'home-stock-panier',
   },
   {
@@ -743,7 +937,7 @@ const SCENARIOS = [
         'home_stock/locations/list': { locations: EMPLACEMENTS },
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Ranger' }],
+    actions: [{ type: 'route', path: '/put-away' }],
     ecranAttendu: 'home-stock-rangement',
   },
   {
@@ -754,7 +948,7 @@ const SCENARIOS = [
         'home_stock/stores/list': { stores: MAGASINS },
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Courses' }],
+    actions: [{ type: 'route', path: '/shopping' }],
     ecranAttendu: 'home-stock-session',
     elementAttendu: { enfant: 'home-stock-session', selector: '.ouvrir-session' },
   },
@@ -767,7 +961,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Courses' },
+      { type: 'route', path: '/shopping' },
       { type: 'click-in-child', enfant: 'home-stock-session', selector: '.clore-session' },
     ],
     ecranAttendu: 'home-stock-session',
@@ -788,7 +982,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Catalogue' },
+      { type: 'click-nav', ecran: 'catalogue' },
       { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
     ],
     ecranAttendu: 'home-stock-catalogue',
@@ -808,7 +1002,7 @@ const SCENARIOS = [
       service: { 'home_stock.resync_off': {} },
     },
     actions: [
-      { type: 'click-nav', texte: 'Réglages' },
+      { type: 'route', path: '/settings' },
       { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.resynchroniser' },
     ],
     ecranAttendu: 'home-stock-reglages',
@@ -829,7 +1023,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Réglages' },
+      { type: 'route', path: '/settings' },
       { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.controler' },
     ],
     ecranAttendu: 'home-stock-reglages',
@@ -854,7 +1048,9 @@ const SCENARIOS = [
     // l'écran avant même de connaître le sort de l'écriture) — la bannière,
     // elle, est posée par le panneau lui-même, hors de tout enfant.
     ecranAttendu: 'home-stock-scanner',
-    elementAttendu: { enfant: null, selector: '.erreur-file' },
+    // La bannière a déménagé dans `<hs-header>` (Task 10) : même message du
+    // serveur, un cran plus bas dans l'arbre.
+    elementAttendu: { enfant: 'hs-header', selector: '.erreur' },
   },
   {
     nom: 'Manger (produit au gramme, portion apprise, partage ouvert)',
@@ -868,8 +1064,8 @@ const SCENARIOS = [
         },
       },
     },
-    // Pas de `click-nav` ici : « manger » n'est pas une destination de la
-    // barre de navigation, il s'ouvre sur un produit désigné (tâche 15). Le
+    // Pas de navigation ici : « manger » n'a ni bouton de famille ni URL
+    // sans identifiant, il s'ouvre sur un produit désigné (tâche 15). Le
     // brief décrivait un type d'action `click` inexistant — corrigé en
     // `click-in-child`, le vocabulaire déjà utilisé pour cliquer dans un
     // écran monté sous le panneau (voir Catalogue et Réglages ci-dessus).
@@ -889,14 +1085,14 @@ const SCENARIOS = [
         'home_stock/journal/series': SERIE_QUATORZE_JOURS,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    actions: [{ type: 'route', path: '/log' }],
     ecranAttendu: 'home-stock-journal',
   },
   {
     nom: 'Recettes (liste dense, badges à relire et non appariés)',
     fixture: { reponses: { 'home_stock/session/current': null,
                            'home_stock/recipes/list': RECETTES_DENSES } },
-    actions: [{ type: 'click-nav', texte: 'Recettes' }],
+    actions: [{ type: 'route', path: '/recipes' }],
     ecranAttendu: 'home-stock-recettes',
   },
   {
@@ -917,7 +1113,7 @@ const SCENARIOS = [
     nom: 'Planning (semaine chargée)',
     fixture: { reponses: { 'home_stock/session/current': null,
                            'home_stock/meals/list': SEMAINE_CHARGEE } },
-    actions: [{ type: 'click-nav', texte: 'Planning' }],
+    actions: [{ type: 'click-nav', ecran: 'planning' }],
     ecranAttendu: 'home-stock-planning',
   },
   {
@@ -940,7 +1136,7 @@ const SCENARIOS = [
         'home_stock/batteries/discover': PILES_A_DECLARER,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Piles' }],
+    actions: [{ type: 'click-nav', ecran: 'piles' }],
     ecranAttendu: 'home-stock-piles',
   },
   {
@@ -959,7 +1155,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Piles' },
+      { type: 'click-nav', ecran: 'piles' },
       { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.pile' },
       { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.evenement' },
     ],
@@ -976,7 +1172,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Équipements' },
+      { type: 'route', path: '/equipment' },
       { type: 'click-in-child', enfant: 'home-stock-equipements', selector: '.equipement' },
     ],
     ecranAttendu: 'home-stock-equipements',
@@ -990,7 +1186,7 @@ const SCENARIOS = [
         'home_stock/list/items': LISTE_CHARGEE,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Liste' }],
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
     ecranAttendu: 'home-stock-liste',
     elementAttendu: { enfant: 'home-stock-liste', selector: '.cochees' },
   },
@@ -1047,9 +1243,134 @@ const SCENARIOS = [
         'home_stock/journal/series': SERIE_QUATORZE_JOURS,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    actions: [{ type: 'route', path: '/log' }],
     ecranAttendu: 'home-stock-journal',
     elementAttendu: { enfant: 'home-stock-journal', selector: '.objectif-semaine' },
+  },
+  // --- lot 7 : la coquille elle-même ---------------------------------------
+  //
+  // Trois choses qu'aucun écran ne peut prouver à sa place : la barre en bas,
+  // l'en-tête qui sait quand il n'y a nulle part où remonter, et la pastille.
+  {
+    nom: 'Coquille : barre basse, en-tête sans retour (racine)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
+    ecranAttendu: 'home-stock-liste',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.destination.active' },
+    // Une racine n'a nulle part où remonter : pas de bouton Retour. Sans ce
+    // contrôle en négatif, un en-tête qui en afficherait toujours un
+    // passerait pour irréprochable.
+    elementAbsent: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    nom: 'Coquille : en-tête avec retour (sous-écran)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/journal/day': JOURNEE_CHARGEE,
+        'home_stock/journal/series': SERIE_QUATORZE_JOURS,
+      },
+    },
+    actions: [{ type: 'route', path: '/log' }],
+    ecranAttendu: 'home-stock-journal',
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    // La surcouche de confirmation n'était mesurée par RIEN : ni sa cible
+    // tactile, ni son contraste, ni son débordement. Et `ecranAttendu` vaut
+    // ici `home-stock-rangement` : c'est la preuve, dans un vrai navigateur,
+    // que la confirmation se pose PAR-DESSUS l'écran sans le démonter — donc
+    // que « Rester ici » ne jette pas les emplacements déjà saisis.
+    nom: 'Coquille : confirmation de départ, en surcouche du rangement',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/lookup': RESULTAT_LOOKUP_CONNU,
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '1234567890123' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018,
+        mode: 'rangement', offDroppedFields: [],
+      } },
+      { type: 'click-nav', ecran: 'liste' },
+    ],
+    ecranAttendu: 'home-stock-rangement',
+    elementAttendu: { enfant: null, selector: '.confirmation-quitter-rangement' },
+  },
+  {
+    // Le chemin le plus probable, et celui qui a régressé : l'historique est
+    // /scan → /item/<code> → /put-away, donc un Retour depuis le rangement
+    // vise la fiche de l'article qu'on vient de rapporter. Confirmer doit
+    // rejouer la route ENTIÈRE, paramètre compris — sans le `lookup`, le
+    // panneau tombait sur le scanner sans barre ni en-tête, sous une URL
+    // d'article : aucun bouton pour sortir. `ecranAttendu` le prouve ici dans
+    // un vrai navigateur, puisque la fiche ne se monte qu'avec son résultat.
+    nom: 'Coquille : départ confirmé vers un écran paramétré (/item/<code>)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/lookup': RESULTAT_LOOKUP_INCONNU,
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '3229820129488' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018,
+        mode: 'rangement', offDroppedFields: [],
+      } },
+      { type: 'route', path: '/item/3229820129488' },
+      { type: 'click-in-child', enfant: null, selector: '.confirmer-quitter' },
+    ],
+    ecranAttendu: 'home-stock-fiche',
+    // Le cas qui a motivé F6 : on ARRIVE ici par « Quitter quand même », sans
+    // être passé par le scanner. Pas de barre — mais la ligne secondaire de
+    // l'en-tête est masquée elle aussi (`compact`), la caméra garde l'écran.
+    elementAbsent: { enfant: 'hs-header', selector: '.sous-nav' },
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    nom: 'Coquille : pastille de compte sur Courses',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', LIGNES_PANIER),
+      },
+    },
+    actions: [],
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.badge' },
+  },
+  // --- lot 16 : la sous-navigation de famille (Task 16) ---------------------
+  //
+  // Réglages n'avait plus aucun point d'entrée dans l'application : ce
+  // scénario prouve que la ligne secondaire de l'en-tête l'y ramène, avec sa
+  // marque d'actif. La famille Courses (cinq écrans, la plus fournie) est
+  // déjà rendue par « Coquille : barre basse, en-tête sans retour (racine) »
+  // ci-dessus — les mesures de cible tactile et de débordement, communes à
+  // tout scénario, y couvrent donc déjà les cinq boutons sur 412 px : la
+  // ligne a `flex-wrap`, elle passe à la ligne plutôt que de rétrécir sous
+  // 62 px.
+  {
+    nom: 'Coquille : ligne secondaire de la famille Maison, Réglages actif',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+      },
+    },
+    actions: [{ type: 'route', path: '/settings' }],
+    ecranAttendu: 'home-stock-reglages',
+    elementAttendu: { enfant: 'hs-header', selector: '.sous-lien.actif' },
   },
 ];
 
@@ -1058,7 +1379,7 @@ const SCENARIOS = [
 // Playwright sérialise cette fonction telle quelle et l'exécute dans le
 // navigateur : elle ne doit fermer sur rien d'extérieur, seulement sur son
 // argument.
-async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, ecranAttendu = null, elementAttendu = null, sansScannerNatif = false }) {
+async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, racineCassure = null, ecranAttendu = null, elementAttendu = null, elementAbsent = null, sansScannerNatif = false }) {
   function attendre(ms) { return new Promise((resolve) => { setTimeout(resolve, ms); }); }
 
   function reponsePour(msg) {
@@ -1104,24 +1425,50 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   // (chaque composant Lit encapsule la sienne), donc une régression réelle
   // dans un composant ne se laisserait jamais casser depuis l'extérieur de
   // cette façon-là — il faut viser le même shadow root que celui qui sera mesuré.
+  // `racineCassure` : depuis la coquille (Task 11), les boutons de navigation
+  // vivent dans le shadow root de `<hs-nav-bar>`, pas dans celui du panneau —
+  // et une feuille posée dans le second ne franchit pas la frontière du
+  // premier. Viser le bon shadow root est la condition pour que la cassure
+  // porte vraiment sur ce qui sera mesuré.
+  function racineDe(selecteur) {
+    if (!selecteur) return panneau.shadowRoot;
+    const hote = panneau.shadowRoot.querySelector(selecteur);
+    return hote && hote.shadowRoot ? hote.shadowRoot : null;
+  }
+
   if (styleCasse) {
     await attendre(0);
     await panneau.updateComplete;
-    const style = document.createElement('style');
-    style.textContent = styleCasse;
-    panneau.shadowRoot.appendChild(style);
+    const racine = racineDe(racineCassure);
+    if (racine) {
+      const hote = racineCassure ? panneau.shadowRoot.querySelector(racineCassure) : null;
+      if (hote && hote.updateComplete) await hote.updateComplete;
+      const style = document.createElement('style');
+      style.textContent = styleCasse;
+      racine.appendChild(style);
+    }
   }
 
   async function reglerAttente() {
     await panneau.updateComplete;
-    const enfants = ['home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
-      'home-stock-rangement', 'home-stock-catalogue', 'home-stock-reglages',
-      'home-stock-consommation', 'home-stock-journal',
+    // La coquille d'abord (elle décide de la mise en page), puis l'écran. Les
+    // dix-sept écrans y sont, pas douze : un écran oublié se mesurait à
+    // moitié peint.
+    const enfants = ['hs-nav-bar', 'hs-header',
+      'home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
+      'home-stock-rangement', 'home-stock-session', 'home-stock-catalogue',
+      'home-stock-reglages', 'home-stock-consommation', 'home-stock-journal',
       'home-stock-recettes', 'home-stock-recette', 'home-stock-validation',
-      'home-stock-planning'];
+      'home-stock-planning', 'home-stock-piles', 'home-stock-equipements',
+      'home-stock-liste', 'home-stock-ticket'];
     for (const nom of enfants) {
       const enfant = panneau.shadowRoot.querySelector(nom);
       if (enfant && enfant.updateComplete) await enfant.updateComplete;
+      if (enfant && enfant.shadowRoot) {
+        for (const petit of enfant.shadowRoot.querySelectorAll('hs-icon, hs-card, hs-button')) {
+          if (petit.updateComplete) await petit.updateComplete;
+        }
+      }
     }
   }
 
@@ -1130,16 +1477,24 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   await attendre(20);
   await reglerAttente();
 
-  function boutonNav(texte) {
-    const boutons = panneau.shadowRoot.querySelectorAll('.nav-bouton');
-    for (const b of boutons) if (b.textContent && b.textContent.includes(texte)) return b;
-    return null;
+  // Un bouton de FAMILLE, dans la barre de la coquille. Rend `null` quand il
+  // n'existe pas — un no-op silencieux, exactement comme avant : c'est le
+  // contrôle « écran jamais atteint » plus bas qui doit l'attraper, et
+  // l'auto-vérification en fait la preuve à chaque exécution.
+  function boutonFamille(famille) {
+    const barre = panneau.shadowRoot.querySelector('hs-nav-bar');
+    if (!barre || !barre.shadowRoot) return null;
+    return barre.shadowRoot.querySelector(`[data-family="${famille}"]`);
   }
 
   for (const action of actions) {
     if (action.type === 'click-nav') {
-      const bouton = boutonNav(action.texte);
+      const bouton = boutonFamille(action.famille);
       if (bouton) bouton.click();
+    } else if (action.type === 'route') {
+      // Ce que Home Assistant repasse au panneau quand l'URL change — donc
+      // aussi ce que fait le bouton Retour du navigateur.
+      panneau.route = { prefix: '/home-stock', path: action.path };
     } else if (action.type === 'dispatch-code-lu') {
       const scanner = panneau.shadowRoot.querySelector('home-stock-scanner');
       if (scanner) {
@@ -1165,9 +1520,13 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
         detail: action.detail, bubbles: true, composed: true,
       }));
     } else if (action.type === 'click-in-child') {
-      const enfant = panneau.shadowRoot.querySelector(action.enfant);
-      if (enfant && enfant.shadowRoot) {
-        const cible = enfant.shadowRoot.querySelector(action.selector);
+      // `enfant: null` vise le shadow root du panneau lui-même — la coquille
+      // y pose ses propres boutons (la confirmation de départ), et rien ne
+      // pouvait les cliquer jusqu'ici. Même chaîne de shadow roots que pour
+      // `elementAttendu`.
+      const racine = racineEnfant(action.enfant ?? null);
+      if (racine) {
+        const cible = racine.querySelector(action.selector);
         if (cible) cible.click();
       }
     }
@@ -1195,20 +1554,49 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   if (ecranAttendu && !panneau.shadowRoot.querySelector(ecranAttendu)) {
     ecranManquant = ecranAttendu;
   }
+  // `enfant` accepte une CHAÎNE de shadow roots (« hs-nav-bar hs-icon ») :
+  // depuis la coquille, ce qui compte peut vivre à trois niveaux de
+  // profondeur — `<ha-svg-icon>` dans `<hs-icon>` dans `<hs-nav-bar>`.
+  function racineEnfant(chemin) {
+    let racine = panneau.shadowRoot;
+    if (!chemin) return racine;
+    for (const nom of chemin.trim().split(/\s+/)) {
+      const hote = racine.querySelector(nom);
+      if (!hote || !hote.shadowRoot) return null;
+      racine = hote.shadowRoot;
+    }
+    return racine;
+  }
+
   let elementManquant = null;
   if (elementAttendu) {
-    const racine = elementAttendu.enfant
-      ? panneau.shadowRoot.querySelector(elementAttendu.enfant)?.shadowRoot
-      : panneau.shadowRoot;
+    const racine = racineEnfant(elementAttendu.enfant);
     if (!racine || !racine.querySelector(elementAttendu.selector)) {
       elementManquant = `${elementAttendu.enfant ?? '<home-stock-panel>'} ${elementAttendu.selector}`;
+    }
+  }
+  // L'inverse : ce qui ne DOIT PAS être là. « L'en-tête d'une racine n'a pas
+  // de bouton Retour » ne se prouve pas autrement — et un scénario qui ne
+  // prouve rien vaut mieux supprimé qu'affiché en vert.
+  let elementEnTrop = null;
+  if (elementAbsent) {
+    const racine = racineEnfant(elementAbsent.enfant);
+    if (racine && racine.querySelector(elementAbsent.selector)) {
+      elementEnTrop = `${elementAbsent.enfant ?? '<home-stock-panel>'} ${elementAbsent.selector}`;
     }
   }
 
   // --- mesures -----------------------------------------------------------
 
+  // Le document ne déborde plus tout seul depuis la coquille : `.contenu`
+  // porte `overflow-y: auto`, et le CSS force alors `overflow-x` de `visible`
+  // à `auto` — un écran trop large y gagne une barre de défilement au lieu de
+  // pousser la page. Sans la mesure ci-dessous, le contrôle de débordement
+  // serait devenu inerte sur les dix-sept écrans d'un coup.
+  const contenu = panneau.shadowRoot.querySelector('.contenu');
   const debordement = document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-    || document.body.scrollWidth > document.body.clientWidth + 1;
+    || document.body.scrollWidth > document.body.clientWidth + 1
+    || Boolean(contenu && contenu.scrollWidth > contenu.clientWidth + 1);
 
   function tousLesElements() {
     const resultat = [];
@@ -1313,20 +1701,28 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   }
 
   // Une troncature suppose un conteneur qui masque réellement le
-  // débordement (overflow ≠ visible) : un élément `overflow: visible` ne
-  // tronque jamais rien, il déborde dans le flux — ce que le test de
-  // débordement ci-dessus couvre déjà séparément.
+  // débordement SANS offrir de moyen de le voir : `overflow: visible` ne
+  // tronque jamais rien (déborde dans le flux, couvert par le test de
+  // débordement ci-dessus) — et `auto`/`scroll` non plus : le contenu qui
+  // dépasse `clientWidth` y reste entièrement accessible par défilement,
+  // c'est un choix délibéré, pas une perte. Round de correction 1 (Task 6) :
+  // seuls `hidden` et `clip` masquent réellement quelque chose sans recours,
+  // donc seuls eux comptent comme troncature. Avant cette correction, tout
+  // `overflow-x: auto` scrollable était signalé à tort — c'est ce faux
+  // positif qui avait fait écarter une colonne de graphique défilable au
+  // profit d'un `flex-wrap` qui, lui, étalait des barres orphelines.
   const texteTronque = [];
   for (const el of elements) {
     if (el.tagName === 'OPTION' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
     const style = getComputedStyle(el);
-    if (style.overflowX === 'visible') continue;
+    if (style.overflowX !== 'hidden' && style.overflowX !== 'clip') continue;
     if (el.scrollWidth > el.clientWidth + 1) {
       texteTronque.push({ element: decrire(el) });
     }
   }
 
-  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque, ecranManquant, elementManquant };
+  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque,
+           ecranManquant, elementManquant, elementEnTrop };
 }
 
 // --- orchestration -----------------------------------------------------------
@@ -1341,6 +1737,9 @@ function formaterDefauts(resultat) {
     lignes.push(`  - Élément attendu absent : ${resultat.elementManquant} — l'action censée le produire `
       + 'n’a apparemment pas eu lieu.');
   }
+  if (resultat.elementEnTrop) {
+    lignes.push(`  - Élément qui ne devrait pas être là : ${resultat.elementEnTrop}.`);
+  }
   if (resultat.debordement) lignes.push('  - Débordement horizontal de la page.');
   for (const c of resultat.ciblesTropPetites) {
     lignes.push(`  - Cible tactile trop petite (${c.largeur}×${c.hauteur}px) : ${c.element}`);
@@ -1351,13 +1750,39 @@ function formaterDefauts(resultat) {
   for (const t of resultat.texteTronque) {
     lignes.push(`  - Texte tronqué : ${t.element}`);
   }
+  for (const e of resultat.erreursPage ?? []) {
+    lignes.push(`  - Erreur d'exécution de la page : ${e}`);
+  }
   return lignes;
 }
 
 function aDesDefauts(resultat) {
-  return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant) || resultat.debordement
+  return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant)
+    || Boolean(resultat.elementEnTrop) || resultat.debordement
     || resultat.ciblesTropPetites.length > 0 || resultat.contrasteInsuffisant.length > 0
-    || resultat.texteTronque.length > 0;
+    || resultat.texteTronque.length > 0 || (resultat.erreursPage ?? []).length > 0;
+}
+
+/** Ouvre une page sur `url`, EN ÉCOUTANT ce qu'elle jette.
+ *
+ *  Une exception non interceptée dans un cycle de vie Lit (un `updated()` qui
+ *  lève, une promesse de chargement rejetée, un `undefined.machin` dans un
+ *  `render`) ne casse aucune mise en page : l'écran s'arrête simplement de se
+ *  peindre, et les cent scénarios mesurent ce qu'il en reste sans rien
+ *  signaler. C'était le trou : une vraie panne d'exécution du panneau passait
+ *  inaperçue sur la totalité du balayage.
+ *
+ *  `erreursPage` est le tableau vivant que le scénario relèvera après sa
+ *  mesure. Aucun filtre : la page ne monte plus rien d'elle-même (voir
+ *  `pageHtml`), donc tout ce qui en sort vient du panneau mesuré. */
+async function ouvrirPage(navigateur, url, viewport) {
+  const contexte = await navigateur.newContext({ viewport });
+  const page = await contexte.newPage();
+  const erreursPage = [];
+  page.on('pageerror', (erreur) => { erreursPage.push(erreur.message || String(erreur)); });
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+  return { contexte, page, erreursPage };
 }
 
 async function lancerNavigateur() {
@@ -1371,23 +1796,25 @@ async function lancerNavigateur() {
   }
 }
 
-async function executerScenarios(navigateur, urlHarnais) {
+async function executerScenarios(navigateur, urlHarnais, familleParEcran) {
   let fautes = 0;
   let total = 0;
   for (const format of FORMATS) {
     console.log(`\n=== ${format.nom} ===`);
     for (const scenario of SCENARIOS) {
       total += 1;
-      const contexte = await navigateur.newContext({ viewport: { width: format.width, height: format.height } });
-      const page = await contexte.newPage();
-      await page.goto(urlHarnais, { waitUntil: 'load' });
-      await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+      const { contexte, page, erreursPage } = await ouvrirPage(
+        navigateur, urlHarnais, { width: format.width, height: format.height });
       const resultat = await page.evaluate(monterEtMesurer, {
-        fixture: scenario.fixture, actions: scenario.actions,
+        fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
         ecranAttendu: scenario.ecranAttendu ?? null, elementAttendu: scenario.elementAttendu ?? null,
+        elementAbsent: scenario.elementAbsent ?? null,
         sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
+      // Ce que la page a jeté pendant la mesure compte comme un défaut du
+      // scénario, au même titre qu'un débordement.
+      resultat.erreursPage = erreursPage;
       await contexte.close();
 
       if (aDesDefauts(resultat)) {
@@ -1433,7 +1860,7 @@ const SCENARIOS_LARGES = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Catalogue' },
+      { type: 'click-nav', ecran: 'catalogue' },
       { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
     ],
     ecranAttendu: 'home-stock-catalogue',
@@ -1442,25 +1869,43 @@ const SCENARIOS_LARGES = [
     // contrôle-ci sans elle.
     elementAttendu: { enfant: 'home-stock-catalogue', selector: '.dense .volet-edition' },
   },
+  {
+    // La coquille bascule en rail à gauche au-delà de 1000 px. C'est le seul
+    // format où ça se mesure, et le seul endroit où `flex-direction: row`
+    // remplace `column-reverse` sans que l'ordre du DOM ne bouge.
+    nom: 'Coquille : rail à gauche, en-tête et contenu à droite',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/products/list': { products: PRODUITS_CATALOGUE },
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/batches/list': { batches: LOTS_CATALOGUE },
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'catalogue' }],
+    ecranAttendu: 'home-stock-catalogue',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.barre.rail' },
+  },
 ];
 
-async function executerScenariosLarges(navigateur, urlHarnais) {
+async function executerScenariosLarges(navigateur, urlHarnais, familleParEcran) {
   console.log(`\n=== Vue dense (${FORMAT_LARGE.nom}) ===`);
   let fautes = 0;
   for (const scenario of SCENARIOS_LARGES) {
-    const contexte = await navigateur.newContext({
-      viewport: { width: FORMAT_LARGE.width, height: FORMAT_LARGE.height },
-    });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(
+      navigateur, urlHarnais, { width: FORMAT_LARGE.width, height: FORMAT_LARGE.height });
     const resultat = await page.evaluate(monterEtMesurer, {
-      fixture: scenario.fixture, actions: scenario.actions,
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
       ecranAttendu: scenario.ecranAttendu ?? null,
       elementAttendu: scenario.elementAttendu ?? null,
+      elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif ?? false,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     if (aDesDefauts(resultat)) {
@@ -1472,6 +1917,51 @@ async function executerScenariosLarges(navigateur, urlHarnais) {
     }
   }
   return fautes;
+}
+
+// Trois scénarios représentatifs seulement : la suite complète × 4 palettes
+// × 3 formats ferait près de trois cents mesures pour un gain marginal. Ce qui
+// compte ici, c'est qu'aucune des autres palettes ne soit JAMAIS mesurée — pas
+// qu'elles le soient partout. Les trois scénarios retenus couvrent chacun un
+// aplat --hs-accent (le bouton de scan pour deux d'entre eux, la ligne active
+// de l'en-tête et les actions de la liste pour le troisième), sans quoi la
+// palette à primaire foncée ne prouverait rien.
+const NOMS_BALAYAGE = [
+  'Scanner (écran par défaut)',
+  'Liste (quatre rayons, deux origines, trois cochées repliées)',
+  'Bannière de refus (écriture rejetée par le serveur)',
+];
+
+async function executerBalayagePalettes(navigateur, urlsParPalette, familleParEcran) {
+  let fautes = 0;
+  let total = 0;
+  for (let i = 1; i < PALETTES.length; i += 1) {
+    console.log(`\n=== Balayage : ${PALETTES[i].nom} ===`);
+    for (const scenario of SCENARIOS.filter((s) => NOMS_BALAYAGE.includes(s.nom))) {
+      total += 1;
+      const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlsParPalette[i], { width: 412, height: 915 });
+      const resultat = await page.evaluate(monterEtMesurer, {
+        fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
+        cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+        ecranAttendu: scenario.ecranAttendu ?? null,
+        elementAttendu: scenario.elementAttendu ?? null,
+        elementAbsent: scenario.elementAbsent ?? null,
+        sansScannerNatif: scenario.sansScannerNatif ?? false,
+      });
+      // Ce que la page a jeté pendant la mesure compte comme un défaut du
+      // scénario, au même titre qu'un débordement.
+      resultat.erreursPage = erreursPage;
+      await contexte.close();
+      if (aDesDefauts(resultat)) {
+        fautes += 1;
+        console.log(`  ✗ ${scenario.nom}`);
+        for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+      } else {
+        console.log(`  ✓ ${scenario.nom}`);
+      }
+    }
+  }
+  return { fautes, total };
 }
 
 const SCENARIOS_MINIFIES = [
@@ -1521,20 +2011,93 @@ const SCENARIOS_MINIFIES = [
   },
 ];
 
-async function verifierBundleMinifie(navigateur, urlMinifie) {
+async function verifierBundleMinifie(navigateur, urlMinifie, familleParEcran) {
   console.log('\n=== Bundle minifié (celui qui part en production) ===');
   let fautes = 0;
   for (const scenario of SCENARIOS_MINIFIES) {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlMinifie, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlMinifie, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
-      fixture: scenario.fixture, actions: scenario.actions,
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
       ecranAttendu: scenario.ecranAttendu, elementAttendu: scenario.elementAttendu,
+      elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
+    await contexte.close();
+
+    if (aDesDefauts(resultat)) {
+      fautes += 1;
+      console.log(`  ✗ ${scenario.nom}`);
+      for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+    } else {
+      console.log(`  ✓ ${scenario.nom}`);
+    }
+  }
+  return fautes;
+}
+
+// --- ce que voit celui qui arrive depuis Lovelace ---------------------------
+//
+// Servis par la page `/ha`, où `DEFINIR_HA_MINIMAL` enregistre `ha-card`,
+// `ha-button` et `ha-svg-icon` AVANT le bundle. Partout ailleurs, le harnais
+// mesure le repli des enveloppes — le cas de la tablette de la cuisine, qui
+// ouvre `/home-stock` directement. Les deux chemins existent en production ;
+// un seul était mesuré.
+const SCENARIOS_HA_CHARGE = [
+  {
+    nom: 'Coquille servie par Lovelace (ha-svg-icon rendu, pas le repli)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
+    ecranAttendu: 'home-stock-liste',
+    // La preuve que c'est bien la branche `<ha-svg-icon>` de `hs-icon` qui
+    // est rendue : sans elle, ce scénario mesurerait le même repli que les
+    // autres et ne prouverait rien de plus.
+    elementAttendu: { enfant: 'hs-nav-bar hs-icon', selector: 'ha-svg-icon' },
+  },
+  {
+    nom: 'En-tête servi par Lovelace : refus du serveur, icônes HA',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', []),
+        'home_stock/lookup': RESULTAT_LOOKUP_CONNU,
+        'home_stock/session/add_line': { __erreur: { code: 'shopping_refused', message: 'Cette ligne est déjà rangée.' } },
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '1234567890123' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018, mode: 'panier', offDroppedFields: [],
+      } },
+    ],
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: 'hs-header hs-icon', selector: 'ha-svg-icon' },
+  },
+];
+
+async function executerScenariosHaCharge(navigateur, urlHa, familleParEcran) {
+  console.log('\n=== Éléments Home Assistant chargés (arrivée depuis Lovelace) ===');
+  let fautes = 0;
+  for (const scenario of SCENARIOS_HA_CHARGE) {
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHa, { width: 412, height: 915 });
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      ecranAttendu: scenario.ecranAttendu ?? null,
+      elementAttendu: scenario.elementAttendu ?? null,
+      elementAbsent: scenario.elementAbsent ?? null,
+      sansScannerNatif: scenario.sansScannerNatif ?? false,
+    });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     if (aDesDefauts(resultat)) {
@@ -1553,15 +2116,22 @@ async function verifierBundleMinifie(navigateur, urlMinifie) {
 // Casse volontairement une chose par catégorie de défaut, sur une page
 // jetable, et vérifie que `monterEtMesurer` la détecte bien — la preuve que
 // « aucun défaut trouvé » ci-dessus signifie quelque chose.
+// `racine` : les boutons de navigation vivent désormais dans le shadow root
+// de `<hs-nav-bar>`, et une feuille posée dans celui du panneau ne les
+// atteint pas. Casser à côté de ce qui sera mesuré, c'est prouver que le
+// vérificateur détecte une régression qu'aucune régression réelle ne
+// produirait — pire que rien.
 const CASSURES = [
   {
-    nom: 'cible tactile réduite sous 48 px',
-    css: '.nav-bouton { min-height: 20px !important; min-width: 20px !important; height: 20px !important; padding: 0 !important; }',
+    nom: 'cible tactile réduite sous 62 px',
+    racine: 'hs-nav-bar',
+    css: '.destination { min-height: 20px !important; min-width: 20px !important; height: 20px !important; padding: 0 !important; }',
     verifie: (r) => r.ciblesTropPetites.length > 0,
   },
   {
     nom: 'contraste texte/fond effondré',
-    css: '.nav-bouton { background: #f5f5f5 !important; color: #f0f0f0 !important; }',
+    racine: 'hs-nav-bar',
+    css: '.destination { background: #f5f5f5 !important; color: #f0f0f0 !important; }',
     verifie: (r) => r.contrasteInsuffisant.length > 0,
   },
   {
@@ -1570,8 +2140,21 @@ const CASSURES = [
     verifie: (r) => r.debordement,
   },
   {
+    // La cassure ci-dessus déborde HORS de la zone défilante, et fait donc
+    // encore grandir le document. Celle-ci déborde DEDANS : depuis la
+    // coquille, `.contenu` porte `overflow-y: auto`, le CSS force alors son
+    // `overflow-x` de `visible` à `auto`, et un écran trop large y gagne une
+    // barre de défilement au lieu de pousser la page — invisible au contrôle
+    // sur le document. C'est la mesure sur `.contenu` qui l'attrape, et
+    // c'est cette cassure-ci qui prouve qu'elle sert.
+    nom: 'débordement DANS la zone de contenu (invisible au document)',
+    css: 'home-stock-scanner { display: block !important; width: 4000px !important; }',
+    verifie: (r) => r.debordement,
+  },
+  {
     nom: 'texte tronqué (ellipsis + overflow hidden)',
-    css: '.nav-bouton { max-width: 24px !important; min-width: 0 !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
+    racine: 'hs-nav-bar',
+    css: '.destination { max-width: 24px !important; min-width: 0 !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
     verifie: (r) => r.texteTronque.length > 0,
   },
 ];
@@ -1580,14 +2163,15 @@ async function autoVerification(navigateur, urlHarnais) {
   console.log('\n=== Auto-vérification : le script sait-il détecter une régression ? ===');
   let toutDetecte = true;
   for (const cassure of CASSURES) {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
-      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, styleCasse: cassure.css,
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      styleCasse: cassure.css, racineCassure: cassure.racine ?? null,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     const detecte = cassure.verifie(resultat);
@@ -1604,20 +2188,53 @@ async function autoVerification(navigateur, urlHarnais) {
   // vraies `actions`), pas une simulation à côté, pour être fidèle à ce
   // qu'un bouton renommé produirait réellement.
   {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } },
-      actions: [{ type: 'click-nav', texte: 'Bouton Introuvable Exprès' }],
+      // Une FAMILLE qui n'existe pas dans la barre : `boutonFamille` rend
+      // `null`, le clic ne part jamais, et l'écran reste celui d'avant sous
+      // le nom d'un autre. (Un ÉCRAN inconnu, lui, lève en Node dans
+      // `preparerActions` — c'est une faute d'écriture, pas une régression.)
+      actions: [{ type: 'click-nav', famille: 'famille-introuvable-expres' }],
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, ecranAttendu: 'home-stock-catalogue',
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     const detecte = resultat.ecranManquant === 'home-stock-catalogue';
     console.log(`  ${detecte ? '✓' : '✗'} un clic de navigation qui ne trouve pas son bouton — `
       + `${detecte ? 'détecté comme écran manquant' : 'NON DÉTECTÉ (bug du vérificateur)'}`);
+    if (!detecte) toutDetecte = false;
+  }
+
+  // Sixième cassure, d'une nature différente elle aussi : une erreur
+  // d'EXÉCUTION de la page. Rien ne l'attrapait jusqu'ici — une exception non
+  // interceptée dans un cycle de vie Lit arrête l'écran de se peindre sans
+  // casser la moindre mesure, et les cent scénarios restaient verts. On en
+  // jette une ASYNCHRONE (la forme que prend une faute dans `updated()` ou
+  // dans une promesse de chargement : elle ne remonte à aucun `await` du
+  // harnais), et on vérifie qu'elle ressort bien comme un défaut du scénario.
+  {
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+    });
+    await page.evaluate(() => {
+      setTimeout(() => { throw new Error('cassure volontaire : erreur de page'); }, 0);
+    });
+    // L'événement `pageerror` arrive après coup : sans cette attente, on
+    // conclurait « non détectée » sur une course, pas sur un défaut.
+    await page.waitForTimeout(200);
+    resultat.erreursPage = erreursPage;
+    await contexte.close();
+
+    const detecte = aDesDefauts(resultat)
+      && resultat.erreursPage.some((m) => m.includes('cassure volontaire'));
+    console.log(`  ${detecte ? '✓' : '✗'} une erreur d'exécution jetée par la page — `
+      + `${detecte ? 'détectée et rapportée comme défaut' : 'NON DÉTECTÉE (bug du vérificateur)'}`);
     if (!detecte) toutDetecte = false;
   }
 
@@ -1647,32 +2264,68 @@ async function main() {
       + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
   }
 
-  // Une seule page servie pour tout le run (127.0.0.1, port éphémère) : le
-  // contenu ne change jamais d'un scénario à l'autre — seul ce qu'on y
+  // Une page par palette servie pour tout le run sur le MÊME serveur
+  // (127.0.0.1, port éphémère) — voir PALETTES : `'/'` reste la
+  // palette par défaut, celle de tout ce qui n'en connaît qu'une (scénarios
+  // ordinaires, vue dense, auto-vérification). Le contenu ne change jamais
+  // d'un scénario à l'autre au sein d'une même page — seul ce qu'on y
   // injecte après coup (fixture, actions, cassure) varie. Voir
-  // `servirPageStatique` pour pourquoi `page.setContent()` seul ne suffit pas.
-  const { url: urlHarnais, fermer: fermerServeur } = await servirPageStatique(pageHtml(bundle));
+  // `servirPagesStatiques` pour pourquoi `page.setContent()` seul ne suffit
+  // pas.
+  const { DESTINATIONS } = await chargerDestinations();
+  const familleParEcran = new Map(DESTINATIONS.map((d) => [d.screen, d.family]));
+
+  // Construit depuis PALETTES, jamais énuméré à la main : une palette ajoutée
+  // sans sa page serait servie par le repli sur `'/'` — donc mesurée sous la
+  // palette par défaut, sous le nom d'une autre. Exactement le genre de
+  // contrôle vert qui ne prouve rien.
+  const pages = { '/': pageHtml(bundle, PALETTES[0]) };
+  for (let i = 1; i < PALETTES.length; i += 1) pages[`/p${i}`] = pageHtml(bundle, PALETTES[i]);
+  // La même page, mais avec les `ha-*` enregistrés avant le bundle : voir
+  // SCENARIOS_HA_CHARGE.
+  pages['/ha'] = pageHtml(bundle, PALETTES[0], DEFINIR_HA_MINIMAL);
+  const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques(pages);
+  const urlsParPalette = PALETTES.map((_, i) => (i === 0 ? urlHarnais : `${urlHarnais}p${i}`));
+  const urlHa = `${urlHarnais}ha`;
   // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
   // celui que `npm run build` déploie réellement. Voir SCENARIOS_MINIFIES.
+  // Ces scénarios-là ne connaissent que la palette par défaut : le bundle
+  // minifié est le même code, la mesure ne dépend pas de la palette.
   const { url: urlMinifie, fermer: fermerServeurMinifie } =
-    await servirPageStatique(pageHtml(bundleMinifie));
+    await servirPagesStatiques({ '/': pageHtml(bundleMinifie, PALETTES[0]) });
 
   const navigateur = await lancerNavigateur();
   try {
-    let { fautes, total } = await executerScenarios(navigateur, urlHarnais);
+    let { fautes, total } = await executerScenarios(navigateur, urlHarnais, familleParEcran);
     // Le compte porte sur des EXÉCUTIONS, pas sur des scénarios : chaque
     // scénario de `SCENARIOS` tourne dans les trois formats. Les scénarios
     // denses, eux, n'en connaissent qu'un — et ils comptent quand même, sans
     // quoi le chiffre affiché mentirait.
-    fautes += await executerScenariosLarges(navigateur, urlHarnais);
+    fautes += await executerScenariosLarges(navigateur, urlHarnais, familleParEcran);
     total += SCENARIOS_LARGES.length;
-    const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie);
+    const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie, familleParEcran);
     fautes += fautesMinifie;
     total += SCENARIOS_MINIFIES.length;
+    // Le chemin réellement servi à qui arrive depuis Lovelace.
+    fautes += await executerScenariosHaCharge(navigateur, urlHa, familleParEcran);
+    total += SCENARIOS_HA_CHARGE.length;
+    // Le balayage : trois scénarios représentatifs, sous toutes les palettes
+    // qu'aucun autre passage ne mesure jamais (voir NOMS_BALAYAGE).
+    const balayage = await executerBalayagePalettes(navigateur, urlsParPalette, familleParEcran);
+    fautes += balayage.fautes;
+    total += balayage.total;
 
+    // Deux variables, pas une : `autoOk` dit si l'auto-vérification a réussi,
+    // `autoVerifie` si elle a seulement TOURNÉ. Avec la seule première,
+    // `--sans-auto-verification` la laissait à `true` par défaut et le script
+    // imprimait quand même qu'elle « confirme » savoir échouer — une garantie
+    // affirmée sans avoir été vérifiée, dans le fichier même dont c'est le
+    // métier de ne pas faire ça.
     let autoOk = true;
+    let autoVerifie = false;
     if (!sansAutoVerification) {
       autoOk = await autoVerification(navigateur, urlHarnais);
+      autoVerifie = true;
     }
 
     console.log(`\n${total - fautes}/${total} scénarios sans défaut.`);
@@ -1682,8 +2335,11 @@ async function main() {
     } else if (!autoOk) {
       console.log('Le vérificateur n’a pas su détecter une régression injectée volontairement : ne pas lui faire confiance.');
       process.exitCode = 1;
-    } else {
+    } else if (autoVerifie) {
       console.log('Aucun défaut signalé, et l’auto-vérification confirme que le script sait échouer quand il le faut.');
+    } else {
+      console.log('Aucun défaut signalé — mais l’auto-vérification n’a PAS tourné '
+        + '(--sans-auto-verification) : rien ici ne prouve que ce script sait échouer.');
     }
   } finally {
     await navigateur.close();

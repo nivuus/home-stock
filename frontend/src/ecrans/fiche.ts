@@ -22,6 +22,7 @@ import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 export type UniteBase = 'g' | 'ml' | 'piece';
 
@@ -560,52 +561,56 @@ export class FicheArticle extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .image { max-width: 100%; max-height: 160px; display: block; margin: 0 auto 8px; border-radius: 8px; }
     .nom { margin: 0; font-size: 1.2rem; }
-    .marque, .poids, .nutriscore, .kcal { margin: 2px 0; color: var(--secondary-text-color); }
+    .marque, .poids, .nutriscore, .kcal { margin: 2px 0; color: var(--hs-text-2); }
+    /* --hs-on-warning est recalculé au montage : l'aplat reste lisible sur
+       les trois palettes mesurées. */
     .alerte-off {
-      background: var(--warning-color, #fff3cd); color: var(--primary-text-color);
+      background: var(--hs-warning); color: var(--hs-on-warning);
       padding: 8px; border-radius: 8px; margin: 8px 0;
     }
-    .candidat { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+    .candidat { display: flex; align-items: center; gap: 8px; min-height: var(--hs-touch); }
     .candidat input { width: 22px; height: 22px; }
     .nom-nouveau, .prix-champ, .poids-champ, .unite-nouveau {
-      min-height: 48px; font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%;
+      min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%;
     }
     .prix { margin: 12px 0; }
-    .prix-provenance { color: var(--secondary-text-color); margin: 0 0 4px; }
-    .prix-detail { color: var(--secondary-text-color); font-size: 0.85rem; }
+    .prix-provenance { color: var(--hs-text-2); margin: 0 0 4px; }
+    .prix-detail { color: var(--hs-text-2); font-size: 0.85rem; }
     .poids-label, .prix-label { display: block; margin: 8px 0; }
     .quantite { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
     .quantite button {
-      min-width: 62px; min-height: 62px; font-size: 1.5rem; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-width: var(--hs-touch); min-height: var(--hs-touch); font-size: 1.5rem; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .valeur-quantite { min-width: 32px; text-align: center; font-size: 1.2rem; }
-    .conversion-offre { margin: 12px 0; padding: 8px; border-radius: 8px; background: var(--secondary-background-color); }
+    .conversion-offre { margin: 12px 0; padding: 8px; border-radius: 8px; background: var(--hs-surface-2); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
     .motif-blocage, .erreur-action, .erreur-conversion, .erreur-unite {
-      color: var(--error-color, #b3261e); font-size: 0.9rem;
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.9rem;
     }
     .reessayer-unite {
-      min-height: 48px; width: 100%; margin-top: 4px; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); width: 100%; margin-top: 4px; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .action-principale {
-      display: block; width: 100%; min-height: 62px; font-size: 1.2rem; border-radius: 12px;
-      border: none; background: var(--primary-color); color: var(--text-primary-color, #fff);
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.2rem; border-radius: 12px;
+      border: none; background: var(--hs-accent); color: var(--hs-on-accent);
       margin-top: 12px;
     }
     .action-principale:disabled { opacity: 0.5; }
     .manger {
-      display: block; width: 100%; min-height: 48px; font-size: 1rem; border-radius: 8px;
-      border: none; background: var(--secondary-background-color); color: var(--primary-text-color);
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1rem; border-radius: 8px;
+      border: none; background: var(--hs-surface-2); color: var(--hs-text);
       margin-top: 8px;
     }
     button.voir-effet, button.appliquer-conversion {
-      min-height: 48px; width: 100%; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
-  `;
+  `];
 }

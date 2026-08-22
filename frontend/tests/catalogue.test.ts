@@ -511,17 +511,21 @@ const TROIS_CENTS = Array.from({ length: 300 }, (_, i) =>
   produit({ id: i + 1, name: `Produit ${i + 1}`, aisle_id: (i % 2) + 1,
             category_id: 7, min_quantity: 200 }));
 
-function reponsesTroisCents(type: string, charge?: any): Promise<unknown> {
-  if (type === 'home_stock/products/list') return Promise.resolve({ products: TROIS_CENTS });
-  if (type === 'home_stock/batches/list') return Promise.resolve({ batches: [] });
-  if (type === 'home_stock/product/get') {
-    return Promise.resolve({ product: TROIS_CENTS.find((p) => p.id === charge?.product_id) });
-  }
-  return reponsesParDefaut(type, charge);
+function reponsesCatalogue(produits: Produit[]) {
+  return (type: string, charge?: any): Promise<unknown> => {
+    if (type === 'home_stock/products/list') return Promise.resolve({ products: produits });
+    if (type === 'home_stock/batches/list') return Promise.resolve({ batches: [] });
+    if (type === 'home_stock/product/get') {
+      return Promise.resolve({ product: produits.find((p) => p.id === charge?.product_id) });
+    }
+    return reponsesParDefaut(type, charge);
+  };
 }
 
-async function monterCatalogue(options: { large: boolean; file?: unknown }) {
-  const connexion = connexionFactice(reponsesTroisCents);
+// `produits` par défaut à TROIS_CENTS : les tests existants (« vue dense »)
+// n'ont pas à connaître le fenêtrage pour continuer de monter le catalogue.
+async function monterCatalogue(options: { large: boolean; file?: unknown; produits?: Produit[] }) {
+  const connexion = connexionFactice(reponsesCatalogue(options.produits ?? TROIS_CENTS));
   const element = monter({ connexion, file: options.file }) as HTMLElement & {
     large: boolean; updateComplete: Promise<boolean>;
   };
@@ -551,13 +555,15 @@ describe('<home-stock-catalogue> : la vue dense (lot 6)', () => {
     // pour ne pas annoncer une donnée qui n'en est pas une.
     expect(entetes(e)).toEqual(['Nom', 'Unité', 'Seuil', 'Catégorie',
                                 'Conservation', '']);
-    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(300);
+    // Fenêtrée depuis la tâche 12 (cinquante à la fois, pas trois cents) —
+    // voir la description « ne rend pas la liste en entier », plus bas.
+    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(50);
   });
 
   it('reste une liste empilée en étroit', async () => {
     const e = await monterCatalogue({ large: false });
     expect(e.shadowRoot!.querySelector('table')).toBeNull();
-    expect(e.shadowRoot!.querySelectorAll('.ligne')).toHaveLength(300);
+    expect(e.shadowRoot!.querySelectorAll('.ligne')).toHaveLength(50);
   });
 
   it('édite une ligne sans quitter la liste', async () => {
@@ -570,7 +576,7 @@ describe('<home-stock-catalogue> : la vue dense (lot 6)', () => {
     (ligne(e, 12).querySelector('.modifier') as HTMLButtonElement).click();
     await laisserPasserLesMicrotaches();
     await e.updateComplete;
-    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(300);
+    expect(e.shadowRoot!.querySelectorAll('tbody tr')).toHaveLength(50);
 
     saisir(e, '.champ-seuil', '4');
     await e.updateComplete;
@@ -634,5 +640,101 @@ describe('<home-stock-catalogue> : la vue dense (lot 6)', () => {
 
     expect(connexion.appeler).not.toHaveBeenCalledWith(
       'home_stock/product/update', expect.anything());
+  });
+});
+
+// --- tâche 12 : le fenêtrage -------------------------------------------
+//
+// Réutilise TROIS_CENTS (défini plus haut pour le lot 6) plutôt que de
+// redéfinir trois cents objets ad hoc à chaque test : mêmes données, un
+// seul type `Produit` correctement rempli (`produit()`), et « Produit 287 »
+// existe bien dedans (id 287, nom `Produit 287`).
+
+describe('catalogue : la liste ne se rend pas en entier', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('ne rend qu’une fenêtre de produits, pas les trois cents', async () => {
+    const el = await monterCatalogue({ large: false, produits: TROIS_CENTS });
+    // La classe est `.ligne` — vérifié dans catalogue.ts : `<article class="ligne">`
+    // en étroit, `<tr class="ligne …">` en dense.
+    const lignes = el.shadowRoot!.querySelectorAll('.ligne');
+    expect(lignes.length).toBeGreaterThan(0);
+    expect(lignes.length).toBeLessThan(80);
+  });
+
+  // La même preuve côté DENSE (le `<tbody>` de `rendreDense`) : les deux
+  // rendus mappent `produitsFiltres` indépendamment, et ne fenêtrer que l'un
+  // laisserait le bureau rendre les trois cents lignes.
+  it('ne rend qu’une fenêtre de produits en vue dense non plus', async () => {
+    const el = await monterCatalogue({ large: true, produits: TROIS_CENTS });
+    const lignes = el.shadowRoot!.querySelectorAll('tbody tr');
+    expect(lignes.length).toBeGreaterThan(0);
+    expect(lignes.length).toBeLessThan(80);
+  });
+
+  it('garde la recherche atteignable en tête de liste', async () => {
+    const el = await monterCatalogue({ large: false, produits: [] });
+    // Preuve que `produits: []` a vraiment été transmis à `monterCatalogue`
+    // (et pas silencieusement retombé sur le défaut TROIS_CENTS, non vide) :
+    // sans ça, ce test resterait vert même si la clé `produits` était
+    // ignorée — vérifié en cassant `monterCatalogue` (rapport de tâche).
+    expect(el.shadowRoot!.textContent).toContain('Aucun produit.');
+    // `.recherche` est l'<input> LUI-MÊME, pas un conteneur : c'est donc lui
+    // qui devient collant.
+    const recherche = el.shadowRoot!.querySelector('input.recherche');
+    expect(recherche).not.toBeNull();
+    const styles = (el.constructor as unknown as { styles: { cssText: string }[] });
+    const feuille = styles.styles.map((s) => s.cssText).join('');
+    // `.volet-edition` (lot 6) porte déjà `position: sticky` ailleurs dans la
+    // même feuille : un `toContain('position: sticky')` global passerait
+    // sans que `.recherche` soit collante pour autant — vérifié en cassant
+    // ce test (voir le rapport de tâche). On isole donc la règle
+    // `.recherche { … }` avant de la sonder.
+    const regleRecherche = feuille.match(/\.recherche\s*\{[^}]*\}/);
+    expect(regleRecherche).not.toBeNull();
+    expect(regleRecherche![0]).toContain('position: sticky');
+  });
+
+  it('rend le produit cherché même s’il est au-delà de la fenêtre', async () => {
+    // Le fenêtrage ne doit pas rendre un produit INTROUVABLE : la recherche
+    // filtre d'abord, la fenêtre s'applique ensuite.
+    const el = await monterCatalogue({ large: false, produits: TROIS_CENTS });
+    const champ = el.shadowRoot!.querySelector('input.recherche') as HTMLInputElement;
+    champ.value = 'Produit 287';
+    champ.dispatchEvent(new Event('input'));
+    await el.updateComplete;
+    expect(el.shadowRoot!.textContent).toContain('Produit 287');
+  });
+
+  it('un bouton « voir plus » agrandit la fenêtre sans tout recharger', async () => {
+    const el = await monterCatalogue({ large: false, produits: TROIS_CENTS });
+    const avant = el.shadowRoot!.querySelectorAll('.ligne').length;
+    const boutonVoirPlus = Array.from(el.shadowRoot!.querySelectorAll('hs-button'))
+      .find((b) => b.textContent?.includes('produits de plus')) as HTMLElement;
+    expect(boutonVoirPlus).toBeTruthy();
+    boutonVoirPlus.click();
+    await el.updateComplete;
+    const apres = el.shadowRoot!.querySelectorAll('.ligne').length;
+    expect(apres).toBeGreaterThan(avant);
+  });
+
+  it('remet la fenêtre à sa taille de départ quand la recherche change', async () => {
+    const el = await monterCatalogue({ large: false, produits: TROIS_CENTS });
+    const boutonVoirPlus = Array.from(el.shadowRoot!.querySelectorAll('hs-button'))
+      .find((b) => b.textContent?.includes('produits de plus')) as HTMLElement;
+    boutonVoirPlus.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelectorAll('.ligne').length).toBeGreaterThan(50);
+
+    saisir(el, 'input.recherche', 'Produit 1');
+    await el.updateComplete;
+    // La recherche « Produit 1 » trouve CENT ONZE produits sur les trois cents
+    // (1, 10-19, 100-199, 120-199 compris) — soit largement PLUS que la
+    // fenêtre par défaut. C'est précisément ce qui rend l'assertion
+    // discriminante : sans remise à cinquante, la fenêtre agrandie par
+    // « voir plus » laisserait passer les cent onze. Un filtre qui ne
+    // rendrait que dix résultats, lui, tiendrait sous cinquante dans les deux
+    // cas et ne prouverait rien.
+    expect(el.shadowRoot!.querySelectorAll('.ligne').length).toBeLessThanOrEqual(50);
   });
 });

@@ -16,6 +16,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 export type CandidatLigne = { line_id: number; label: string; score: number };
 
@@ -317,21 +318,27 @@ export class EcranTicket extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
-    .vide { color: var(--secondary-text-color); text-align: center; }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0 8px; }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
+    .vide { color: var(--hs-text-2); text-align: center; }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 4px 0 8px; }
     .entete { display: flex; justify-content: space-between; align-items: baseline; }
     .etat { font-weight: 600; margin: 0; }
     .total { font-size: 1.3rem; font-weight: 700; margin: 0; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
     .erreur {
       margin: 8px 0; padding: 8px 12px; border-radius: 8px;
-      background: var(--error-color, #b3261e); color: #fff; font-size: 0.9rem;
+      background: var(--hs-surface); color: var(--hs-text); font-size: 0.9rem;
+      border-left: 4px solid var(--hs-danger);
     }
-    .ecart { color: var(--warning-color, #8a5300); font-size: 0.9rem; margin: 8px 0; }
+    .ecart {
+      color: var(--hs-text); border-left: 3px solid var(--hs-warning);
+      padding-left: 8px; font-size: 0.9rem; margin: 8px 0;
+    }
     .prendre-photo {
-      display: block; min-height: 62px; padding: 16px; border-radius: 12px; text-align: center;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      display: block; min-height: var(--hs-touch); padding: 16px; border-radius: 12px; text-align: center;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .photo { display: block; margin: 8px auto 0; color: inherit; }
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
@@ -346,40 +353,40 @@ export class EcranTicket extends LitElement {
       gap: 16px; align-items: start; margin-top: 8px;
     }
     .volet-ticket {
-      background: var(--secondary-background-color); border-radius: 8px; padding: 8px 12px;
+      background: var(--hs-surface-2); border-radius: 8px; padding: 8px 12px;
       max-height: 70vh; overflow: auto; min-width: 0;
     }
-    .titre-volet { font-size: 0.9rem; margin: 0 0 8px; color: var(--secondary-text-color); }
+    .titre-volet { font-size: 0.9rem; margin: 0 0 8px; color: var(--hs-text-2); }
     .texte-lu { margin: 0; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;
                 overflow-wrap: anywhere; }
-    .pas-encore-lu { margin: 0; font-size: 0.9rem; color: var(--secondary-text-color); }
+    .pas-encore-lu { margin: 0; font-size: 0.9rem; color: var(--hs-text-2); }
     .volet-lignes { min-width: 0; }
     .ligne-ticket {
       display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color, #ddd);
+      border-bottom: 1px solid var(--hs-divider);
     }
     .cote-ticket { flex: 1 1 40%; min-width: 0; }
     .cote-chariot { flex: 1 1 40%; min-width: 0; }
     .libelle { margin: 0; font-family: monospace; }
-    .prix { margin: 2px 0 0; font-size: 0.9rem; color: var(--secondary-text-color); }
+    .prix { margin: 2px 0 0; font-size: 0.9rem; color: var(--hs-text-2); }
     .rapproche { margin: 0; }
-    .orphelin, .ignoree { margin: 0; font-size: 0.85rem; color: var(--secondary-text-color); }
+    .orphelin, .ignoree { margin: 0; font-size: 0.85rem; color: var(--hs-text-2); }
     .actions-ligne { display: flex; gap: 8px; flex-basis: 100%; }
     .rapprocher, .ignorer, .reessayer {
-      min-height: 48px; min-width: 88px; border-radius: 8px; border: none; font-size: 0.9rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.9rem;
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
     .appliquer, .confirmer-application, .annuler-application {
-      display: block; width: 100%; min-height: 62px; font-size: 1.1rem; border-radius: 12px;
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.1rem; border-radius: 12px;
       border: none; margin-top: 12px;
     }
     .appliquer, .confirmer-application {
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .appliquer:disabled { opacity: 0.5; }
     .annuler-application {
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
     .avertissement { margin: 12px 0 0; font-size: 0.9rem; }
-  `;
+  `];
 }

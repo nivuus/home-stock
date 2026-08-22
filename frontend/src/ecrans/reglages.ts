@@ -26,6 +26,7 @@ import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import type { Emplacement } from './rangement';
 import type { Magasin } from './panier';
+import { tokens } from '../shell/ui/tokens';
 
 /** Un rayon dans le parcours d'UN magasin, tel que `home_stock/store/aisles`
  *  le rend. `mean_rank` reste visible même sur une ligne épinglée : on doit
@@ -594,7 +595,7 @@ export class EcranReglages extends LitElement {
     `;
   }
 
-  static styles = css`
+  static styles = [tokens, css`
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
        Trois colonnes d'au moins 320 px : en dessous, les explications de
        chaque section se cassent en lignes de trois mots. Le remplissage
@@ -610,80 +611,87 @@ export class EcranReglages extends LitElement {
     }
     .magasin, .rayon-magasin, .recurrente {
       display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color, #ddd);
+      border-bottom: 1px solid var(--hs-divider);
     }
     .magasin-onglet, .fusionner, .confirmer-fusion, .annuler-fusion,
     .monter-rayon-magasin, .descendre-rayon-magasin, .reprendre-apprentissage,
     .supprimer-recurrente, .ajouter-recurrente {
-      min-height: 48px; min-width: 88px; border-radius: 8px; border: none; font-size: 0.9rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.9rem;
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
     .magasin-onglet[aria-pressed='true'] {
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .magasin-onglet, .rayon-magasin-nom, .recurrente-nom { flex: 1 1 auto; }
-    .marque-epingle { font-size: 0.8rem; color: var(--secondary-text-color); }
-    .fiabilite { flex-basis: 100%; margin: 4px 0; font-size: 0.85rem; color: var(--secondary-text-color); }
-    .erreur-fusion { color: var(--error-color, #b3261e); font-size: 0.9rem; margin: 8px 0 0; }
+    .marque-epingle { font-size: 0.8rem; color: var(--hs-text-2); }
+    .fiabilite { flex-basis: 100%; margin: 4px 0; font-size: 0.85rem; color: var(--hs-text-2); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur-fusion {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger);
+      padding-left: 8px; font-size: 0.9rem; margin: 8px 0 0;
+    }
     .ajout-recurrente { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-    .champ-recurrente { flex: 1 1 140px; min-height: 48px; box-sizing: border-box; padding: 4px 8px; }
-    .champ-jours { flex: 0 0 88px; min-height: 48px; box-sizing: border-box; padding: 4px 8px; }
-    .agent-ticket, .taille-tickets { margin: 4px 0; color: var(--secondary-text-color); font-size: 0.9rem; }
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 8px; }
-    .erreur { color: var(--error-color, #b3261e); font-size: 0.9rem; }
+    .champ-recurrente { flex: 1 1 140px; min-height: var(--hs-touch); box-sizing: border-box; padding: 4px 8px; }
+    .champ-jours { flex: 0 0 88px; min-height: var(--hs-touch); box-sizing: border-box; padding: 4px 8px; }
+    .agent-ticket, .taille-tickets { margin: 4px 0; color: var(--hs-text-2); font-size: 0.9rem; }
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 0 0 8px; }
+    .erreur {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.9rem;
+    }
     .reessayer {
-      min-height: 48px; width: 100%; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .section {
-      margin: 0 0 20px; padding: 12px; border-radius: 8px; background: var(--secondary-background-color);
+      margin: 0 0 20px; padding: 12px; border-radius: 8px; background: var(--hs-surface-2);
     }
     .titre { margin: 0 0 4px; font-size: 1rem; }
-    .explication { margin: 0 0 8px; color: var(--secondary-text-color); font-size: 0.85rem; }
-    .vide { color: var(--secondary-text-color); }
+    .explication { margin: 0 0 8px; color: var(--hs-text-2); font-size: 0.85rem; }
+    .vide { color: var(--hs-text-2); }
     .liste-rayons, .liste-emplacements { list-style: none; margin: 0; padding: 0; }
     .rayon, .emplacement {
       display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
-      padding: 8px 0; border-bottom: 1px solid var(--divider-color, #ddd);
+      padding: 8px 0; border-bottom: 1px solid var(--hs-divider);
     }
     .rayon:last-child, .emplacement:last-child { border-bottom: none; }
     .rayon-nom, .emplacement-nom { flex: 1; min-width: 0; }
-    .emplacement-type { color: var(--secondary-text-color); font-size: 0.85rem; }
+    .emplacement-type { color: var(--hs-text-2); font-size: 0.85rem; }
     .rayon-boutons { display: flex; gap: 8px; flex-shrink: 0; }
     .monter, .descendre {
-      min-width: 48px; min-height: 48px; border-radius: 8px; border: none; font-size: 1.1rem;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-width: var(--hs-touch); min-height: var(--hs-touch); border-radius: 8px; border: none; font-size: 1.1rem;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .monter:disabled, .descendre:disabled { opacity: 0.4; }
     .resynchroniser {
-      display: block; width: 100%; min-height: 48px; border-radius: 8px; border: none; font-size: 0.95rem;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      display: block; width: 100%; min-height: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.95rem;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .resynchroniser:disabled { opacity: 0.6; }
-    .message-resync { color: var(--secondary-text-color); font-size: 0.85rem; margin: 8px 0 0; }
+    .message-resync { color: var(--hs-text-2); font-size: 0.85rem; margin: 8px 0 0; }
     .controler {
-      display: block; width: 100%; min-height: 48px; border-radius: 8px; border: none;
+      display: block; width: 100%; min-height: var(--hs-touch); border-radius: 8px; border: none;
       font-size: 0.95rem;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .controler:disabled { opacity: 0.6; }
     .verdict-bascule { margin: 12px 0 4px; font-weight: 600; }
     .liste-controles { list-style: none; margin: 0; padding: 0; }
     .controle {
       display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
-      padding: 6px 0; border-bottom: 1px solid var(--divider-color, #ddd);
+      padding: 6px 0; border-bottom: 1px solid var(--hs-divider);
       font-size: 0.9rem;
     }
     .controle:last-child { border-bottom: none; }
     .controle-code { font-weight: 700; min-width: 2.5em; }
     .controle-label { flex: 1; min-width: 0; }
-    .controle-chiffres { color: var(--secondary-text-color); }
-    .controle-details { flex-basis: 100%; color: var(--secondary-text-color); font-size: 0.85rem; }
-    /* Le rouge d'un bloquant doit passer le contraste sur les DEUX thèmes :
-       c'est le jeton qui change, jamais le seuil. */
-    .controle.bloquant { color: var(--error-color, #b3261e); }
+    .controle-chiffres { color: var(--hs-text-2); }
+    .controle-details { flex-basis: 100%; color: var(--hs-text-2); font-size: 0.85rem; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le rouge d'un bloquant se dit
+       par une bordure, le texte restant --hs-text sur les trois palettes. */
+    .controle.bloquant { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; }
     .controle.bloquant .controle-chiffres,
-    .controle.bloquant .controle-details { color: var(--error-color, #b3261e); }
-  `;
+    .controle.bloquant .controle-details { color: var(--hs-text); }
+  `];
 }

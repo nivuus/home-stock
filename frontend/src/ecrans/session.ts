@@ -21,6 +21,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import type { DonneesSession, Magasin } from './panier';
+import { tokens } from '../shell/ui/tokens';
 
 function formaterEuros(valeur: number): string {
   return `${valeur.toFixed(2).replace('.', ',')} €`;
@@ -254,45 +255,47 @@ export class EcranSession extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .titre { margin: 0 0 8px; font-size: 1.2rem; }
-    .explication, .resume, .magasin-retenu { margin: 4px 0; color: var(--secondary-text-color); }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 8px; }
+    .explication, .resume, .magasin-retenu { margin: 4px 0; color: var(--hs-text-2); }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 0 0 8px; }
     .pastilles { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
     .pastille {
-      min-height: 48px; min-width: 88px; padding: 0 16px; border-radius: 24px; border: none;
-      font-size: 1rem; background: var(--secondary-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); padding: 0 16px; border-radius: 24px; border: none;
+      font-size: 1rem; background: var(--hs-surface-2); color: var(--hs-text);
     }
-    .pastille.choisie { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+    .pastille.choisie { background: var(--hs-accent); color: var(--hs-on-accent); }
     .emporter-liste, .photographier {
-      display: block; width: 100%; min-height: 62px; font-size: 1.05rem; border-radius: 12px;
-      border: none; margin: 8px 0; background: var(--secondary-background-color);
-      color: var(--primary-text-color);
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.05rem; border-radius: 12px;
+      border: none; margin: 8px 0; background: var(--hs-surface-2);
+      color: var(--hs-text);
     }
     .magasin-label { display: block; margin: 8px 0; }
     .champ-magasin {
-      min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px;
+      min-height: var(--hs-touch); width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px;
     }
-    .erreur { color: var(--error-color, #b3261e); font-size: 0.9rem; }
-    .restantes { color: var(--error-color, #b3261e); font-size: 0.9rem; }
-    .message { color: var(--secondary-text-color); font-size: 0.9rem; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.9rem; }
+    .restantes { color: var(--hs-text); border-left: 3px solid var(--hs-danger); padding-left: 8px; font-size: 0.9rem; }
+    .message { color: var(--hs-text-2); font-size: 0.9rem; }
     .ouvrir-session {
-      display: block; width: 100%; min-height: 62px; font-size: 1.2rem; border-radius: 12px;
-      border: none; background: var(--primary-color); color: var(--text-primary-color, #fff);
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.2rem; border-radius: 12px;
+      border: none; background: var(--hs-accent); color: var(--hs-on-accent);
       margin-top: 16px;
     }
     .ouvrir-session:disabled { opacity: 0.5; }
     .clore-session, .confirmer-cloture, .annuler-cloture {
-      display: block; width: 100%; min-height: 62px; font-size: 1.1rem; border-radius: 12px;
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.1rem; border-radius: 12px;
       border: none; margin-top: 12px;
     }
     .clore-session, .confirmer-cloture {
-      background: var(--error-color, #b3261e); color: #fff;
+      background: var(--hs-surface); color: var(--hs-text); border: 2px solid var(--hs-danger);
     }
     .annuler-cloture {
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
     .confirmation-cloture { display: block; }
-  `;
+  `];
 }

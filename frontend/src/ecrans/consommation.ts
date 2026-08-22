@@ -20,6 +20,7 @@ import { raccourcisQuantite } from '../portion';
 import type { SourcePortion } from '../portion';
 import { consigneDeTri } from '../tri';
 import type { Bac } from '../tri';
+import { tokens } from '../shell/ui/tokens';
 
 export type Motif = 'consumption' | 'waste' | 'expired';
 
@@ -297,37 +298,42 @@ export class EcranConsommation extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .nom { margin: 0; font-size: 1.2rem; }
-    .reste { margin: 2px 0; color: var(--secondary-text-color); }
-    .plus-rien { color: var(--secondary-text-color); }
-    .tri { margin: 4px 0; color: var(--primary-text-color); font-size: 0.95rem; }
+    .reste { margin: 2px 0; color: var(--hs-text-2); }
+    .plus-rien { color: var(--hs-text-2); }
+    .tri { margin: 4px 0; color: var(--hs-text); font-size: 0.95rem; }
     .raccourcis { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
     .raccourci {
-      min-height: 62px; min-width: 62px; flex: 1 1 auto; font-size: 1rem; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff); padding: 4px 8px;
+      min-height: var(--hs-touch); min-width: var(--hs-touch); flex: 1 1 auto; font-size: 1rem; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent); padding: 4px 8px;
     }
     .pave-label { display: block; margin: 8px 0; }
-    .pave { min-height: 48px; font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%; }
+    .pave { min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%; }
     .motifs { display: flex; gap: 8px; margin: 12px 0; }
     .motif {
-      min-height: 62px; flex: 1 1 auto; font-size: 1rem; border-radius: 8px; border: none;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); flex: 1 1 auto; font-size: 1rem; border-radius: 8px; border: none;
+      background: var(--hs-surface-2); color: var(--hs-text);
     }
-    .motif-actif { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-    .parts { margin: 12px 0; padding: 8px; border-radius: 8px; background: var(--secondary-background-color); }
-    .partage-bascule { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+    .motif-actif { background: var(--hs-accent); color: var(--hs-on-accent); }
+    .parts { margin: 12px 0; padding: 8px; border-radius: 8px; background: var(--hs-surface-2); }
+    .partage-bascule { display: flex; align-items: center; gap: 8px; min-height: var(--hs-touch); }
     .partage-bascule input { width: 22px; height: 22px; }
     .compteurs { display: flex; gap: 12px; margin-top: 8px; }
     .compteur { flex: 1 1 auto; display: block; }
-    .parts-total, .parts-moi { min-height: 48px; font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%; }
-    .erreur, .en-attente { color: var(--error-color, #b3261e); font-size: 0.9rem; }
+    .parts-total, .parts-moi { min-height: var(--hs-touch); font-size: 1rem; padding: 4px 8px; box-sizing: border-box; width: 100%; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur, .en-attente {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger);
+      padding-left: 8px; font-size: 0.9rem;
+    }
     .enregistrer {
-      display: block; width: 100%; min-height: 62px; font-size: 1.2rem; border-radius: 12px;
-      border: none; background: var(--primary-color); color: var(--text-primary-color, #fff);
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.2rem; border-radius: 12px;
+      border: none; background: var(--hs-accent); color: var(--hs-on-accent);
       margin-top: 12px;
     }
     .enregistrer:disabled { opacity: 0.5; }
-  `;
+  `];
 }

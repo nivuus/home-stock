@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../src/ecrans/planning';
+import { feuilleDe, regleDe } from './aides-style';
 
 const REPAS = [
   { id: 1, uid: 'u1', day: '2026-08-21', slot_key: 'dinner', position: 0,
@@ -112,13 +113,16 @@ describe('<home-stock-planning>', () => {
   });
 
   it('annule un repas planifié en deux appuis', async () => {
+    // Les boutons sont passés en icônes (Task 14) : plus de texte
+    // « Confirmer » à lire, le second appui se lit dans l'aria-label.
     const element = monter();
     await stabiliser(element);
     const bouton = element.shadowRoot.querySelector('.annuler-repas');
     bouton.click();
     await stabiliser(element);
     expect(element.file.ajouter).not.toHaveBeenCalled();
-    expect(textes(element, '.annuler-repas')).toContain('Confirmer');
+    expect(element.shadowRoot.querySelector('.annuler-repas').getAttribute('aria-label'))
+      .toMatch(/^Confirmer /);
 
     element.shadowRoot.querySelector('.annuler-repas').click();
     await stabiliser(element);
@@ -185,9 +189,58 @@ describe('<home-stock-planning>', () => {
     expect(large.debut).toBe('2026-08-28');
   });
 
-  it('offre des cibles tactiles d’au moins 48 px', async () => {
+  it('offre des cibles tactiles d’au moins 62 px, sur CHAQUE geste de la grille', async () => {
     const element = monter();
     await stabiliser(element);
-    expect((element.constructor as any).styles.cssText).toContain('min-height: 48px');
+    // Chercher `min-height: var(--hs-touch)` dans la feuille ENTIÈRE ne prouve
+    // rien : une seule autre règle qui le porte garde le test vert pendant que
+    // le bouton visé retombe à 20 px (sonde du 2026-08-22). On isole donc
+    // CHAQUE règle par son sélecteur avant de la sonder — la technique de
+    // `tests/catalogue.test.ts` et `tests/shell-enveloppes.test.ts`, ici
+    // généralisée aux listes de sélecteurs.
+    const feuille = feuilleDe(element.constructor);
+    for (const selecteur of [
+      '.entete button',
+      '.poser',
+      '.repas-nom',
+      '.valider-repas',
+      '.annuler-repas',
+    ]) {
+      expect(regleDe(feuille, selecteur), selecteur).toContain('min-height: var(--hs-touch)');
+    }
   });
+});
+
+describe('planning : des actions qui ne noient pas la grille', () => {
+  // Le brief de cette tâche portait un quatrième test, « se désabonne au
+  // démontage, dans les deux enveloppes », copié depuis
+  // `tests/shell-enveloppes.test.ts` (monte `hs-card`/`hs-button` via un
+  // `monter(balise)` qui n'existe pas ici, importe `pendingCountForTests`
+  // sans l'importer). `planning.ts` ne porte aucun abonnement `whenDefined`
+  // propre — c'est `hs-icon` qui gère ce cycle de vie, déjà couvert par les
+  // tests de `shell-ha-available` et `shell-enveloppes`. Test omis ici :
+  // il ne vérifie rien de ce fichier.
+
+  it('rend les actions en icônes, pas en libellés répétés', async () => {
+    const el = await monter({ repas: [REPAS[0]] });
+    await stabiliser(el);
+    const valider = el.shadowRoot!.querySelector('.valider-repas')!;
+    expect(valider.querySelector('hs-icon')).not.toBeNull();
+    expect(valider.textContent!.trim()).toBe('');
+  });
+
+  it('garde l’action annonçable, et nommant SON repas', async () => {
+    // Cinquante-six boutons « Valider » identiques ne se distinguent pas au
+    // lecteur d'écran : chacun doit dire lequel il valide.
+    const el = await monter({ repas: [REPAS[0]] });
+    await stabiliser(el);
+    const valider = el.shadowRoot!.querySelector('.valider-repas')!;
+    expect(valider.getAttribute('aria-label')).toMatch(/^Valider /);
+    expect(valider.getAttribute('aria-label')!.length).toBeGreaterThan('Valider '.length);
+  });
+
+  // Pas de test de cible tactile ici : la Task 14 en avait recopié un, mot
+  // pour mot, depuis la Task 6 — deux titres, un seul corps, et aucun des
+  // deux ne sondait sa propre règle. `.valider-repas` et `.annuler-repas`
+  // sont désormais couverts, nommément, par le test unique du bloc ci-dessus.
 });

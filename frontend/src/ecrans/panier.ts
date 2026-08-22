@@ -15,6 +15,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { prixBaseDepuisSaisie, prixPaquetAffiche, type UniteBase } from './fiche';
+import { tokens } from '../shell/ui/tokens';
 
 /** Une ligne de panier, exactement comme `home_stock/session/current` la
  *  rend (voir `_LINE_SELECT_SQL` côté serveur) — aucun champ n'est renommé
@@ -356,55 +357,62 @@ export class EcranPanier extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .entete { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
     .magasin { font-weight: 600; margin: 0; }
     .total { font-size: 1.3rem; font-weight: 700; margin: 0; }
-    .repartition, .progression { margin: 0 0 4px; font-size: 0.85rem; color: var(--secondary-text-color); }
+    .repartition, .progression { margin: 0 0 4px; font-size: 0.85rem; color: var(--hs-text-2); }
     .hors-liste {
-      min-height: 48px; width: 100%; border-radius: 8px; border: none; font-size: 0.9rem;
-      background: var(--secondary-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none; font-size: 0.9rem;
+      background: var(--hs-surface-2); color: var(--hs-text);
       margin-bottom: 8px;
     }
-    .hors-liste[aria-pressed='true'] { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 4px 0 8px; }
-    .vide { color: var(--secondary-text-color); text-align: center; }
+    .hors-liste[aria-pressed='true'] { background: var(--hs-accent); color: var(--hs-on-accent); }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 4px 0 8px; }
+    .vide { color: var(--hs-text-2); text-align: center; }
     .rayon-nom {
       margin: 16px 0 4px; font-size: 0.9rem; text-transform: uppercase;
-      color: var(--secondary-text-color); letter-spacing: 0.04em;
+      color: var(--hs-text-2); letter-spacing: 0.04em;
     }
     .ligne {
       display: flex; align-items: center; gap: 8px; padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color, #ddd);
+      border-bottom: 1px solid var(--hs-divider);
     }
     .image { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
     .infos { flex: 1; min-width: 0; }
     .nom { margin: 0 0 4px; }
     .quantite { display: flex; align-items: center; gap: 8px; }
     .quantite button {
-      min-width: 48px; min-height: 48px; font-size: 1.3rem; border-radius: 8px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-width: var(--hs-touch); min-height: var(--hs-touch); font-size: 1.3rem; border-radius: 8px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .quantite button:disabled { opacity: 0.5; }
     .valeur-quantite { min-width: 56px; text-align: center; }
     .prix-label { display: block; font-size: 0.85rem; margin-top: 4px; }
-    .prix-champ { min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px; }
-    .erreur-prix { color: var(--error-color, #b3261e); font-size: 0.8rem; margin: 4px 0 0; }
+    .prix-champ { min-height: var(--hs-touch); width: 100%; box-sizing: border-box; font-size: 1rem; padding: 4px 8px; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .erreur-prix {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger);
+      padding-left: 8px; font-size: 0.8rem; margin: 4px 0 0;
+    }
     .supprimer {
-      min-width: 48px; min-height: 48px; border-radius: 8px; border: none; font-size: 1.2rem;
-      background: var(--error-color, #b3261e); color: #fff; flex-shrink: 0;
+      min-width: var(--hs-touch); min-height: var(--hs-touch); border-radius: 8px; border: 2px solid var(--hs-danger);
+      background: var(--hs-surface); color: var(--hs-text); font-size: 1.2rem; flex-shrink: 0;
     }
     .confirmation-suppression { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
     .confirmer-suppression, .annuler-suppression {
-      min-height: 48px; min-width: 88px; border-radius: 8px; border: none; font-size: 0.9rem;
+      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.9rem;
     }
-    .confirmer-suppression { background: var(--error-color, #b3261e); color: #fff; }
-    .annuler-suppression { background: var(--secondary-background-color); color: var(--primary-text-color); }
+    .confirmer-suppression {
+      background: var(--hs-surface); color: var(--hs-text); border: 2px solid var(--hs-danger);
+    }
+    .annuler-suppression { background: var(--hs-surface-2); color: var(--hs-text); }
     .checkout {
-      display: block; width: 100%; min-height: 62px; font-size: 1.2rem; border-radius: 12px; border: none;
-      background: var(--primary-color); color: var(--text-primary-color, #fff); margin-top: 16px;
+      display: block; width: 100%; min-height: var(--hs-touch); font-size: 1.2rem; border-radius: 12px; border: none;
+      background: var(--hs-accent); color: var(--hs-on-accent); margin-top: 16px;
     }
     .checkout:disabled { opacity: 0.5; }
-  `;
+  `];
 }

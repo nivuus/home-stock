@@ -13,6 +13,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
 
 /** Une recette telle que `home_stock/recipes/list` la rend. */
 export type LigneRecette = {
@@ -189,18 +190,18 @@ export class EcranRecettes extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; color: var(--hs-text); }
     .entete { display: flex; gap: 8px; margin-bottom: 12px; }
     .recherche {
-      flex: 1; min-height: 48px; padding: 0 12px; font-size: 1rem;
-      border: 1px solid var(--divider-color); border-radius: 8px;
-      background: var(--card-background-color); color: var(--primary-text-color);
+      flex: 1; min-height: var(--hs-touch); padding: 0 12px; font-size: 1rem;
+      border: 1px solid var(--hs-divider); border-radius: 8px;
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .ailleurs {
-      min-height: 48px; padding: 0 16px; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); padding: 0 16px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--hs-divider);
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .ailleurs[disabled] { opacity: 0.5; cursor: default; }
     .message { margin: 8px 0; }
@@ -208,9 +209,9 @@ export class EcranRecettes extends LitElement {
     h2 { font-size: 1rem; margin: 12px 0 4px; }
     .recette, .fiche {
       display: flex; justify-content: space-between; align-items: center;
-      gap: 8px; min-height: 48px; padding: 8px 12px; text-align: left;
-      border: 1px solid var(--divider-color); border-radius: 8px; cursor: pointer;
-      background: var(--card-background-color); color: var(--primary-text-color);
+      gap: 8px; min-height: var(--hs-touch); padding: 8px 12px; text-align: left;
+      border: 1px solid var(--hs-divider); border-radius: 8px; cursor: pointer;
+      background: var(--hs-surface); color: var(--hs-text);
       font-size: 1rem;
     }
     .recette-nom, .fiche-nom { flex: 1; }
@@ -218,16 +219,18 @@ export class EcranRecettes extends LitElement {
     .badge {
       padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; white-space: nowrap;
     }
-    /* Le repli est un orange FONCÉ, pas celui de Material : blanc sur
-       #b26a00 ne donne que 4,24:1, sous le seuil de 4,5:1 que
-       verifier-rendu.mjs applique. #8a5300 monte à 6,3:1. On corrige la
-       couleur, jamais le seuil. */
-    .relire { background: var(--warning-color, #8a5300); color: #fff; }
-    .manque { background: var(--error-color, #a01b1b); color: #fff; }
+    /* --hs-on-warning est recalculé au montage : l'aplat reste lisible sur
+       les trois palettes mesurées. */
+    .relire { background: var(--hs-warning); color: var(--hs-on-warning); }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : --hs-danger se dit en bordure. */
+    .manque {
+      background: var(--hs-surface); color: var(--hs-text);
+      border: 2px solid var(--hs-danger);
+    }
     .fiche-meta { opacity: 0.75; font-size: 0.85rem; }
     .vide { opacity: 0.75; }
     @media (max-width: 700px) {
       .entete { flex-direction: column; }
     }
-  `;
+  `];
 }

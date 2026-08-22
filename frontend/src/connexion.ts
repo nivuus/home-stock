@@ -22,6 +22,13 @@ export type Hass = {
    *  par le websocket : on ne lit aucun jeton stocké ailleurs, on n'ouvre
    *  aucune seconde session. */
   auth?: { data?: { access_token?: string } };
+  /** Ce que Home Assistant ne remplace QUE quand le thème bouge. L'objet
+   *  `hass`, lui, est remplacé à chaque changement d'état de la maison —
+   *  plusieurs fois par seconde sur la tablette de la cuisine. Le panneau
+   *  compare ces deux références pour ne recalculer les couleurs de texte
+   *  qu'à bon escient (voir `panneau.ts`, `themeAChange`). */
+  themes?: { darkMode?: boolean };
+  selectedTheme?: unknown;
 };
 
 export class Connexion {

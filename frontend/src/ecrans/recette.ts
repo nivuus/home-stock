@@ -29,6 +29,7 @@ import { formaterQuantiteRecette } from '../nombres';
 import {
   type EtatMinuteur, avancer, demarrer, formaterDuree, remettreAZero,
 } from '../minuteur';
+import { tokens } from '../shell/ui/tokens';
 
 export type PuceRecette = {
   id: number;
@@ -343,10 +344,10 @@ export class EcranRecette extends LitElement {
     `;
   }
 
-  static styles = css`
+  static styles = [tokens, css`
     :host {
       display: block; padding: 16px; font-size: 1.25rem;
-      color: var(--primary-text-color);
+      color: var(--hs-text);
     }
     .image { width: 100%; max-height: 40vh; object-fit: cover; border-radius: 12px; }
     h1 { font-size: 1.8rem; margin: 12px 0 4px; }
@@ -356,40 +357,42 @@ export class EcranRecette extends LitElement {
     .puces { display: flex; flex-direction: column; gap: 12px; padding-left: 1.2em; }
     .puce { line-height: 1.5; }
     .minuteur {
-      display: block; margin-top: 8px; min-height: 48px; padding: 0 16px;
+      display: block; margin-top: 8px; min-height: var(--hs-touch); padding: 0 16px;
       font-size: 1.1rem; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color); color: var(--primary-text-color);
+      border: 1px solid var(--hs-divider);
+      background: var(--hs-surface); color: var(--hs-text);
     }
-    .minuteur.termine { background: var(--error-color, #a01b1b); color: #fff; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .minuteur.termine { background: var(--hs-surface); color: var(--hs-text); border: 2px solid var(--hs-danger); }
     .ingredients ul { list-style: none; padding: 0; display: flex;
                       flex-direction: column; gap: 12px; }
     .ingredient { display: flex; flex-wrap: wrap; gap: 10px;
-                  align-items: baseline; min-height: 48px; }
+                  align-items: baseline; min-height: var(--hs-touch); }
     .quantite { font-weight: 600; min-width: 6em; }
     .a-la-main .mention { opacity: 0.8; font-size: 0.9rem; font-style: italic; }
     .candidats { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
     .candidat {
-      min-height: 48px; padding: 0 12px; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color); font-size: 0.95rem;
-      background: var(--card-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); padding: 0 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--hs-divider); font-size: 0.95rem;
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .barre {
       display: flex; gap: 8px; align-items: center; margin-top: 20px;
       position: sticky; bottom: 0; padding: 8px 0;
-      background: var(--card-background-color);
+      background: var(--hs-surface);
     }
     .barre button, .fermer-ingredients {
-      min-height: 48px; padding: 0 16px; font-size: 1rem; border-radius: 8px;
-      cursor: pointer; border: 1px solid var(--divider-color);
-      background: var(--card-background-color); color: var(--primary-text-color);
+      min-height: var(--hs-touch); padding: 0 16px; font-size: 1rem; border-radius: 8px;
+      cursor: pointer; border: 1px solid var(--hs-divider);
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .barre button[disabled] { opacity: 0.4; cursor: default; }
     .position { margin-left: auto; opacity: 0.75; }
-    .cuisine { background: var(--primary-color, #03a9f4); color: #fff; }
+    .cuisine { background: var(--hs-accent); color: var(--hs-on-accent); }
     @media (max-width: 700px) {
       :host { font-size: 1.15rem; }
       .quantite { min-width: 4.5em; }
     }
-  `;
+  `];
 }

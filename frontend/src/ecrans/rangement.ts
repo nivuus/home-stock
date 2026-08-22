@@ -18,6 +18,7 @@ import type { FileAttente } from '../file-attente';
 import { raccourcisDlc, type Raccourci } from '../dlc';
 import type { UniteBase } from './fiche';
 import type { LigneSession } from './panier';
+import { tokens } from '../shell/ui/tokens';
 
 export type LigneRangementSession = LigneSession & { source: 'session' };
 
@@ -280,30 +281,38 @@ export class EcranRangement extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; box-sizing: border-box; color: var(--hs-text); }
     .tout-range { text-align: center; font-size: 1.2rem; margin-top: 32px; }
-    .en-attente { text-align: center; color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 8px; }
+    .en-attente { text-align: center; color: var(--hs-text-2); font-size: 0.85rem; margin: 0 0 8px; }
     .emplacement-nom {
       margin: 16px 0 4px; font-size: 0.9rem; text-transform: uppercase;
-      color: var(--secondary-text-color); letter-spacing: 0.04em;
+      color: var(--hs-text-2); letter-spacing: 0.04em;
     }
     .ligne {
-      display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--divider-color, #ddd);
+      display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--hs-divider);
     }
     .image { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
     .infos { flex: 1; min-width: 0; }
     .nom { margin: 0 0 4px; }
-    .quantite { margin: 0 0 4px; color: var(--secondary-text-color); }
+    .quantite { margin: 0 0 4px; color: var(--hs-text-2); }
     .emplacement-label { display: block; font-size: 0.85rem; margin-bottom: 8px; }
-    .emplacement-champ { min-height: 48px; width: 100%; box-sizing: border-box; font-size: 1rem; }
-    .emplacement-manquant { color: var(--error-color, #b3261e); font-size: 0.85rem; margin: 0 0 8px; }
-    .erreur { color: var(--error-color, #b3261e); font-size: 0.85rem; }
+    .emplacement-champ { min-height: var(--hs-touch); width: 100%; box-sizing: border-box; font-size: 1rem; }
+    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text, la
+       bordure porte --hs-danger. */
+    .emplacement-manquant {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger);
+      padding-left: 8px; font-size: 0.85rem; margin: 0 0 8px;
+    }
+    .erreur {
+      color: var(--hs-text); border-left: 3px solid var(--hs-danger);
+      padding-left: 8px; font-size: 0.85rem;
+    }
     .raccourcis-dlc { display: flex; flex-wrap: wrap; gap: 8px; }
     .raccourci-dlc {
-      min-height: 48px; padding: 0 12px; border-radius: 8px; border: none; font-size: 0.95rem;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+      min-height: var(--hs-touch); min-width: var(--hs-touch); padding: 0 12px; border-radius: 8px; border: none; font-size: 0.95rem;
+      background: var(--hs-accent); color: var(--hs-on-accent);
     }
     .raccourci-dlc:disabled { opacity: 0.5; }
-  `;
+  `];
 }

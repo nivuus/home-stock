@@ -11,6 +11,8 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
+import { tokens } from '../shell/ui/tokens';
+import '../shell/ui/hs-icon';
 
 export type CleCreneau = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 
@@ -162,19 +164,28 @@ export class EcranPlanning extends LitElement {
   }
 
   private rendreRepas(repas: RepasPlanning) {
+    const nom = this.nomDe(repas);
+    // Deux boutons texte par repas, répétés sur 28 (ou 56) cases, noyaient la
+    // grille sous cinquante-six libellés « Valider »/« Annuler » identiques.
+    // En icônes ils redeviennent lisibles, mais chacun doit encore dire QUEL
+    // repas il touche pour un lecteur d'écran — d'où l'aria-label nommant.
+    const confirmation = this.armeAnnulation === repas.id;
     return html`
       <div class="repas etat-${repas.state}">
         <button class="repas-nom" @click=${() => this.ouvrirRecette(repas)}>
-          ${this.nomDe(repas)}
+          ${nom}
         </button>
         ${repas.state === 'done'
           ? html`<span class="valide">validé</span>`
           : html`
-            <button class="valider-repas" @click=${() => this.ouvrirValidation(repas)}>
-              Valider
+            <button class="valider-repas" aria-label="Valider ${nom}"
+                    @click=${() => this.ouvrirValidation(repas)}>
+              <hs-icon name="check"></hs-icon>
             </button>
-            <button class="annuler-repas" @click=${() => this.annuler(repas)}>
-              ${this.armeAnnulation === repas.id ? 'Confirmer' : 'Annuler'}
+            <button class="annuler-repas ${confirmation ? 'arme' : ''}"
+                    aria-label="${confirmation ? `Confirmer le retrait de ${nom}` : `Retirer ${nom} du planning`}"
+                    @click=${() => this.annuler(repas)}>
+              <hs-icon name=${confirmation ? 'alert' : 'close'}></hs-icon>
             </button>`}
       </div>
     `;
@@ -223,23 +234,36 @@ export class EcranPlanning extends LitElement {
     `;
   }
 
-  static styles = css`
-    :host { display: block; padding: 12px; color: var(--primary-text-color); }
+  static styles = [tokens, css`
+    :host { display: block; padding: 12px; color: var(--hs-text); }
     .entete { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .periode { flex: 1; text-align: center; font-weight: 600; }
-    .entete button, .poser, .repas-nom, .valider-repas, .annuler-repas {
-      min-height: 48px; padding: 0 12px; border-radius: 8px; cursor: pointer;
-      border: 1px solid var(--divider-color); font-size: 1rem;
-      background: var(--card-background-color); color: var(--primary-text-color);
+    .entete button, .poser, .repas-nom {
+      min-height: var(--hs-touch); padding: 0 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--hs-divider); font-size: 1rem;
+      background: var(--hs-surface); color: var(--hs-text);
     }
+    .valider-repas, .annuler-repas {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: var(--hs-touch); min-width: var(--hs-touch);
+      padding: 0; border-radius: var(--hs-radius-s);
+      border: 1px solid var(--hs-divider);
+      background: var(--hs-surface); color: var(--hs-text);
+      cursor: pointer;
+    }
+    /* Deuxième appui d'une action destructive : le danger se dit par la
+       bordure (jamais un aplat sous du texte/icône) — le tracé change aussi
+       (close → alert) pour un repère qui ne dépend pas de la couleur seule. */
+    .annuler-repas.arme { border-color: var(--hs-danger); }
     .grille { display: flex; flex-direction: column; gap: 8px; }
     .ligne-jours, .ligne-creneau { display: flex; gap: 8px; align-items: stretch; }
     .creneau, .coin { flex: 0 0 7em; display: flex; align-items: center;
                       font-weight: 600; }
     .jour { flex: 1; text-align: center; font-weight: 600; }
     .case {
+      /* Zone de dépôt, pas une cible tactile : 48px reste volontairement en dur. */
       flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 6px;
-      border: 1px dashed var(--divider-color); border-radius: 8px;
+      border: 1px dashed var(--hs-divider); border-radius: 8px;
       min-height: 48px;
     }
     .repas { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -251,7 +275,10 @@ export class EcranPlanning extends LitElement {
     .etroit .creneau { flex: 0 0 6em; }
     @media (max-width: 700px) {
       .creneau, .coin { flex: 0 0 5.5em; }
-      .repas { flex-direction: column; align-items: stretch; }
+      /* Les deux icônes de 62 px tiennent à côté du nom sur un seul jour
+         affiché (comportement existant) : plus besoin de les empiler en
+         pleine largeur, une mise en page pensée pour les anciens libellés
+         texte « Valider »/« Annuler ». */
     }
-  `;
+  `];
 }

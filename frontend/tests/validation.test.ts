@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../src/ecrans/validation';
+import { feuilleDe, regleDe } from './aides-style';
 
 function preview(surcharge: Record<string, unknown> = {}) {
   return {
@@ -292,9 +293,27 @@ describe('<home-stock-validation>', () => {
     expect(element.file.ajouter).toHaveBeenCalledTimes(1);
   });
 
-  it('offre des cibles tactiles d’au moins 48 px', async () => {
+  it('offre des cibles tactiles d’au moins 62 px, sur CHAQUE règle qui le promet', async () => {
     const element = monter();
     await stabiliser(element);
-    expect((element.constructor as any).styles.cssText).toContain('min-height: 48px');
+    // Chercher `min-height: var(--hs-touch)` dans la feuille ENTIÈRE ne prouve
+    // rien : une seule autre règle qui le porte garde le test vert pendant que
+    // le bouton visé retombe à 20 px (sonde du 2026-08-22). On isole donc
+    // CHAQUE règle par son sélecteur avant de la sonder — la technique de
+    // `tests/catalogue.test.ts` et `tests/shell-enveloppes.test.ts`, ici
+    // généralisée aux listes de sélecteurs.
+    const feuille = feuilleDe(element.constructor);
+    for (const selecteur of [
+      '.ligne',
+      '.retirer',
+      '.valider',
+      '.annuler',
+      '.parts-mangees',
+      '.partage-bascule',
+      '.parts-total',
+      '.parts-moi',
+    ]) {
+      expect(regleDe(feuille, selecteur), selecteur).toContain('min-height: var(--hs-touch)');
+    }
   });
 });
