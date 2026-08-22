@@ -29,6 +29,7 @@ export class HsHeader extends LitElement {
       min-height: var(--hs-touch); min-width: var(--hs-touch);
       border: none; background: none; color: inherit; cursor: pointer;
       border-radius: var(--hs-radius-s);
+      font-family: var(--hs-font);
     }
     .titre { flex: 1; font-size: 1.15rem; font-weight: 600; }
     .attente {
@@ -54,6 +55,7 @@ export class HsHeader extends LitElement {
       border: 1px solid var(--hs-divider); border-radius: var(--hs-radius-s);
       background: var(--hs-surface-2); color: var(--hs-text);
       font-weight: 600; cursor: pointer;
+      font-family: var(--hs-font);
     }
   `];
 
