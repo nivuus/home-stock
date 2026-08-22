@@ -312,6 +312,15 @@ async def test_a_goal_is_suggested_not_imposed_and_can_be_cleared(hass):
 
 
 async def test_a_goal_out_of_bounds_fails_the_form_and_keeps_the_options(hass):
+    """Refusé DANS le formulaire, en français, et sans rien écrire.
+
+    Les bornes ne sont plus portées par le schéma mais par `_check_bounds` :
+    une fonction Python posée dans un schéma ne se sérialise pas et rend le
+    formulaire injoignable (cf.
+    `test_le_formulaire_d_options_est_serialisable_pour_l_interface`). Le
+    refus se lit donc en `errors`, là où l'écran l'affiche, au lieu de
+    remonter en `vol.Invalid` — mêmes bornes, même refus d'écrire.
+    """
     entry, result = await _open_options(hass)
     await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -319,10 +328,63 @@ async def test_a_goal_out_of_bounds_fails_the_form_and_keeps_the_options(hass):
     await hass.async_block_till_done()
     avant = dict(entry.options)
 
-    for mauvais in (0, -1, MAX_GOAL + 1, "beaucoup"):
+    for mauvais in (0, -1, MAX_GOAL + 1):
         result = await hass.config_entries.options.async_init(entry.entry_id)
-        with pytest.raises(vol.Invalid):
-            await hass.config_entries.options.async_configure(
-                result["flow_id"],
-                user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": mauvais})
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": mauvais})
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"goal_salt": "goal_out_of_bounds"}
         assert dict(entry.options) == avant
+
+
+async def test_a_goal_that_is_not_a_number_is_refused_by_the_field_itself(hass):
+    """Le sélecteur numérique tranche avant le formulaire : un mot ne peut
+    même pas être saisi dans le champ, et arrive ici par programme."""
+    entry, result = await _open_options(hass)
+    avant = dict(entry.options)
+    with pytest.raises(vol.Invalid):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_EXPIRATION_ALERT_DAYS: 3, "goal_salt": "beaucoup"})
+    assert dict(entry.options) == avant
+
+
+
+async def test_a_source_key_too_long_is_refused_in_the_form(hass):
+    entry, result = await _open_options(hass)
+    avant = dict(entry.options)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={CONF_EXPIRATION_ALERT_DAYS: 3,
+                    CONF_RECIPE_SOURCE_KEY: "9" * 201})
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_RECIPE_SOURCE_KEY: "text_too_long"}
+    assert dict(entry.options) == avant
+
+
+# --- le chemin réel de l'interface ------------------------------------------
+
+async def test_le_formulaire_d_options_est_serialisable_pour_l_interface(hass):
+    """Ouvrir les réglages depuis l'interface ne lit pas `data_schema.schema` :
+    Home Assistant SÉRIALISE le schéma (`helpers/data_entry_flow._prepare_result_json`
+    → `voluptuous_serialize.convert`) avant de l'envoyer au navigateur.
+
+    Un validateur qui est une fonction Python nue n'y est pas convertible :
+    `convert` lève `ValueError: Unable to convert schema`, aiohttp le rend en
+    « 500 Internal Server Error » et l'écran dit seulement « Le flux de
+    configuration n'a pas pu être chargé ». Tous les autres tests de ce fichier
+    inspectent l'objet Python et ne touchent jamais ce chemin — d'où un
+    formulaire vert en test et injoignable en production.
+    """
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    _, result = await _open_options(hass)
+    champs = voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer)
+
+    noms = {champ["name"] for champ in champs}
+    assert CONF_EXPIRATION_ALERT_DAYS in noms
+    assert CONF_RECIPE_SOURCE_KEY in noms
+    assert {f"goal_{nutrient}" for nutrient in GOAL_NUTRIENTS} <= noms

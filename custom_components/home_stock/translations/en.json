@@ -33,7 +33,9 @@
    }
   },
   "error": {
-   "no_attachments": "This entity does not accept attachments, so it cannot read a receipt photo. Pick another one, or leave the field empty."
+   "no_attachments": "This entity does not accept attachments, so it cannot read a receipt photo. Pick another one, or leave the field empty.",
+   "text_too_long": "This key is too long: 200 characters at most.",
+   "goal_out_of_bounds": "A goal must be a number above 0 and at most 20000. Leave the field empty for no goal at all."
   }
  },
  "entity": {

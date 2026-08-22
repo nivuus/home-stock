@@ -10,6 +10,9 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     TextSelector,
 )
 
@@ -28,6 +31,65 @@ from .const import (
 )
 from .receipt.task import supports_attachments
 from .validators import bounded_text, goal_quantity
+
+
+# Un plafond se saisit dans un champ numérique, SANS borne déclarée au
+# sélecteur : une borne posée ici serait appliquée par Home Assistant avant
+# que le formulaire ne reprenne la main, et l'écran afficherait une erreur
+# anglaise de voluptuous au lieu du message français de `goal_quantity`. Le
+# sélecteur cadre la saisie, `_check_bounds` tranche.
+_GOAL_SELECTOR = NumberSelector(
+    NumberSelectorConfig(mode=NumberSelectorMode.BOX, step="any"))
+
+
+def _check_bounds(user_input: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Les bornes de `validators.py`, appliquées ICI et jamais dans le schéma.
+
+    **Un validateur qui est une fonction Python ne se sérialise pas.** Le
+    chemin réel de l'interface passe par `voluptuous_serialize.convert`, qui
+    ne sait convertir qu'un jeu fermé de types (`vol.Range`, `vol.Length`,
+    `vol.Coerce`, les sélecteurs…) et lève `ValueError` sur tout le reste.
+    Une fonction posée dans le schéma ne rend donc pas le formulaire strict :
+    elle le rend INJOIGNABLE — 500 côté serveur, « Le flux de configuration
+    n'a pas pu être chargé » côté écran, et pas une ligne dans le journal qui
+    nomme le champ fautif.
+
+    Valider dans le corps est aussi ce que fait déjà `receipt_agent` juste
+    au-dessus, et c'est le seul endroit d'où une erreur s'affiche EN FRANÇAIS
+    dans le formulaire plutôt qu'en 400 brut.
+
+    Rend les erreurs par champ et l'entrée NORMALISÉE : `goal_quantity` rend
+    un float, et c'est lui qui est écrit — un `6` saisi devient `6.0`, du même
+    type que ce que relira `domain/goals.py`.
+
+    La virgule décimale française que `goal_quantity` sait lire ne parvient
+    PAS jusqu'ici : le sélecteur numérique du schéma refuse « 6,5 » avant que
+    le formulaire ne reprenne la main. Ce n'est pas une perte — le champ est
+    un `input type="number"`, et c'est le navigateur, en locale française, qui
+    convertit la virgule avant l'envoi. La fonction reste la plus stricte des
+    deux, et c'est elle qui tient la borne.
+    """
+    errors: dict[str, str] = {}
+    normalised = dict(user_input)
+
+    source_key = normalised.get(CONF_RECIPE_SOURCE_KEY)
+    if source_key is not None:
+        try:
+            bounded_text(source_key)
+        except vol.Invalid:
+            errors[CONF_RECIPE_SOURCE_KEY] = "text_too_long"
+
+    for nutrient in GOAL_NUTRIENTS:
+        key = f"goal_{nutrient}"
+        value = normalised.get(key)
+        if value is None:
+            continue
+        try:
+            normalised[key] = goal_quantity(value)
+        except vol.Invalid:
+            errors[key] = "goal_out_of_bounds"
+
+    return errors, normalised
 
 
 class HomeStockConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -65,6 +127,8 @@ class HomeStockOptionsFlow(OptionsFlow):
             chosen = user_input.get(CONF_RECEIPT_AGENT)
             if chosen and not supports_attachments(self.hass, chosen):
                 errors[CONF_RECEIPT_AGENT] = "no_attachments"
+            bound_errors, user_input = _check_bounds(user_input)
+            errors.update(bound_errors)
             if not errors:
                 return self.async_create_entry(data=_fold_goals(user_input))
         options = self.config_entry.options
@@ -101,7 +165,7 @@ class HomeStockOptionsFlow(OptionsFlow):
                 agent_field:
                     EntitySelector(EntitySelectorConfig(domain="conversation")),
                 vol.Optional(CONF_RECIPE_SOURCE_KEY, default=source_key):
-                    vol.All(TextSelector(), bounded_text),
+                    TextSelector(),
                 vol.Required(CONF_SHOPPING_LIST_HORIZON_DAYS, default=horizon):
                     vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
                 receipt_field:
@@ -110,7 +174,7 @@ class HomeStockOptionsFlow(OptionsFlow):
                 # par compréhension sur GOAL_NUTRIENTS : le formulaire est
                 # fermé sur les nutriments que le journal fige, et une clé de
                 # plus ne peut pas y entrer par recopie.
-                **{_goal_field(nutrient, goals): goal_quantity
+                **{_goal_field(nutrient, goals): _GOAL_SELECTOR
                    for nutrient in GOAL_NUTRIENTS},
             }),
             errors=errors,

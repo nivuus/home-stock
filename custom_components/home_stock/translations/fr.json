@@ -33,7 +33,9 @@
    }
   },
   "error": {
-   "no_attachments": "Cette entité n'accepte pas de pièce jointe : elle ne peut pas lire une photo de ticket. Choisissez-en une autre, ou laissez le champ vide."
+   "no_attachments": "Cette entité n'accepte pas de pièce jointe : elle ne peut pas lire une photo de ticket. Choisissez-en une autre, ou laissez le champ vide.",
+   "text_too_long": "Cette clé est trop longue : 200 caractères au maximum.",
+   "goal_out_of_bounds": "Un objectif doit être un nombre supérieur à 0 et d'au plus 20000. Laissez le champ vide pour ne pas vous fixer d'objectif."
   }
  },
  "entity": {
