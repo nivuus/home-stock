@@ -31,9 +31,10 @@
  *      monter silencieusement ; voir le rapport de tâche. Le petit serveur
  *      local ci-dessus donne une vraie origine `http://127.0.0.1`, sous
  *      laquelle `localStorage` marche normalement.)
- *   4. Deux formats, ceux du spec du panneau (§14) — 412 × 915 (le
+ *   4. Trois formats — les deux du spec du panneau (§14), 412 × 915 (le
  *      téléphone qui scanne en rayon) et 1280 × 800 (le bureau, écran
- *      Catalogue/Réglages) — mesurés avec les MÊMES seuils que le mur
+ *      Catalogue/Réglages), plus le 1920 × 1080 ajouté au lot 6 pour
+ *      l'étirement (voir FORMATS) — mesurés avec les MÊMES seuils que le mur
  *      (`wallpanel` : 62 px de cible tactile) : la tablette cuisine ouvre
  *      ce même panneau, donc c'est le seuil du mur qui prime pour la cible
  *      tactile, même si ce panneau se pilote aussi en main ou à la souris.
@@ -233,6 +234,39 @@ const PALETTES = [
       '--warning-color': 'rgb(255, 219, 117)',
     },
   },
+  {
+    // LA PALETTE QUI FALSIFIE. Les trois ci-dessus ont toutes une primaire
+    // CLAIRE, donc toutes veulent le texte sombre — c'est-à-dire exactement
+    // le repli de `tokens.ts`. Neutraliser `on-color.ts` entièrement les
+    // laissait donc toutes les trois vertes : le balayage ne mesurait rien du
+    // calcul, seulement son repli (relecture du 2026-08-22).
+    //
+    // Celle-ci a une primaire FONCÉE, et c'est le seul point qui compte :
+    //   #1a237e (Material Indigo 900, une primaire de thème parfaitement
+    //   ordinaire) contre le repli sombre #141414 → 1,39:1, très loin des
+    //   4,5:1 exigés ; contre le blanc → 13,24:1.
+    // Le repli est donc FAUX ici, et seule la couleur calculée passe. Casser
+    // `appliquerCouleursDeTexte` fait tomber ce balayage-ci, et lui seul.
+    //
+    // Contrairement aux trois autres, elle n'est relevée nulle part : elle est
+    // CONSTRUITE pour ce contrôle. Ses autres valeurs sont choisies pour ne
+    // rien masquer — texte #14161f à 18:1 sur la carte, secondaire #4a4f63 à
+    // 8,1:1, erreur #b3261e à 6,5:1 : si ce balayage échoue, ce sera sur la
+    // paire accent/texte, pas sur du bruit de palette.
+    nom: 'Primaire foncée (indigo — le repli sombre y est FAUX)',
+    variables: {
+      '--primary-background-color': '#eef0f6',
+      '--secondary-background-color': '#dfe2ee',
+      '--card-background-color': '#ffffff',
+      '--primary-text-color': '#14161f',
+      '--secondary-text-color': '#4a4f63',
+      '--primary-color': '#1a237e',
+      '--text-primary-color': '#ffffff',
+      '--divider-color': 'rgba(20, 22, 31, 0.14)',
+      '--error-color': '#b3261e',
+      '--warning-color': '#ffb300',
+    },
+  },
 ];
 
 function themeCss(palette) {
@@ -272,12 +306,19 @@ const DEFINIR_HA_MINIMAL = `
   }
 `;
 
+/** Le corps est VIDE : chaque scénario monte son propre `<home-stock-panel>`
+ *  avec son `hass` factice (voir `monterEtMesurer`). Un élément statique
+ *  traînait ici, monté SANS `hass` — il levait donc une TypeError à chaque
+ *  chargement (`new Connexion(undefined)`, puis `actualiserSession`), ce qui
+ *  ne se voyait nulle part tant que rien n'écoutait les erreurs de page.
+ *  Depuis que `ouvrirPage` les écoute, il aurait fallu filtrer cette
+ *  erreur-là — la retirer vaut mieux : rien n'en dépendait, et un filtre est
+ *  toujours une porte par laquelle une VRAIE erreur peut passer. */
 function pageHtml(bundleJs, palette = PALETTES[0], avantLeBundle = '') {
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <style>${themeCss(palette)}</style>
 </head><body>
-<home-stock-panel></home-stock-panel>
 ${avantLeBundle ? `<script>${avantLeBundle}</script>` : ''}
 <script type="module">${bundleJs}</script>
 </body></html>`;
@@ -870,9 +911,12 @@ const SCENARIOS = [
     },
     actions: [{ type: 'dispatch-code-lu', code: '3229820129488' }],
     ecranAttendu: 'home-stock-fiche',
-    // La fiche occupe l'écran ENTIER : on y scanne, la coquille ne doit rien
-    // voler à la caméra. Le test unitaire ne prouvait que la moitié positive
-    // (« la barre est là partout ailleurs ») ; voici l'autre moitié.
+    // La caméra garde l'essentiel : pas de barre de navigation. Mais la fiche
+    // n'est plus un cul-de-sac — `/item/<code>` est une URL partageable et la
+    // cible de « Quitter quand même », donc l'en-tête y rend son bouton de
+    // retour. C'est cette SORTIE qu'on exige ici, mesurée pour de vrai : sans
+    // elle, on entre sur cet écran sans plus pouvoir en sortir.
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
     elementAbsent: { enfant: null, selector: 'hs-nav-bar' },
   },
   {
@@ -1288,8 +1332,11 @@ const SCENARIOS = [
       { type: 'click-in-child', enfant: null, selector: '.confirmer-quitter' },
     ],
     ecranAttendu: 'home-stock-fiche',
-    // La fiche occupe l'écran entier, ici comme partout ailleurs.
-    elementAbsent: { enfant: null, selector: 'hs-nav-bar' },
+    // Le cas qui a motivé F6 : on ARRIVE ici par « Quitter quand même », sans
+    // être passé par le scanner. Pas de barre — mais la ligne secondaire de
+    // l'en-tête est masquée elle aussi (`compact`), la caméra garde l'écran.
+    elementAbsent: { enfant: 'hs-header', selector: '.sous-nav' },
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
   },
   {
     nom: 'Coquille : pastille de compte sur Courses',
@@ -1703,6 +1750,9 @@ function formaterDefauts(resultat) {
   for (const t of resultat.texteTronque) {
     lignes.push(`  - Texte tronqué : ${t.element}`);
   }
+  for (const e of resultat.erreursPage ?? []) {
+    lignes.push(`  - Erreur d'exécution de la page : ${e}`);
+  }
   return lignes;
 }
 
@@ -1710,7 +1760,29 @@ function aDesDefauts(resultat) {
   return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant)
     || Boolean(resultat.elementEnTrop) || resultat.debordement
     || resultat.ciblesTropPetites.length > 0 || resultat.contrasteInsuffisant.length > 0
-    || resultat.texteTronque.length > 0;
+    || resultat.texteTronque.length > 0 || (resultat.erreursPage ?? []).length > 0;
+}
+
+/** Ouvre une page sur `url`, EN ÉCOUTANT ce qu'elle jette.
+ *
+ *  Une exception non interceptée dans un cycle de vie Lit (un `updated()` qui
+ *  lève, une promesse de chargement rejetée, un `undefined.machin` dans un
+ *  `render`) ne casse aucune mise en page : l'écran s'arrête simplement de se
+ *  peindre, et les cent scénarios mesurent ce qu'il en reste sans rien
+ *  signaler. C'était le trou : une vraie panne d'exécution du panneau passait
+ *  inaperçue sur la totalité du balayage.
+ *
+ *  `erreursPage` est le tableau vivant que le scénario relèvera après sa
+ *  mesure. Aucun filtre : la page ne monte plus rien d'elle-même (voir
+ *  `pageHtml`), donc tout ce qui en sort vient du panneau mesuré. */
+async function ouvrirPage(navigateur, url, viewport) {
+  const contexte = await navigateur.newContext({ viewport });
+  const page = await contexte.newPage();
+  const erreursPage = [];
+  page.on('pageerror', (erreur) => { erreursPage.push(erreur.message || String(erreur)); });
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+  return { contexte, page, erreursPage };
 }
 
 async function lancerNavigateur() {
@@ -1731,10 +1803,8 @@ async function executerScenarios(navigateur, urlHarnais, familleParEcran) {
     console.log(`\n=== ${format.nom} ===`);
     for (const scenario of SCENARIOS) {
       total += 1;
-      const contexte = await navigateur.newContext({ viewport: { width: format.width, height: format.height } });
-      const page = await contexte.newPage();
-      await page.goto(urlHarnais, { waitUntil: 'load' });
-      await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+      const { contexte, page, erreursPage } = await ouvrirPage(
+        navigateur, urlHarnais, { width: format.width, height: format.height });
       const resultat = await page.evaluate(monterEtMesurer, {
         fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -1742,6 +1812,9 @@ async function executerScenarios(navigateur, urlHarnais, familleParEcran) {
         elementAbsent: scenario.elementAbsent ?? null,
         sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
+      // Ce que la page a jeté pendant la mesure compte comme un défaut du
+      // scénario, au même titre qu'un débordement.
+      resultat.erreursPage = erreursPage;
       await contexte.close();
 
       if (aDesDefauts(resultat)) {
@@ -1820,12 +1893,8 @@ async function executerScenariosLarges(navigateur, urlHarnais, familleParEcran) 
   console.log(`\n=== Vue dense (${FORMAT_LARGE.nom}) ===`);
   let fautes = 0;
   for (const scenario of SCENARIOS_LARGES) {
-    const contexte = await navigateur.newContext({
-      viewport: { width: FORMAT_LARGE.width, height: FORMAT_LARGE.height },
-    });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(
+      navigateur, urlHarnais, { width: FORMAT_LARGE.width, height: FORMAT_LARGE.height });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -1834,6 +1903,9 @@ async function executerScenariosLarges(navigateur, urlHarnais, familleParEcran) 
       elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif ?? false,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     if (aDesDefauts(resultat)) {
@@ -1847,10 +1919,13 @@ async function executerScenariosLarges(navigateur, urlHarnais, familleParEcran) 
   return fautes;
 }
 
-// Trois scénarios représentatifs seulement : la suite complète × 3 palettes
-// × 3 formats ferait 219 mesures pour un gain marginal. Ce qui compte ici,
-// c'est qu'aucune des deux autres palettes ne soit JAMAIS mesurée — pas
-// qu'elles le soient partout.
+// Trois scénarios représentatifs seulement : la suite complète × 4 palettes
+// × 3 formats ferait près de trois cents mesures pour un gain marginal. Ce qui
+// compte ici, c'est qu'aucune des autres palettes ne soit JAMAIS mesurée — pas
+// qu'elles le soient partout. Les trois scénarios retenus couvrent chacun un
+// aplat --hs-accent (le bouton de scan pour deux d'entre eux, la ligne active
+// de l'en-tête et les actions de la liste pour le troisième), sans quoi la
+// palette à primaire foncée ne prouverait rien.
 const NOMS_BALAYAGE = [
   'Scanner (écran par défaut)',
   'Liste (quatre rayons, deux origines, trois cochées repliées)',
@@ -1864,10 +1939,7 @@ async function executerBalayagePalettes(navigateur, urlsParPalette, familleParEc
     console.log(`\n=== Balayage : ${PALETTES[i].nom} ===`);
     for (const scenario of SCENARIOS.filter((s) => NOMS_BALAYAGE.includes(s.nom))) {
       total += 1;
-      const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-      const page = await contexte.newPage();
-      await page.goto(urlsParPalette[i], { waitUntil: 'load' });
-      await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+      const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlsParPalette[i], { width: 412, height: 915 });
       const resultat = await page.evaluate(monterEtMesurer, {
         fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -1876,6 +1948,9 @@ async function executerBalayagePalettes(navigateur, urlsParPalette, familleParEc
         elementAbsent: scenario.elementAbsent ?? null,
         sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
+      // Ce que la page a jeté pendant la mesure compte comme un défaut du
+      // scénario, au même titre qu'un débordement.
+      resultat.erreursPage = erreursPage;
       await contexte.close();
       if (aDesDefauts(resultat)) {
         fautes += 1;
@@ -1940,10 +2015,7 @@ async function verifierBundleMinifie(navigateur, urlMinifie, familleParEcran) {
   console.log('\n=== Bundle minifié (celui qui part en production) ===');
   let fautes = 0;
   for (const scenario of SCENARIOS_MINIFIES) {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlMinifie, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlMinifie, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -1951,6 +2023,9 @@ async function verifierBundleMinifie(navigateur, urlMinifie, familleParEcran) {
       elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     if (aDesDefauts(resultat)) {
@@ -2011,10 +2086,7 @@ async function executerScenariosHaCharge(navigateur, urlHa, familleParEcran) {
   console.log('\n=== Éléments Home Assistant chargés (arrivée depuis Lovelace) ===');
   let fautes = 0;
   for (const scenario of SCENARIOS_HA_CHARGE) {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlHa, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHa, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -2023,6 +2095,9 @@ async function executerScenariosHaCharge(navigateur, urlHa, familleParEcran) {
       elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif ?? false,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     if (aDesDefauts(resultat)) {
@@ -2088,15 +2163,15 @@ async function autoVerification(navigateur, urlHarnais) {
   console.log('\n=== Auto-vérification : le script sait-il détecter une régression ? ===');
   let toutDetecte = true;
   for (const cassure of CASSURES) {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
       styleCasse: cassure.css, racineCassure: cassure.racine ?? null,
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     const detecte = cassure.verifie(resultat);
@@ -2113,10 +2188,7 @@ async function autoVerification(navigateur, urlHarnais) {
   // vraies `actions`), pas une simulation à côté, pour être fidèle à ce
   // qu'un bouton renommé produirait réellement.
   {
-    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
-    const page = await contexte.newPage();
-    await page.goto(urlHarnais, { waitUntil: 'load' });
-    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } },
       // Une FAMILLE qui n'existe pas dans la barre : `boutonFamille` rend
@@ -2126,11 +2198,43 @@ async function autoVerification(navigateur, urlHarnais) {
       actions: [{ type: 'click-nav', famille: 'famille-introuvable-expres' }],
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, ecranAttendu: 'home-stock-catalogue',
     });
+    // Ce que la page a jeté pendant la mesure compte comme un défaut du
+    // scénario, au même titre qu'un débordement.
+    resultat.erreursPage = erreursPage;
     await contexte.close();
 
     const detecte = resultat.ecranManquant === 'home-stock-catalogue';
     console.log(`  ${detecte ? '✓' : '✗'} un clic de navigation qui ne trouve pas son bouton — `
       + `${detecte ? 'détecté comme écran manquant' : 'NON DÉTECTÉ (bug du vérificateur)'}`);
+    if (!detecte) toutDetecte = false;
+  }
+
+  // Sixième cassure, d'une nature différente elle aussi : une erreur
+  // d'EXÉCUTION de la page. Rien ne l'attrapait jusqu'ici — une exception non
+  // interceptée dans un cycle de vie Lit arrête l'écran de se peindre sans
+  // casser la moindre mesure, et les cent scénarios restaient verts. On en
+  // jette une ASYNCHRONE (la forme que prend une faute dans `updated()` ou
+  // dans une promesse de chargement : elle ne remonte à aucun `await` du
+  // harnais), et on vérifie qu'elle ressort bien comme un défaut du scénario.
+  {
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHarnais, { width: 412, height: 915 });
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+    });
+    await page.evaluate(() => {
+      setTimeout(() => { throw new Error('cassure volontaire : erreur de page'); }, 0);
+    });
+    // L'événement `pageerror` arrive après coup : sans cette attente, on
+    // conclurait « non détectée » sur une course, pas sur un défaut.
+    await page.waitForTimeout(200);
+    resultat.erreursPage = erreursPage;
+    await contexte.close();
+
+    const detecte = aDesDefauts(resultat)
+      && resultat.erreursPage.some((m) => m.includes('cassure volontaire'));
+    console.log(`  ${detecte ? '✓' : '✗'} une erreur d'exécution jetée par la page — `
+      + `${detecte ? 'détectée et rapportée comme défaut' : 'NON DÉTECTÉE (bug du vérificateur)'}`);
     if (!detecte) toutDetecte = false;
   }
 
@@ -2160,8 +2264,8 @@ async function main() {
       + `(minifié : ${(bundleMinifie.length / 1024).toFixed(0)} ko).`);
   }
 
-  // Trois pages servies pour tout le run sur le MÊME serveur (127.0.0.1,
-  // port éphémère) — une par palette (voir PALETTES) : `'/'` reste la
+  // Une page par palette servie pour tout le run sur le MÊME serveur
+  // (127.0.0.1, port éphémère) — voir PALETTES : `'/'` reste la
   // palette par défaut, celle de tout ce qui n'en connaît qu'une (scénarios
   // ordinaires, vue dense, auto-vérification). Le contenu ne change jamais
   // d'un scénario à l'autre au sein d'une même page — seul ce qu'on y
@@ -2171,14 +2275,16 @@ async function main() {
   const { DESTINATIONS } = await chargerDestinations();
   const familleParEcran = new Map(DESTINATIONS.map((d) => [d.screen, d.family]));
 
-  const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques({
-    '/': pageHtml(bundle, PALETTES[0]),
-    '/p1': pageHtml(bundle, PALETTES[1]),
-    '/p2': pageHtml(bundle, PALETTES[2]),
-    // La même page, mais avec les `ha-*` enregistrés avant le bundle : voir
-    // SCENARIOS_HA_CHARGE.
-    '/ha': pageHtml(bundle, PALETTES[0], DEFINIR_HA_MINIMAL),
-  });
+  // Construit depuis PALETTES, jamais énuméré à la main : une palette ajoutée
+  // sans sa page serait servie par le repli sur `'/'` — donc mesurée sous la
+  // palette par défaut, sous le nom d'une autre. Exactement le genre de
+  // contrôle vert qui ne prouve rien.
+  const pages = { '/': pageHtml(bundle, PALETTES[0]) };
+  for (let i = 1; i < PALETTES.length; i += 1) pages[`/p${i}`] = pageHtml(bundle, PALETTES[i]);
+  // La même page, mais avec les `ha-*` enregistrés avant le bundle : voir
+  // SCENARIOS_HA_CHARGE.
+  pages['/ha'] = pageHtml(bundle, PALETTES[0], DEFINIR_HA_MINIMAL);
+  const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques(pages);
   const urlsParPalette = PALETTES.map((_, i) => (i === 0 ? urlHarnais : `${urlHarnais}p${i}`));
   const urlHa = `${urlHarnais}ha`;
   // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
@@ -2203,15 +2309,23 @@ async function main() {
     // Le chemin réellement servi à qui arrive depuis Lovelace.
     fautes += await executerScenariosHaCharge(navigateur, urlHa, familleParEcran);
     total += SCENARIOS_HA_CHARGE.length;
-    // Le balayage : trois scénarios représentatifs, sous les deux palettes
+    // Le balayage : trois scénarios représentatifs, sous toutes les palettes
     // qu'aucun autre passage ne mesure jamais (voir NOMS_BALAYAGE).
     const balayage = await executerBalayagePalettes(navigateur, urlsParPalette, familleParEcran);
     fautes += balayage.fautes;
     total += balayage.total;
 
+    // Deux variables, pas une : `autoOk` dit si l'auto-vérification a réussi,
+    // `autoVerifie` si elle a seulement TOURNÉ. Avec la seule première,
+    // `--sans-auto-verification` la laissait à `true` par défaut et le script
+    // imprimait quand même qu'elle « confirme » savoir échouer — une garantie
+    // affirmée sans avoir été vérifiée, dans le fichier même dont c'est le
+    // métier de ne pas faire ça.
     let autoOk = true;
+    let autoVerifie = false;
     if (!sansAutoVerification) {
       autoOk = await autoVerification(navigateur, urlHarnais);
+      autoVerifie = true;
     }
 
     console.log(`\n${total - fautes}/${total} scénarios sans défaut.`);
@@ -2221,8 +2335,11 @@ async function main() {
     } else if (!autoOk) {
       console.log('Le vérificateur n’a pas su détecter une régression injectée volontairement : ne pas lui faire confiance.');
       process.exitCode = 1;
-    } else {
+    } else if (autoVerifie) {
       console.log('Aucun défaut signalé, et l’auto-vérification confirme que le script sait échouer quand il le faut.');
+    } else {
+      console.log('Aucun défaut signalé — mais l’auto-vérification n’a PAS tourné '
+        + '(--sans-auto-verification) : rien ici ne prouve que ce script sait échouer.');
     }
   } finally {
     await navigateur.close();
