@@ -114,6 +114,42 @@ async function bundlerApplication({ minifier = false } = {}) {
   return resultat.outputFiles[0].text.replaceAll('</script', '<\\/script');
 }
 
+/** La table des destinations, lue DANS LA SOURCE plutôt que recopiée ici.
+ *  Une seconde table à tenir synchronisée est exactement ce que
+ *  `src/shell/destinations.ts` a supprimé (voir son commentaire de tête) : un
+ *  libellé recopié qui dérive, et c'est le harnais qui ment. esbuild sait
+ *  déjà lire ce fichier ; il n'importe que des types, donc il se bundle seul. */
+async function chargerDestinations() {
+  const resultat = await esbuild.build({
+    entryPoints: [join(SRC, 'shell', 'destinations.ts')],
+    bundle: true, write: false, format: 'esm', target: 'es2022',
+    tsconfig: TSCONFIG, logLevel: 'silent',
+  });
+  const base64 = Buffer.from(resultat.outputFiles[0].text, 'utf8').toString('base64');
+  return import(`data:text/javascript;base64,${base64}`);
+}
+
+/** Traduit les actions d'un scénario en gestes que la page sait exécuter.
+ *  La navigation ne se fait plus par un bouton texte par écran, mais par
+ *  FAMILLE : le scénario nomme l'ÉCRAN voulu, et le harnais trouve sa famille
+ *  dans la table, comme le ferait un utilisateur qui sait où ranger les
+ *  choses. Un écran absent de la table est une faute d'écriture du scénario,
+ *  pas un défaut de rendu : on lève ici, en Node, avant même d'ouvrir la page.
+ *
+ *  (Ce qui reste SILENCIEUX, volontairement, c'est un bouton de famille
+ *  introuvable dans la barre : c'est le contrôle « écran jamais atteint » qui
+ *  doit l'attraper, et l'auto-vérification en fait la preuve.) */
+function preparerActions(actions, familleParEcran) {
+  return actions.map((action) => {
+    if (action.type !== 'click-nav' || action.famille) return action;
+    const famille = familleParEcran.get(action.ecran);
+    if (!famille) {
+      throw new Error(`Scénario : écran hors de la table des destinations — ${action.ecran}`);
+    }
+    return { ...action, famille };
+  });
+}
+
 // --- palettes RÉELLES ---------------------------------------------------
 //
 // L'ancien THEME_CSS n'était pas seulement incomplet (cinq variables sur les
@@ -218,12 +254,31 @@ ${lignes}
 `;
 }
 
-function pageHtml(bundleJs, palette = PALETTES[0]) {
+/** Les éléments `ha-*` que Home Assistant charge avec son chunk Lovelace, en
+ *  version minimale. Sans eux, le harnais et jsdom mesurent TOUJOURS le repli
+ *  des enveloppes, jamais `<ha-card>` ni `<ha-svg-icon>` — c'est-à-dire jamais
+ *  ce que voit l'utilisateur qui arrive depuis Lovelace, soit le cas courant
+ *  (`default_panel: lovelace`). Défini AVANT le bundle : `hs-icon` et
+ *  `hs-card` décident au premier rendu, synchronement. */
+const DEFINIR_HA_MINIMAL = `
+  for (const nom of ['ha-card', 'ha-button', 'ha-svg-icon']) {
+    if (!customElements.get(nom)) {
+      customElements.define(nom, class extends HTMLElement {
+        connectedCallback() {
+          if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = '<slot></slot>';
+        }
+      });
+    }
+  }
+`;
+
+function pageHtml(bundleJs, palette = PALETTES[0], avantLeBundle = '') {
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <style>${themeCss(palette)}</style>
 </head><body>
 <home-stock-panel></home-stock-panel>
+${avantLeBundle ? `<script>${avantLeBundle}</script>` : ''}
 <script type="module">${bundleJs}</script>
 </body></html>`;
 }
@@ -823,7 +878,7 @@ const SCENARIOS = [
         'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', LIGNES_PANIER),
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Panier' }],
+    actions: [{ type: 'route', path: '/cart' }],
     ecranAttendu: 'home-stock-panier',
   },
   {
@@ -834,7 +889,7 @@ const SCENARIOS = [
         'home_stock/locations/list': { locations: EMPLACEMENTS },
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Ranger' }],
+    actions: [{ type: 'route', path: '/put-away' }],
     ecranAttendu: 'home-stock-rangement',
   },
   {
@@ -845,7 +900,7 @@ const SCENARIOS = [
         'home_stock/stores/list': { stores: MAGASINS },
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Courses' }],
+    actions: [{ type: 'route', path: '/shopping' }],
     ecranAttendu: 'home-stock-session',
     elementAttendu: { enfant: 'home-stock-session', selector: '.ouvrir-session' },
   },
@@ -858,7 +913,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Courses' },
+      { type: 'route', path: '/shopping' },
       { type: 'click-in-child', enfant: 'home-stock-session', selector: '.clore-session' },
     ],
     ecranAttendu: 'home-stock-session',
@@ -879,7 +934,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Catalogue' },
+      { type: 'click-nav', ecran: 'catalogue' },
       { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
     ],
     ecranAttendu: 'home-stock-catalogue',
@@ -899,7 +954,7 @@ const SCENARIOS = [
       service: { 'home_stock.resync_off': {} },
     },
     actions: [
-      { type: 'click-nav', texte: 'Réglages' },
+      { type: 'route', path: '/settings' },
       { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.resynchroniser' },
     ],
     ecranAttendu: 'home-stock-reglages',
@@ -920,7 +975,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Réglages' },
+      { type: 'route', path: '/settings' },
       { type: 'click-in-child', enfant: 'home-stock-reglages', selector: '.controler' },
     ],
     ecranAttendu: 'home-stock-reglages',
@@ -945,7 +1000,9 @@ const SCENARIOS = [
     // l'écran avant même de connaître le sort de l'écriture) — la bannière,
     // elle, est posée par le panneau lui-même, hors de tout enfant.
     ecranAttendu: 'home-stock-scanner',
-    elementAttendu: { enfant: null, selector: '.erreur-file' },
+    // La bannière a déménagé dans `<hs-header>` (Task 10) : même message du
+    // serveur, un cran plus bas dans l'arbre.
+    elementAttendu: { enfant: 'hs-header', selector: '.erreur' },
   },
   {
     nom: 'Manger (produit au gramme, portion apprise, partage ouvert)',
@@ -959,8 +1016,8 @@ const SCENARIOS = [
         },
       },
     },
-    // Pas de `click-nav` ici : « manger » n'est pas une destination de la
-    // barre de navigation, il s'ouvre sur un produit désigné (tâche 15). Le
+    // Pas de navigation ici : « manger » n'a ni bouton de famille ni URL
+    // sans identifiant, il s'ouvre sur un produit désigné (tâche 15). Le
     // brief décrivait un type d'action `click` inexistant — corrigé en
     // `click-in-child`, le vocabulaire déjà utilisé pour cliquer dans un
     // écran monté sous le panneau (voir Catalogue et Réglages ci-dessus).
@@ -980,14 +1037,14 @@ const SCENARIOS = [
         'home_stock/journal/series': SERIE_QUATORZE_JOURS,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    actions: [{ type: 'route', path: '/log' }],
     ecranAttendu: 'home-stock-journal',
   },
   {
     nom: 'Recettes (liste dense, badges à relire et non appariés)',
     fixture: { reponses: { 'home_stock/session/current': null,
                            'home_stock/recipes/list': RECETTES_DENSES } },
-    actions: [{ type: 'click-nav', texte: 'Recettes' }],
+    actions: [{ type: 'route', path: '/recipes' }],
     ecranAttendu: 'home-stock-recettes',
   },
   {
@@ -1008,7 +1065,7 @@ const SCENARIOS = [
     nom: 'Planning (semaine chargée)',
     fixture: { reponses: { 'home_stock/session/current': null,
                            'home_stock/meals/list': SEMAINE_CHARGEE } },
-    actions: [{ type: 'click-nav', texte: 'Planning' }],
+    actions: [{ type: 'click-nav', ecran: 'planning' }],
     ecranAttendu: 'home-stock-planning',
   },
   {
@@ -1031,7 +1088,7 @@ const SCENARIOS = [
         'home_stock/batteries/discover': PILES_A_DECLARER,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Piles' }],
+    actions: [{ type: 'click-nav', ecran: 'piles' }],
     ecranAttendu: 'home-stock-piles',
   },
   {
@@ -1050,7 +1107,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Piles' },
+      { type: 'click-nav', ecran: 'piles' },
       { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.pile' },
       { type: 'click-in-child', enfant: 'home-stock-piles', selector: '.evenement' },
     ],
@@ -1067,7 +1124,7 @@ const SCENARIOS = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Équipements' },
+      { type: 'route', path: '/equipment' },
       { type: 'click-in-child', enfant: 'home-stock-equipements', selector: '.equipement' },
     ],
     ecranAttendu: 'home-stock-equipements',
@@ -1081,7 +1138,7 @@ const SCENARIOS = [
         'home_stock/list/items': LISTE_CHARGEE,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Liste' }],
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
     ecranAttendu: 'home-stock-liste',
     elementAttendu: { enfant: 'home-stock-liste', selector: '.cochees' },
   },
@@ -1138,9 +1195,53 @@ const SCENARIOS = [
         'home_stock/journal/series': SERIE_QUATORZE_JOURS,
       },
     },
-    actions: [{ type: 'click-nav', texte: 'Journal' }],
+    actions: [{ type: 'route', path: '/log' }],
     ecranAttendu: 'home-stock-journal',
     elementAttendu: { enfant: 'home-stock-journal', selector: '.objectif-semaine' },
+  },
+  // --- lot 7 : la coquille elle-même ---------------------------------------
+  //
+  // Trois choses qu'aucun écran ne peut prouver à sa place : la barre en bas,
+  // l'en-tête qui sait quand il n'y a nulle part où remonter, et la pastille.
+  {
+    nom: 'Coquille : barre basse, en-tête sans retour (racine)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
+    ecranAttendu: 'home-stock-liste',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.destination.active' },
+    // Une racine n'a nulle part où remonter : pas de bouton Retour. Sans ce
+    // contrôle en négatif, un en-tête qui en afficherait toujours un
+    // passerait pour irréprochable.
+    elementAbsent: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    nom: 'Coquille : en-tête avec retour (sous-écran)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/journal/day': JOURNEE_CHARGEE,
+        'home_stock/journal/series': SERIE_QUATORZE_JOURS,
+      },
+    },
+    actions: [{ type: 'route', path: '/log' }],
+    ecranAttendu: 'home-stock-journal',
+    elementAttendu: { enfant: 'hs-header', selector: '.retour' },
+  },
+  {
+    nom: 'Coquille : pastille de compte sur Courses',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', LIGNES_PANIER),
+      },
+    },
+    actions: [],
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.badge' },
   },
 ];
 
@@ -1149,7 +1250,7 @@ const SCENARIOS = [
 // Playwright sérialise cette fonction telle quelle et l'exécute dans le
 // navigateur : elle ne doit fermer sur rien d'extérieur, seulement sur son
 // argument.
-async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, ecranAttendu = null, elementAttendu = null, sansScannerNatif = false }) {
+async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, styleCasse, racineCassure = null, ecranAttendu = null, elementAttendu = null, elementAbsent = null, sansScannerNatif = false }) {
   function attendre(ms) { return new Promise((resolve) => { setTimeout(resolve, ms); }); }
 
   function reponsePour(msg) {
@@ -1195,24 +1296,50 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   // (chaque composant Lit encapsule la sienne), donc une régression réelle
   // dans un composant ne se laisserait jamais casser depuis l'extérieur de
   // cette façon-là — il faut viser le même shadow root que celui qui sera mesuré.
+  // `racineCassure` : depuis la coquille (Task 11), les boutons de navigation
+  // vivent dans le shadow root de `<hs-nav-bar>`, pas dans celui du panneau —
+  // et une feuille posée dans le second ne franchit pas la frontière du
+  // premier. Viser le bon shadow root est la condition pour que la cassure
+  // porte vraiment sur ce qui sera mesuré.
+  function racineDe(selecteur) {
+    if (!selecteur) return panneau.shadowRoot;
+    const hote = panneau.shadowRoot.querySelector(selecteur);
+    return hote && hote.shadowRoot ? hote.shadowRoot : null;
+  }
+
   if (styleCasse) {
     await attendre(0);
     await panneau.updateComplete;
-    const style = document.createElement('style');
-    style.textContent = styleCasse;
-    panneau.shadowRoot.appendChild(style);
+    const racine = racineDe(racineCassure);
+    if (racine) {
+      const hote = racineCassure ? panneau.shadowRoot.querySelector(racineCassure) : null;
+      if (hote && hote.updateComplete) await hote.updateComplete;
+      const style = document.createElement('style');
+      style.textContent = styleCasse;
+      racine.appendChild(style);
+    }
   }
 
   async function reglerAttente() {
     await panneau.updateComplete;
-    const enfants = ['home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
-      'home-stock-rangement', 'home-stock-catalogue', 'home-stock-reglages',
-      'home-stock-consommation', 'home-stock-journal',
+    // La coquille d'abord (elle décide de la mise en page), puis l'écran. Les
+    // dix-sept écrans y sont, pas douze : un écran oublié se mesurait à
+    // moitié peint.
+    const enfants = ['hs-nav-bar', 'hs-header',
+      'home-stock-scanner', 'home-stock-fiche', 'home-stock-panier',
+      'home-stock-rangement', 'home-stock-session', 'home-stock-catalogue',
+      'home-stock-reglages', 'home-stock-consommation', 'home-stock-journal',
       'home-stock-recettes', 'home-stock-recette', 'home-stock-validation',
-      'home-stock-planning'];
+      'home-stock-planning', 'home-stock-piles', 'home-stock-equipements',
+      'home-stock-liste', 'home-stock-ticket'];
     for (const nom of enfants) {
       const enfant = panneau.shadowRoot.querySelector(nom);
       if (enfant && enfant.updateComplete) await enfant.updateComplete;
+      if (enfant && enfant.shadowRoot) {
+        for (const petit of enfant.shadowRoot.querySelectorAll('hs-icon, hs-card, hs-button')) {
+          if (petit.updateComplete) await petit.updateComplete;
+        }
+      }
     }
   }
 
@@ -1221,16 +1348,24 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   await attendre(20);
   await reglerAttente();
 
-  function boutonNav(texte) {
-    const boutons = panneau.shadowRoot.querySelectorAll('.nav-bouton');
-    for (const b of boutons) if (b.textContent && b.textContent.includes(texte)) return b;
-    return null;
+  // Un bouton de FAMILLE, dans la barre de la coquille. Rend `null` quand il
+  // n'existe pas — un no-op silencieux, exactement comme avant : c'est le
+  // contrôle « écran jamais atteint » plus bas qui doit l'attraper, et
+  // l'auto-vérification en fait la preuve à chaque exécution.
+  function boutonFamille(famille) {
+    const barre = panneau.shadowRoot.querySelector('hs-nav-bar');
+    if (!barre || !barre.shadowRoot) return null;
+    return barre.shadowRoot.querySelector(`[data-family="${famille}"]`);
   }
 
   for (const action of actions) {
     if (action.type === 'click-nav') {
-      const bouton = boutonNav(action.texte);
+      const bouton = boutonFamille(action.famille);
       if (bouton) bouton.click();
+    } else if (action.type === 'route') {
+      // Ce que Home Assistant repasse au panneau quand l'URL change — donc
+      // aussi ce que fait le bouton Retour du navigateur.
+      panneau.route = { prefix: '/home-stock', path: action.path };
     } else if (action.type === 'dispatch-code-lu') {
       const scanner = panneau.shadowRoot.querySelector('home-stock-scanner');
       if (scanner) {
@@ -1286,20 +1421,49 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   if (ecranAttendu && !panneau.shadowRoot.querySelector(ecranAttendu)) {
     ecranManquant = ecranAttendu;
   }
+  // `enfant` accepte une CHAÎNE de shadow roots (« hs-nav-bar hs-icon ») :
+  // depuis la coquille, ce qui compte peut vivre à trois niveaux de
+  // profondeur — `<ha-svg-icon>` dans `<hs-icon>` dans `<hs-nav-bar>`.
+  function racineEnfant(chemin) {
+    let racine = panneau.shadowRoot;
+    if (!chemin) return racine;
+    for (const nom of chemin.trim().split(/\s+/)) {
+      const hote = racine.querySelector(nom);
+      if (!hote || !hote.shadowRoot) return null;
+      racine = hote.shadowRoot;
+    }
+    return racine;
+  }
+
   let elementManquant = null;
   if (elementAttendu) {
-    const racine = elementAttendu.enfant
-      ? panneau.shadowRoot.querySelector(elementAttendu.enfant)?.shadowRoot
-      : panneau.shadowRoot;
+    const racine = racineEnfant(elementAttendu.enfant);
     if (!racine || !racine.querySelector(elementAttendu.selector)) {
       elementManquant = `${elementAttendu.enfant ?? '<home-stock-panel>'} ${elementAttendu.selector}`;
+    }
+  }
+  // L'inverse : ce qui ne DOIT PAS être là. « L'en-tête d'une racine n'a pas
+  // de bouton Retour » ne se prouve pas autrement — et un scénario qui ne
+  // prouve rien vaut mieux supprimé qu'affiché en vert.
+  let elementEnTrop = null;
+  if (elementAbsent) {
+    const racine = racineEnfant(elementAbsent.enfant);
+    if (racine && racine.querySelector(elementAbsent.selector)) {
+      elementEnTrop = `${elementAbsent.enfant ?? '<home-stock-panel>'} ${elementAbsent.selector}`;
     }
   }
 
   // --- mesures -----------------------------------------------------------
 
+  // Le document ne déborde plus tout seul depuis la coquille : `.contenu`
+  // porte `overflow-y: auto`, et le CSS force alors `overflow-x` de `visible`
+  // à `auto` — un écran trop large y gagne une barre de défilement au lieu de
+  // pousser la page. Sans la mesure ci-dessous, le contrôle de débordement
+  // serait devenu inerte sur les dix-sept écrans d'un coup.
+  const contenu = panneau.shadowRoot.querySelector('.contenu');
   const debordement = document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-    || document.body.scrollWidth > document.body.clientWidth + 1;
+    || document.body.scrollWidth > document.body.clientWidth + 1
+    || Boolean(contenu && contenu.scrollWidth > contenu.clientWidth + 1);
 
   function tousLesElements() {
     const resultat = [];
@@ -1424,7 +1588,8 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
     }
   }
 
-  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque, ecranManquant, elementManquant };
+  return { debordement, ciblesTropPetites, contrasteInsuffisant, texteTronque,
+           ecranManquant, elementManquant, elementEnTrop };
 }
 
 // --- orchestration -----------------------------------------------------------
@@ -1438,6 +1603,9 @@ function formaterDefauts(resultat) {
   if (resultat.elementManquant) {
     lignes.push(`  - Élément attendu absent : ${resultat.elementManquant} — l'action censée le produire `
       + 'n’a apparemment pas eu lieu.');
+  }
+  if (resultat.elementEnTrop) {
+    lignes.push(`  - Élément qui ne devrait pas être là : ${resultat.elementEnTrop}.`);
   }
   if (resultat.debordement) lignes.push('  - Débordement horizontal de la page.');
   for (const c of resultat.ciblesTropPetites) {
@@ -1453,7 +1621,8 @@ function formaterDefauts(resultat) {
 }
 
 function aDesDefauts(resultat) {
-  return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant) || resultat.debordement
+  return Boolean(resultat.ecranManquant) || Boolean(resultat.elementManquant)
+    || Boolean(resultat.elementEnTrop) || resultat.debordement
     || resultat.ciblesTropPetites.length > 0 || resultat.contrasteInsuffisant.length > 0
     || resultat.texteTronque.length > 0;
 }
@@ -1469,7 +1638,7 @@ async function lancerNavigateur() {
   }
 }
 
-async function executerScenarios(navigateur, urlHarnais) {
+async function executerScenarios(navigateur, urlHarnais, familleParEcran) {
   let fautes = 0;
   let total = 0;
   for (const format of FORMATS) {
@@ -1481,9 +1650,10 @@ async function executerScenarios(navigateur, urlHarnais) {
       await page.goto(urlHarnais, { waitUntil: 'load' });
       await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
       const resultat = await page.evaluate(monterEtMesurer, {
-        fixture: scenario.fixture, actions: scenario.actions,
+        fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
         ecranAttendu: scenario.ecranAttendu ?? null, elementAttendu: scenario.elementAttendu ?? null,
+        elementAbsent: scenario.elementAbsent ?? null,
         sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
       await contexte.close();
@@ -1531,7 +1701,7 @@ const SCENARIOS_LARGES = [
       },
     },
     actions: [
-      { type: 'click-nav', texte: 'Catalogue' },
+      { type: 'click-nav', ecran: 'catalogue' },
       { type: 'click-in-child', enfant: 'home-stock-catalogue', selector: '.modifier' },
     ],
     ecranAttendu: 'home-stock-catalogue',
@@ -1540,9 +1710,27 @@ const SCENARIOS_LARGES = [
     // contrôle-ci sans elle.
     elementAttendu: { enfant: 'home-stock-catalogue', selector: '.dense .volet-edition' },
   },
+  {
+    // La coquille bascule en rail à gauche au-delà de 1000 px. C'est le seul
+    // format où ça se mesure, et le seul endroit où `flex-direction: row`
+    // remplace `column-reverse` sans que l'ordre du DOM ne bouge.
+    nom: 'Coquille : rail à gauche, en-tête et contenu à droite',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/products/list': { products: PRODUITS_CATALOGUE },
+        'home_stock/aisles/list': { aisles: RAYONS },
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+        'home_stock/batches/list': { batches: LOTS_CATALOGUE },
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'catalogue' }],
+    ecranAttendu: 'home-stock-catalogue',
+    elementAttendu: { enfant: 'hs-nav-bar', selector: '.barre.rail' },
+  },
 ];
 
-async function executerScenariosLarges(navigateur, urlHarnais) {
+async function executerScenariosLarges(navigateur, urlHarnais, familleParEcran) {
   console.log(`\n=== Vue dense (${FORMAT_LARGE.nom}) ===`);
   let fautes = 0;
   for (const scenario of SCENARIOS_LARGES) {
@@ -1553,10 +1741,11 @@ async function executerScenariosLarges(navigateur, urlHarnais) {
     await page.goto(urlHarnais, { waitUntil: 'load' });
     await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
     const resultat = await page.evaluate(monterEtMesurer, {
-      fixture: scenario.fixture, actions: scenario.actions,
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
       ecranAttendu: scenario.ecranAttendu ?? null,
       elementAttendu: scenario.elementAttendu ?? null,
+      elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif ?? false,
     });
     await contexte.close();
@@ -1582,7 +1771,7 @@ const NOMS_BALAYAGE = [
   'Bannière de refus (écriture rejetée par le serveur)',
 ];
 
-async function executerBalayagePalettes(navigateur, urlsParPalette) {
+async function executerBalayagePalettes(navigateur, urlsParPalette, familleParEcran) {
   let fautes = 0;
   let total = 0;
   for (let i = 1; i < PALETTES.length; i += 1) {
@@ -1594,10 +1783,11 @@ async function executerBalayagePalettes(navigateur, urlsParPalette) {
       await page.goto(urlsParPalette[i], { waitUntil: 'load' });
       await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
       const resultat = await page.evaluate(monterEtMesurer, {
-        fixture: scenario.fixture, actions: scenario.actions,
+        fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
         cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
         ecranAttendu: scenario.ecranAttendu ?? null,
         elementAttendu: scenario.elementAttendu ?? null,
+        elementAbsent: scenario.elementAbsent ?? null,
         sansScannerNatif: scenario.sansScannerNatif ?? false,
       });
       await contexte.close();
@@ -1660,7 +1850,7 @@ const SCENARIOS_MINIFIES = [
   },
 ];
 
-async function verifierBundleMinifie(navigateur, urlMinifie) {
+async function verifierBundleMinifie(navigateur, urlMinifie, familleParEcran) {
   console.log('\n=== Bundle minifié (celui qui part en production) ===');
   let fautes = 0;
   for (const scenario of SCENARIOS_MINIFIES) {
@@ -1669,10 +1859,83 @@ async function verifierBundleMinifie(navigateur, urlMinifie) {
     await page.goto(urlMinifie, { waitUntil: 'load' });
     await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
     const resultat = await page.evaluate(monterEtMesurer, {
-      fixture: scenario.fixture, actions: scenario.actions,
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
       ecranAttendu: scenario.ecranAttendu, elementAttendu: scenario.elementAttendu,
+      elementAbsent: scenario.elementAbsent ?? null,
       sansScannerNatif: scenario.sansScannerNatif,
+    });
+    await contexte.close();
+
+    if (aDesDefauts(resultat)) {
+      fautes += 1;
+      console.log(`  ✗ ${scenario.nom}`);
+      for (const ligne of formaterDefauts(resultat)) console.log(ligne);
+    } else {
+      console.log(`  ✓ ${scenario.nom}`);
+    }
+  }
+  return fautes;
+}
+
+// --- ce que voit celui qui arrive depuis Lovelace ---------------------------
+//
+// Servis par la page `/ha`, où `DEFINIR_HA_MINIMAL` enregistre `ha-card`,
+// `ha-button` et `ha-svg-icon` AVANT le bundle. Partout ailleurs, le harnais
+// mesure le repli des enveloppes — le cas de la tablette de la cuisine, qui
+// ouvre `/home-stock` directement. Les deux chemins existent en production ;
+// un seul était mesuré.
+const SCENARIOS_HA_CHARGE = [
+  {
+    nom: 'Coquille servie par Lovelace (ha-svg-icon rendu, pas le repli)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/list/items': LISTE_CHARGEE,
+      },
+    },
+    actions: [{ type: 'click-nav', ecran: 'liste' }],
+    ecranAttendu: 'home-stock-liste',
+    // La preuve que c'est bien la branche `<ha-svg-icon>` de `hs-icon` qui
+    // est rendue : sans elle, ce scénario mesurerait le même repli que les
+    // autres et ne prouverait rien de plus.
+    elementAttendu: { enfant: 'hs-nav-bar hs-icon', selector: 'ha-svg-icon' },
+  },
+  {
+    nom: 'En-tête servi par Lovelace : refus du serveur, icônes HA',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': sessionOuverte('shopping', 'Carrefour', []),
+        'home_stock/lookup': RESULTAT_LOOKUP_CONNU,
+        'home_stock/session/add_line': { __erreur: { code: 'shopping_refused', message: 'Cette ligne est déjà rangée.' } },
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '1234567890123' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018, mode: 'panier', offDroppedFields: [],
+      } },
+    ],
+    ecranAttendu: 'home-stock-scanner',
+    elementAttendu: { enfant: 'hs-header hs-icon', selector: 'ha-svg-icon' },
+  },
+];
+
+async function executerScenariosHaCharge(navigateur, urlHa, familleParEcran) {
+  console.log('\n=== Éléments Home Assistant chargés (arrivée depuis Lovelace) ===');
+  let fautes = 0;
+  for (const scenario of SCENARIOS_HA_CHARGE) {
+    const contexte = await navigateur.newContext({ viewport: { width: 412, height: 915 } });
+    const page = await contexte.newPage();
+    await page.goto(urlHa, { waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
+    const resultat = await page.evaluate(monterEtMesurer, {
+      fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      ecranAttendu: scenario.ecranAttendu ?? null,
+      elementAttendu: scenario.elementAttendu ?? null,
+      elementAbsent: scenario.elementAbsent ?? null,
+      sansScannerNatif: scenario.sansScannerNatif ?? false,
     });
     await contexte.close();
 
@@ -1692,15 +1955,22 @@ async function verifierBundleMinifie(navigateur, urlMinifie) {
 // Casse volontairement une chose par catégorie de défaut, sur une page
 // jetable, et vérifie que `monterEtMesurer` la détecte bien — la preuve que
 // « aucun défaut trouvé » ci-dessus signifie quelque chose.
+// `racine` : les boutons de navigation vivent désormais dans le shadow root
+// de `<hs-nav-bar>`, et une feuille posée dans celui du panneau ne les
+// atteint pas. Casser à côté de ce qui sera mesuré, c'est prouver que le
+// vérificateur détecte une régression qu'aucune régression réelle ne
+// produirait — pire que rien.
 const CASSURES = [
   {
     nom: 'cible tactile réduite sous 62 px',
-    css: '.nav-bouton { min-height: 20px !important; min-width: 20px !important; height: 20px !important; padding: 0 !important; }',
+    racine: 'hs-nav-bar',
+    css: '.destination { min-height: 20px !important; min-width: 20px !important; height: 20px !important; padding: 0 !important; }',
     verifie: (r) => r.ciblesTropPetites.length > 0,
   },
   {
     nom: 'contraste texte/fond effondré',
-    css: '.nav-bouton { background: #f5f5f5 !important; color: #f0f0f0 !important; }',
+    racine: 'hs-nav-bar',
+    css: '.destination { background: #f5f5f5 !important; color: #f0f0f0 !important; }',
     verifie: (r) => r.contrasteInsuffisant.length > 0,
   },
   {
@@ -1709,8 +1979,21 @@ const CASSURES = [
     verifie: (r) => r.debordement,
   },
   {
+    // La cassure ci-dessus déborde HORS de la zone défilante, et fait donc
+    // encore grandir le document. Celle-ci déborde DEDANS : depuis la
+    // coquille, `.contenu` porte `overflow-y: auto`, le CSS force alors son
+    // `overflow-x` de `visible` à `auto`, et un écran trop large y gagne une
+    // barre de défilement au lieu de pousser la page — invisible au contrôle
+    // sur le document. C'est la mesure sur `.contenu` qui l'attrape, et
+    // c'est cette cassure-ci qui prouve qu'elle sert.
+    nom: 'débordement DANS la zone de contenu (invisible au document)',
+    css: 'home-stock-scanner { display: block !important; width: 4000px !important; }',
+    verifie: (r) => r.debordement,
+  },
+  {
     nom: 'texte tronqué (ellipsis + overflow hidden)',
-    css: '.nav-bouton { max-width: 24px !important; min-width: 0 !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
+    racine: 'hs-nav-bar',
+    css: '.destination { max-width: 24px !important; min-width: 0 !important; overflow: hidden !important; white-space: nowrap !important; text-overflow: ellipsis !important; }',
     verifie: (r) => r.texteTronque.length > 0,
   },
 ];
@@ -1725,7 +2008,8 @@ async function autoVerification(navigateur, urlHarnais) {
     await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } }, actions: [],
-      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, styleCasse: cassure.css,
+      cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
+      styleCasse: cassure.css, racineCassure: cassure.racine ?? null,
     });
     await contexte.close();
 
@@ -1749,7 +2033,11 @@ async function autoVerification(navigateur, urlHarnais) {
     await page.waitForFunction(() => Boolean(window.customElements.get('home-stock-panel')));
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: { reponses: { 'home_stock/session/current': null } },
-      actions: [{ type: 'click-nav', texte: 'Bouton Introuvable Exprès' }],
+      // Une FAMILLE qui n'existe pas dans la barre : `boutonFamille` rend
+      // `null`, le clic ne part jamais, et l'écran reste celui d'avant sous
+      // le nom d'un autre. (Un ÉCRAN inconnu, lui, lève en Node dans
+      // `preparerActions` — c'est une faute d'écriture, pas une régression.)
+      actions: [{ type: 'click-nav', famille: 'famille-introuvable-expres' }],
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN, ecranAttendu: 'home-stock-catalogue',
     });
     await contexte.close();
@@ -1794,12 +2082,19 @@ async function main() {
   // injecte après coup (fixture, actions, cassure) varie. Voir
   // `servirPagesStatiques` pour pourquoi `page.setContent()` seul ne suffit
   // pas.
+  const { DESTINATIONS } = await chargerDestinations();
+  const familleParEcran = new Map(DESTINATIONS.map((d) => [d.screen, d.family]));
+
   const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques({
     '/': pageHtml(bundle, PALETTES[0]),
     '/p1': pageHtml(bundle, PALETTES[1]),
     '/p2': pageHtml(bundle, PALETTES[2]),
+    // La même page, mais avec les `ha-*` enregistrés avant le bundle : voir
+    // SCENARIOS_HA_CHARGE.
+    '/ha': pageHtml(bundle, PALETTES[0], DEFINIR_HA_MINIMAL),
   });
   const urlsParPalette = PALETTES.map((_, i) => (i === 0 ? urlHarnais : `${urlHarnais}p${i}`));
+  const urlHa = `${urlHarnais}ha`;
   // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
   // celui que `npm run build` déploie réellement. Voir SCENARIOS_MINIFIES.
   // Ces scénarios-là ne connaissent que la palette par défaut : le bundle
@@ -1809,19 +2104,22 @@ async function main() {
 
   const navigateur = await lancerNavigateur();
   try {
-    let { fautes, total } = await executerScenarios(navigateur, urlHarnais);
+    let { fautes, total } = await executerScenarios(navigateur, urlHarnais, familleParEcran);
     // Le compte porte sur des EXÉCUTIONS, pas sur des scénarios : chaque
     // scénario de `SCENARIOS` tourne dans les trois formats. Les scénarios
     // denses, eux, n'en connaissent qu'un — et ils comptent quand même, sans
     // quoi le chiffre affiché mentirait.
-    fautes += await executerScenariosLarges(navigateur, urlHarnais);
+    fautes += await executerScenariosLarges(navigateur, urlHarnais, familleParEcran);
     total += SCENARIOS_LARGES.length;
-    const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie);
+    const fautesMinifie = await verifierBundleMinifie(navigateur, urlMinifie, familleParEcran);
     fautes += fautesMinifie;
     total += SCENARIOS_MINIFIES.length;
+    // Le chemin réellement servi à qui arrive depuis Lovelace.
+    fautes += await executerScenariosHaCharge(navigateur, urlHa, familleParEcran);
+    total += SCENARIOS_HA_CHARGE.length;
     // Le balayage : trois scénarios représentatifs, sous les deux palettes
     // qu'aucun autre passage ne mesure jamais (voir NOMS_BALAYAGE).
-    const balayage = await executerBalayagePalettes(navigateur, urlsParPalette);
+    const balayage = await executerBalayagePalettes(navigateur, urlsParPalette, familleParEcran);
     fautes += balayage.fautes;
     total += balayage.total;
 

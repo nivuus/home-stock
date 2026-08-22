@@ -8,6 +8,47 @@ function laisserPasserLesMicrotaches(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** --- piloter la NOUVELLE coquille -----------------------------------------
+ *
+ *  La barre ne porte plus un bouton par écran : quatre familles, chacune vers
+ *  SA racine, et tout le reste s'atteint par son URL. Ces trois fonctions sont
+ *  les seuls gestes réellement à la disposition d'un utilisateur — on ne pose
+ *  JAMAIS `element.ecran` à la main pour naviguer, ce serait éprouver un
+ *  chemin que personne n'emprunte. */
+async function barreDe(element: any): Promise<any> {
+  await element.updateComplete;
+  const barre = element.shadowRoot!.querySelector('hs-nav-bar');
+  expect(barre, 'la barre de navigation').not.toBeNull();
+  await barre.updateComplete;
+  return barre;
+}
+
+async function cliquerFamille(element: any, famille: string): Promise<void> {
+  const barre = await barreDe(element);
+  const bouton = barre.shadowRoot!.querySelector(`[data-family="${famille}"]`) as HTMLButtonElement;
+  expect(bouton, `famille ${famille}`).not.toBeNull();
+  bouton.click();
+}
+
+/** Home Assistant repasse la route au panneau : c'est par là qu'arrivent
+ *  aussi le bouton Retour du navigateur et le geste système d'Android. */
+function allerA(element: any, chemin: string): void {
+  element.route = { prefix: '/home-stock', path: chemin };
+}
+
+async function famillesAffichees(element: any): Promise<string[]> {
+  const barre = await barreDe(element);
+  return Array.from(barre.shadowRoot!.querySelectorAll('.destination'))
+    .map((b: any) => b.querySelector('span').textContent.trim());
+}
+
+/** Le compte affiché en pastille sur une famille, ou `null` s'il n'y en a pas. */
+async function pastilleFamille(element: any, famille: string): Promise<string | null> {
+  const barre = await barreDe(element);
+  const bouton = barre.shadowRoot!.querySelector(`[data-family="${famille}"]`);
+  return bouton?.querySelector('.badge')?.textContent?.trim() ?? null;
+}
+
 function hassFactice(surAbonnement: () => Promise<() => void>): Hass {
   return {
     connection: {
@@ -59,6 +100,13 @@ function sessionOuverte(etat: 'shopping' | 'to_store', store: string | null, lig
     stores: store ? [store] : [],
   };
 }
+
+/** Une liste de courses vide, mais BIEN FORMÉE : `home-stock-liste` se charge
+ *  toute seule au montage, et un `{}` la fait exploser au rendu. */
+const LISTE_VIDE = {
+  items: [], store_id: null, store_name: null,
+  estimate: { amount: 0, confidence: 0, priced: 0, total: 0 },
+};
 
 const LIGNE_SESSION = {
   id: 100, article_id: 42, quantity: 500, unit_price: 0.005, stored_at: null, batch_id: null,
@@ -417,12 +465,10 @@ describe('panneau : parcours complet, du scan au lot rangé', () => {
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    // 3. Le bouton de navigation « Panier » doit apparaître (session shopping,
-    // au moins une ligne) : on l'utilise pour aller voir le panier.
-    const boutonPanier = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Panier')) as HTMLButtonElement | undefined;
-    expect(boutonPanier).not.toBeUndefined();
-    boutonPanier!.click();
+    // 3. La barre n'a plus de bouton « Panier » : la famille « Courses » porte
+    // le compte en pastille, et le panier s'ouvre par son URL.
+    expect(await pastilleFamille(element, 'shopping')).toBe('1');
+    allerA(element, '/cart');
     await (element as any).updateComplete;
     expect(element.ecran).toBe('panier');
     const panier = element.shadowRoot!.querySelector('home-stock-panier') as any;
@@ -440,12 +486,10 @@ describe('panneau : parcours complet, du scan au lot rangé', () => {
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    // 5. Le bouton « Ranger » doit apparaître (session to_store, ligne en
-    // attente) : on y va.
-    const boutonRanger = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Ranger')) as HTMLButtonElement | undefined;
-    expect(boutonRanger).not.toBeUndefined();
-    boutonRanger!.click();
+    // 5. Une ligne reste à ranger : la pastille de « Courses » le dit, et le
+    // rangement s'ouvre par son URL.
+    expect(await pastilleFamille(element, 'shopping')).toBe('1');
+    allerA(element, '/put-away');
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
     expect(element.ecran).toBe('rangement');
@@ -515,13 +559,18 @@ describe('panneau : un refus du serveur sur une écriture en file remonte en fra
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    const banniere = element.shadowRoot!.querySelector('.erreur-file');
+    // La bannière a déménagé dans l'en-tête (Task 10) : même message du
+    // serveur, même acquittement, un cran plus bas dans l'arbre.
+    const entete = element.shadowRoot!.querySelector('hs-header') as any;
+    await entete.updateComplete;
+    const banniere = entete.shadowRoot!.querySelector('.erreur');
     expect(banniere).not.toBeNull();
     expect(banniere!.textContent).toContain('Cette ligne est déjà rangée.');
 
-    (element.shadowRoot!.querySelector('.fermer-erreur-file') as HTMLButtonElement).click();
+    (entete.shadowRoot!.querySelector('.fermer-erreur') as HTMLButtonElement).click();
     await (element as any).updateComplete;
-    expect(element.shadowRoot!.querySelector('.erreur-file')).toBeNull();
+    await entete.updateComplete;
+    expect(entete.shadowRoot!.querySelector('.erreur')).toBeNull();
   });
 });
 
@@ -540,6 +589,9 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
       if (msg.type === 'home_stock/session/current') return Promise.resolve(null); // pas de session : rangement
       if (msg.type === 'home_stock/lookup') return Promise.resolve(RESULTAT_FACTICE);
       if (msg.type === 'home_stock/locations/list') return Promise.resolve({ locations: [] });
+      // Quitter le rangement mène désormais à la LISTE (racine de la famille
+      // « Courses »), qui se charge toute seule au montage.
+      if (msg.type === 'home_stock/list/items') return Promise.resolve(LISTE_VIDE);
       return Promise.resolve({});
     });
     const element = document.createElement('home-stock-panel') as HTMLElement & {
@@ -578,9 +630,7 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
   it('arme un avertissement en boutons (pas de popup) au lieu de naviguer tout de suite', async () => {
     const element = await monterSurLeRangement();
 
-    const boutonScanner = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement;
-    boutonScanner.click();
+    await cliquerFamille(element, 'shopping');
     await element.updateComplete;
 
     // Toujours sur le rangement : le premier appui arme, il ne navigue pas.
@@ -593,8 +643,7 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
   it('reste sur le rangement si l’utilisateur choisit « Rester ici »', async () => {
     const element = await monterSurLeRangement();
 
-    (Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement).click();
+    await cliquerFamille(element, 'shopping');
     await element.updateComplete;
 
     (element.shadowRoot!.querySelector('.annuler-quitter') as HTMLButtonElement).click();
@@ -609,19 +658,21 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
   it('quitte le rangement quand l’utilisateur confirme « Quitter quand même »', async () => {
     const element = await monterSurLeRangement();
 
-    (Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Scanner')) as HTMLButtonElement).click();
+    await cliquerFamille(element, 'shopping');
     await element.updateComplete;
 
     (element.shadowRoot!.querySelector('.confirmer-quitter') as HTMLButtonElement).click();
     await element.updateComplete;
 
-    expect(element.ecran).toBe('scanner');
+    // La famille « Courses » mène à sa racine, la liste — plus au scanner,
+    // qui n'est plus une destination de la barre.
+    expect(element.ecran).toBe('liste');
   });
 
   it('ne demande rien pour naviguer ailleurs quand rien n’est en attente', async () => {
     const hass = hassAvecReponses((msg: any) => {
       if (msg.type === 'home_stock/session/current') return Promise.resolve(sessionOuverte('shopping', 'Leclerc'));
+      if (msg.type === 'home_stock/list/items') return Promise.resolve(LISTE_VIDE);
       return Promise.resolve({});
     });
     const element = document.createElement('home-stock-panel') as HTMLElement & {
@@ -632,12 +683,10 @@ describe('panneau : quitter le rangement avec des articles autonomes en attente 
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
 
-    const boutonPanier = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Panier')) as HTMLButtonElement;
-    boutonPanier.click();
+    await cliquerFamille(element, 'shopping');
     await element.updateComplete;
 
-    expect(element.ecran).toBe('panier');
+    expect(element.ecran).toBe('liste');
     expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).toBeNull();
   });
 });
@@ -660,7 +709,7 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     return element;
   }
 
-  it('le bouton « Catalogue » mène à <home-stock-catalogue>, avec connexion et file', async () => {
+  it('la famille « Stock » mène à <home-stock-catalogue>, avec connexion et file', async () => {
     const hass = hassAvecReponses((msg: any) => {
       if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
       if (msg.type === 'home_stock/products/list') return Promise.resolve({ products: [] });
@@ -673,12 +722,11 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Catalogue')) as HTMLButtonElement;
-    expect(bouton).not.toBeUndefined();
-    bouton.click();
+    await cliquerFamille(element, 'stock');
     await (element as any).updateComplete;
 
+    // « Catalogue » est la racine de la famille « Stock » : c'est elle que la
+    // barre atteint.
     expect(element.ecran).toBe('catalogue');
     const catalogue = element.shadowRoot!.querySelector('home-stock-catalogue') as any;
     expect(catalogue).not.toBeNull();
@@ -686,7 +734,7 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     expect(catalogue.file).toBeDefined();
   });
 
-  it('le bouton « Réglages » mène à <home-stock-reglages>, avec connexion et file', async () => {
+  it('l’URL /settings mène à <home-stock-reglages>, avec connexion et file', async () => {
     const hass = hassAvecReponses((msg: any) => {
       if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
       if (msg.type === 'home_stock/aisles/list') return Promise.resolve({ aisles: [] });
@@ -697,10 +745,9 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Réglages')) as HTMLButtonElement;
-    expect(bouton).not.toBeUndefined();
-    bouton.click();
+    // « Réglages » n'est pas la racine de sa famille : on y va par son URL,
+    // comme le ferait un lien ou le bouton Retour du navigateur.
+    allerA(element, '/settings');
     await (element as any).updateComplete;
 
     expect(element.ecran).toBe('reglages');
@@ -735,9 +782,7 @@ describe('panneau : le catalogue et les réglages sont toujours atteignables', (
     await (element as any).updateComplete;
     expect(element.ecran).toBe('rangement');
 
-    const boutonCatalogue = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes('Catalogue')) as HTMLButtonElement;
-    boutonCatalogue.click();
+    await cliquerFamille(element, 'stock');
     await (element as any).updateComplete;
 
     expect(element.ecran).toBe('rangement');
@@ -763,6 +808,12 @@ describe('panneau : le journal et l’écran « manger »', () => {
   async function monterPanneau() {
     const hass = hassAvecReponses((msg: any) => {
       if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
+      // La liste est la racine de « Courses » : toute retombée de route y
+      // atterrit, et elle se charge toute seule au montage.
+      if (msg.type === 'home_stock/list/items') {
+        return Promise.resolve({ items: [], store_id: null, store_name: null,
+          estimate: { amount: 0, confidence: 0, priced: 0, total: 0 } });
+      }
       return Promise.resolve({});
     });
     const element = document.createElement('home-stock-panel') as HTMLElement & {
@@ -775,14 +826,16 @@ describe('panneau : le journal et l’écran « manger »', () => {
     return element as any;
   }
 
-  it('expose le journal dans la navigation, mais pas « manger »', async () => {
+  it('expose le journal par son URL, mais « manger » par aucune destination', async () => {
     const panneau = await monterPanneau();
-    const libelles = [...panneau.shadowRoot.querySelectorAll('.nav-bouton')]
-      .map((b: Element) => b.textContent?.trim());
-    expect(libelles).toContain('Journal');
-    // « Manger » a besoin d'un produit : un bouton de navigation nu ouvrirait
-    // un écran qui n'a rien à montrer.
-    expect(libelles).not.toContain('Manger');
+    // La barre ne porte que quatre familles : ni « Journal » ni « Manger »
+    // n'y figurent en propre.
+    expect(await famillesAffichees(panneau)).not.toContain('Journal');
+    // « Manger » a besoin d'un produit : aucune destination nue n'y mène,
+    // l'écran n'aurait rien à montrer. Son segment EXIGE l'identifiant.
+    allerA(panneau, '/eat');
+    await panneau.updateComplete;
+    expect(panneau.ecran).toBe('liste');
   });
 
   it('ouvre l’écran « manger » sur le produit qu’on lui désigne', async () => {
@@ -805,7 +858,7 @@ describe('panneau : le journal et l’écran « manger »', () => {
     expect(panneau.ecran).toBe('scanner');
   });
 
-  it('le bouton « Journal » mène à <home-stock-journal>, avec connexion', async () => {
+  it('l’URL /log mène à <home-stock-journal>, avec connexion', async () => {
     const hass = hassAvecReponses((msg: any) => {
       if (msg.type === 'home_stock/session/current') return Promise.resolve(null);
       if (msg.type === 'home_stock/journal/day') {
@@ -823,10 +876,7 @@ describe('panneau : le journal et l’écran « manger »', () => {
     await laisserPasserLesMicrotaches();
     await (element as any).updateComplete;
 
-    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b: Element) => b.textContent?.includes('Journal')) as HTMLButtonElement;
-    expect(bouton).not.toBeUndefined();
-    bouton.click();
+    allerA(element, '/log');
     await (element as any).updateComplete;
 
     expect(element.ecran).toBe('journal');
@@ -994,8 +1044,6 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
 
-    const nav = (texte: string) => Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes(texte)) as HTMLButtonElement | undefined;
     const dans = (nom: string, selecteur: string) => element.shadowRoot!
       .querySelector(nom)!.shadowRoot!.querySelector(selecteur) as HTMLElement | null;
     const tous = (nom: string, selecteur: string) => Array.from(element.shadowRoot!
@@ -1003,7 +1051,9 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     const reglerTout = async () => {
       await laisserPasserLesMicrotaches();
       await element.updateComplete;
-      for (const enfant of Array.from(element.shadowRoot!.children)) {
+      // La coquille interpose une div : les écrans ne sont plus des enfants
+      // DIRECTS du shadow root, il faut descendre.
+      for (const enfant of Array.from(element.shadowRoot!.querySelectorAll('*'))) {
         if ((enfant as any).updateComplete) await (enfant as any).updateComplete;
       }
       await laisserPasserLesMicrotaches();
@@ -1012,7 +1062,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
 
     // --- 1. ouvrir la session, magasin choisi en pastille -------------------
     expect(element.ecran).toBe('scanner');
-    nav('Courses')!.click();
+    allerA(element, '/shopping');
     await reglerTout();
 
     const pastilles = tous('home-stock-session', '.pastille');
@@ -1049,7 +1099,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     await reglerTout();
 
     // --- 3. le panier, puis la caisse --------------------------------------
-    nav('Panier')!.click();
+    allerA(element, '/cart');
     await reglerTout();
     expect(tous('home-stock-panier', '.ligne')).toHaveLength(2);
 
@@ -1060,7 +1110,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     expect(serveur.etat().state).toBe('to_store');
 
     // --- 4. ranger une ligne ------------------------------------------------
-    nav('Ranger')!.click();
+    allerA(element, '/put-away');
     await reglerTout();
     expect(tous('home-stock-rangement', '.ligne')).toHaveLength(2);
 
@@ -1071,7 +1121,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     expect(serveur.lignes.filter((l) => l.stored_at !== null)).toHaveLength(1);
 
     // --- 5. clore le reste, en deux appuis ---------------------------------
-    nav('Courses')!.click();
+    allerA(element, '/shopping');
     await reglerTout();
     expect(dans('home-stock-session', '.restantes')!.textContent).toContain('1 ligne');
 
@@ -1088,7 +1138,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
     expect(dans('home-stock-scanner', '.session-banniere')).toBeNull();
 
     // Et le voyage suivant peut commencer : plus rien ne bloque.
-    nav('Courses')!.click();
+    allerA(element, '/shopping');
     await reglerTout();
     expect(dans('home-stock-session', '.ouvrir-session')).not.toBeNull();
   });
@@ -1142,44 +1192,42 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
     await element.updateComplete;
   }
 
-  const boutons = (element: any) =>
-    [...element.shadowRoot.querySelectorAll('.nav-bouton')]
-      .map((b: Element) => b.textContent?.trim());
-
-  function cliquerNav(element: any, libelle: string) {
-    const bouton = [...element.shadowRoot.querySelectorAll('.nav-bouton')]
-      .find((b: Element) => b.textContent?.trim() === libelle) as HTMLElement;
-    bouton.click();
-  }
-
-  it('affiche les boutons Recettes et Planning dans la barre', async () => {
+  it('affiche la famille « Cuisine », et ses deux écrans sont atteignables', async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    expect(boutons(element)).toContain('Recettes');
-    expect(boutons(element)).toContain('Planning');
+    expect(await famillesAffichees(element)).toContain('Cuisine');
+    // Le planning est la RACINE de la famille : la barre y mène.
+    await cliquerFamille(element, 'kitchen');
+    await stabiliser(element);
+    expect(element.ecran).toBe('planning');
+    // Les recettes n'en sont pas la racine : leur URL, comme un lien.
+    allerA(element, '/recipes');
+    await stabiliser(element);
+    expect(element.ecran).toBe('recettes');
   });
 
-  it('n’affiche aucun bouton pour la vue cuisine ni pour la validation', async () => {
-    // On y entre depuis une liste ou depuis le planning, comme `fiche` et
-    // `consommation` au lot 2.
+  it('n’affiche que les quatre familles, jamais un bouton par écran', async () => {
+    // La vue cuisine et la validation s'ouvrent depuis une liste ou depuis le
+    // planning, comme `fiche` et `consommation` au lot 2 — et depuis le lot 7,
+    // AUCUN écran n'a plus son propre bouton : la barre ne dit que la famille.
     const element = monterPanneau();
     await stabiliser(element);
-    expect(boutons(element)).not.toContain('Recette');
-    expect(boutons(element)).not.toContain('Validation');
+    expect(await famillesAffichees(element))
+      .toEqual(['Courses', 'Stock', 'Cuisine', 'Maison']);
   });
 
-  it('ouvre l’écran Recettes au clic sur son bouton', async () => {
+  it('ouvre l’écran Recettes par son URL', async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    cliquerNav(element, 'Recettes');
+    allerA(element, '/recipes');
     await stabiliser(element);
     expect(element.shadowRoot.querySelector('home-stock-recettes')).not.toBeNull();
   });
 
-  it('ouvre le planning au clic sur son bouton', async () => {
+  it('ouvre le planning au clic sur sa famille', async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    cliquerNav(element, 'Planning');
+    await cliquerFamille(element, 'kitchen');
     await stabiliser(element);
     expect(element.shadowRoot.querySelector('home-stock-planning')).not.toBeNull();
   });
@@ -1188,7 +1236,7 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
      async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    cliquerNav(element, 'Recettes');
+    allerA(element, '/recipes');
     await stabiliser(element);
 
     element.shadowRoot.querySelector('home-stock-recettes')!.dispatchEvent(
@@ -1212,7 +1260,7 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
   it('ouvre la validation sur « valider-repas »', async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    cliquerNav(element, 'Planning');
+    await cliquerFamille(element, 'kitchen');
     await stabiliser(element);
 
     element.shadowRoot.querySelector('home-stock-planning')!.dispatchEvent(
@@ -1227,9 +1275,11 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
   it('revient au planning après « repas-valide »', async () => {
     const element = monterPanneau();
     await stabiliser(element);
-    element.repasAValider = 12;
-    element.ecran = 'validation';
+    // Par l'URL, comme un lien vers le repas à valider : elle pose l'écran ET
+    // son identifiant.
+    allerA(element, '/validate/12');
     await stabiliser(element);
+    expect(element.repasAValider).toBe(12);
 
     element.shadowRoot.querySelector('home-stock-validation')!.dispatchEvent(
       new CustomEvent('repas-valide', {
@@ -1240,8 +1290,13 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
     expect(element.repasAValider).toBeNull();
   });
 
-  it.each(['recettes', 'planning'])(
-    'applique le garde-fou du rangement en attente à la cible %s', async (cible) => {
+  // Les quatre racines de famille : les SEULES cibles qu'un doigt atteint
+  // depuis la barre. « Recettes » n'en est plus une (elle s'ouvre par son
+  // URL, qui ne passe pas par `demanderNavigation`) — le garde-fou, lui,
+  // reste le même chokepoint pour toutes.
+  it.each([['shopping', 'liste'], ['stock', 'catalogue'],
+           ['kitchen', 'planning'], ['house', 'piles']])(
+    'applique le garde-fou du rangement en attente à la famille %s', async (famille, cible) => {
       const element = monterPanneau();
       await stabiliser(element);
       element.ecran = 'rangement';
@@ -1256,7 +1311,7 @@ describe('<home-stock-panel> — navigation du lot 3', () => {
       }];
       await stabiliser(element);
 
-      cliquerNav(element, cible === 'recettes' ? 'Recettes' : 'Planning');
+      await cliquerFamille(element, famille);
       await stabiliser(element);
 
       // Armé, pas navigué : quitter un rangement inachevé demande deux appuis.
@@ -1287,25 +1342,22 @@ describe('panneau : les deux écrans du lot 5', () => {
     return element;
   }
 
-  const bouton = (element: HTMLElement, texte: string) =>
-    Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent?.includes(texte)) as HTMLButtonElement | undefined;
-
-  it('expose les deux nouveaux écrans dans la navigation', async () => {
+  it('expose la famille « Maison », qui porte les deux écrans du lot 5', async () => {
     const element = await monterPanneauLot5();
-    expect(bouton(element, 'Piles')).toBeDefined();
-    expect(bouton(element, 'Équipements')).toBeDefined();
+    expect(await famillesAffichees(element)).toContain('Maison');
   });
 
   it('ouvre l’écran Piles et l’écran Équipements', async () => {
     const element = await monterPanneauLot5();
-    bouton(element, 'Piles')!.click();
+    // « Piles » est la racine de la famille « Maison » : la barre y mène.
+    await cliquerFamille(element, 'house');
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
     expect(element.ecran).toBe('piles');
     expect(element.shadowRoot!.querySelector('home-stock-piles')).not.toBeNull();
 
-    bouton(element, 'Équipements')!.click();
+    // « Équipements » n'en est pas la racine : son URL.
+    allerA(element, '/equipment');
     await laisserPasserLesMicrotaches();
     await element.updateComplete;
     expect(element.ecran).toBe('equipements');
@@ -1314,7 +1366,7 @@ describe('panneau : les deux écrans du lot 5', () => {
 
   it('demande confirmation avant de quitter le rangement vers Piles', async () => {
     const element = await monterSurLeRangementLot5();
-    bouton(element, 'Piles')!.click();
+    await cliquerFamille(element, 'house');
     await element.updateComplete;
     // Le garde-fou du lot 1 s'applique à ces cibles comme aux autres : c'est
     // `demanderNavigation` qui le porte, donc c'est gratuit — mais c'est un
@@ -1323,9 +1375,14 @@ describe('panneau : les deux écrans du lot 5', () => {
     expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
   });
 
-  it('demande confirmation avant de quitter le rangement vers Équipements', async () => {
+  it('demande confirmation avant de remonter par le retour de l’en-tête', async () => {
+    // Le retour de l'en-tête est une navigation comme une autre : il passe
+    // par `demanderNavigation`, donc par le même garde-fou. Sans ce test, le
+    // seul chemin de sortie qui ne soit pas la barre resterait non couvert.
     const element = await monterSurLeRangementLot5();
-    bouton(element, 'Équipements')!.click();
+    const entete = element.shadowRoot!.querySelector('hs-header') as any;
+    await entete.updateComplete;
+    (entete.shadowRoot!.querySelector('.retour') as HTMLButtonElement).click();
     await element.updateComplete;
     expect(element.ecran).toBe('rangement');
     expect(element.shadowRoot!.querySelector('.confirmation-quitter-rangement')).not.toBeNull();
@@ -1373,29 +1430,27 @@ describe('la navigation du lot 4', () => {
     return element;
   }
 
-  it('expose un bouton « Liste »', async () => {
+  it('expose la famille « Courses », dont la liste est la racine', async () => {
     const element = monterPanneau();
     await element.updateComplete;
 
-    const libelles = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .map((b) => b.textContent!.trim());
-    expect(libelles).toContain('Liste');
+    expect(await famillesAffichees(element)).toContain('Courses');
   });
 
-  it('bascule sur l’écran Liste et retire son propre bouton', async () => {
+  it('bascule sur l’écran Liste et GARDE les quatre familles en place', async () => {
     const element = monterPanneau();
     await element.updateComplete;
 
-    const bouton = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .find((b) => b.textContent!.trim() === 'Liste') as HTMLButtonElement;
-    bouton.click();
+    await cliquerFamille(element, 'shopping');
     await element.updateComplete;
 
     expect(element.ecran).toBe('liste');
     expect(element.shadowRoot!.querySelector('home-stock-liste')).not.toBeNull();
-    const libelles = Array.from(element.shadowRoot!.querySelectorAll('.nav-bouton'))
-      .map((b) => b.textContent!.trim());
-    expect(libelles).not.toContain('Liste');
+    // L'ancienne barre retirait le bouton de l'écran courant, ce qui décalait
+    // tous les autres à chaque navigation. Les quatre familles ne bougent
+    // plus jamais — c'est le repère.
+    expect(await famillesAffichees(element))
+      .toEqual(['Courses', 'Stock', 'Cuisine', 'Maison']);
   });
 });
 

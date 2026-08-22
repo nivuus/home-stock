@@ -37,7 +37,23 @@ export class HsNavBar extends LitElement {
       color: var(--hs-text-2);
     }
     .barre.rail .destination { flex: 0 0 auto; }
-    .destination.active { color: var(--hs-accent); font-weight: 600; }
+    /* L'accent NE PEUT PAS servir de couleur de texte ici : posé sur
+       --hs-surface, il donne 3,26:1 sous le thème HA par défaut et 2,38:1
+       sous Graphite (en service dans la maison) — les deux sous le seuil de
+       4,5:1, relevé par outils/verifier-rendu.mjs dès que la barre a été
+       branchée au panneau. L'état actif se dit donc par la GRAISSE du
+       libellé, qui garde le contraste du texte ordinaire, et par une pastille
+       d'accent derrière l'icône — un aplat, avec sa paire --hs-on-accent
+       recalculée par on-color.ts, donc lisible sous n'importe quel thème.
+       C'est aussi le motif de la barre de navigation Material 3. */
+    .destination.active { color: var(--hs-text); font-weight: 600; }
+    .destination.active hs-icon {
+      box-sizing: content-box;
+      padding: 2px 12px;
+      border-radius: 999px;
+      background: var(--hs-accent);
+      color: var(--hs-on-accent);
+    }
     .badge {
       position: absolute; top: var(--hs-space-1);
       /* Décalé vers la droite du centre : la pastille se pose sur l'angle de

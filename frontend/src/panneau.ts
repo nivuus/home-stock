@@ -1,4 +1,4 @@
-import { LitElement, html, css, nothing } from 'lit';
+import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { Connexion, type Hass } from './connexion';
 import { FileAttente } from './file-attente';
@@ -24,7 +24,13 @@ import type { ArticlePret, ResultatLookup, UniteBase } from './ecrans/fiche';
 import type { DonneesSession } from './ecrans/panier';
 import type { DonneesTicket } from './ecrans/ticket';
 import type { LigneRangement, LigneRangementAutonome, LigneRangementSession } from './ecrans/rangement';
+import './shell/nav-bar';
+import './shell/header';
+import { primeHaComponents } from './shell/ui/ha-available';
+import { appliquerCouleursDeTexte } from './shell/ui/on-color';
 import { tokens } from './shell/ui/tokens';
+import { FAMILIES, destinationOf, familyOf, type FamilyId } from './shell/destinations';
+import { parsePath, pathOf } from './shell/router';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
@@ -69,6 +75,10 @@ function ligneAutonomeDepuis(resultat: ResultatLookup | null, articleId: number,
 export class PanneauGardeManger extends LitElement {
   @property({ attribute: false }) hass!: Hass;
   @property({ attribute: false }) narrow = false;
+  /** Posée par `ha-panel-custom` : `{prefix: '/home-stock', path: '/list'}`.
+   *  C'est aussi par elle que revient le bouton Retour du navigateur — HA
+   *  écoute `popstate` et nous repasse la route, donc rien à écouter ici. */
+  @property({ attribute: false }) route?: { prefix: string; path: string };
   @state() ecran: Ecran = 'scanner';
   @state() enAttente = 0;
   @state() private session: DonneesSession | null = null;
@@ -96,8 +106,68 @@ export class PanneauGardeManger extends LitElement {
   private file?: FileAttente;
   private desabonner?: () => void;
 
+  /** Le dernier `path` déjà appliqué : sans lui, chaque rendu rejouerait la
+   *  route et écraserait une navigation faite entre-temps par un événement
+   *  métier (`recette-ouverte`, par exemple). Home Assistant repasse un
+   *  OBJET `route` neuf à chaque fois qu'il redessine le panneau, même quand
+   *  l'URL n'a pas bougé : sans cette comparaison sur la valeur, un simple
+   *  changement de thème ramènerait l'utilisateur à l'écran de son URL. */
+  private dernierChemin: string | null = null;
+
+  willUpdate(changees: PropertyValues): void {
+    if (!changees.has('route')) return;
+    const chemin = this.route?.path ?? '';
+    if (chemin === this.dernierChemin) return;
+    this.dernierChemin = chemin;
+    this.appliquerChemin(chemin);
+  }
+
+  private appliquerChemin(chemin: string): void {
+    const route = parsePath(chemin);
+    if (!route) {
+      // `replace` : une route inconnue ne mérite pas une entrée d'historique
+      // dans laquelle le bouton Retour viendrait retomber.
+      this.naviguerVers('liste', null, true);
+      return;
+    }
+    this.ecran = route.screen;
+    this.appliquerParametre(route.screen, route.param);
+  }
+
+  /** Chaque écran paramétré range son paramètre là où son composant le lit.
+   *  Appelé PAR LA ROUTE seulement : les événements métier
+   *  (`recette-ouverte`, `ticket-ouvert`…) posent déjà la donnée eux-mêmes,
+   *  et bien mieux que ce qu'un segment d'URL peut en dire — un ticket
+   *  arrive en objet complet, un identifiant demande un aller-retour. */
+  private appliquerParametre(ecran: Ecran, param: string | null): void {
+    if (param === null) return;
+    if (ecran === 'recette') this.recetteOuverte = Number(param);
+    else if (ecran === 'validation') this.repasAValider = Number(param);
+    else if (ecran === 'consommation') this.produitAManger = Number(param);
+    else if (ecran === 'ticket') void this.chargerTicket(Number(param));
+    else if (ecran === 'fiche') void this.chargerFiche(param, false);
+  }
+
+  /** `/receipt/12` ne désigne qu'un identifiant : la session, elle, nous
+   *  passe le ticket entier. Il faut donc aller le chercher — `ticketOuvert`
+   *  est un objet, pas un numéro. */
+  private async chargerTicket(id: number): Promise<void> {
+    try {
+      this.ticketOuvert = await this.connexion!.appeler<DonneesTicket>(
+        'home_stock/receipt/get', { receipt_id: id });
+    } catch {
+      // Hors ligne, ou ticket disparu : l'écran dira lui-même qu'il n'a rien
+      // à montrer, plutôt que de renvoyer l'utilisateur ailleurs sans raison.
+    }
+  }
+
   connectedCallback(): void {
     super.connectedCallback();
+    // Une seule tentative, au montage du panneau : si Home Assistant sait
+    // charger son chunk Lovelace, les enveloppes rendront `<ha-card>` plutôt
+    // que leur repli. Sinon (tablette cuisine, ouverture directe), le repli
+    // est correct et rien n'échoue.
+    primeHaComponents();
     window.addEventListener('resize', this.surRedimensionnement);
     // Écoutés sur l'hôte, pas sur chaque enfant : `recette-ouverte` est émis
     // par la liste ET par le planning, et les deux événements remontent
@@ -190,18 +260,30 @@ export class PanneauGardeManger extends LitElement {
   /** Un code lu (scanner ou clavier) devient une fiche : c'est la commande
    *  home_stock/lookup, jamais une écriture. */
   private surCodeLu = async (evenement: CustomEvent<{ code: string }>): Promise<void> => {
+    await this.chargerFiche(evenement.detail.code);
+  };
+
+  /** Le `lookup` et l'écran qui va avec. Séparé de l'écouteur parce que la
+   *  route `/item/<code>` l'appelle aussi — mais elle, sans repousser une
+   *  entrée d'historique pour l'écran où l'on vient déjà d'arriver. */
+  private async chargerFiche(code: string, naviguer = true): Promise<void> {
     try {
       const resultat = await this.connexion!.appeler<ResultatLookup>(
-        'home_stock/lookup', { code: evenement.detail.code });
+        'home_stock/lookup', { code });
       this.resultatCourant = resultat;
-      this.ecran = 'fiche';
+      if (naviguer) this.naviguerVers('fiche', code);
+      else this.ecran = 'fiche';
     } catch {
       this.derniereFiche = {
-        nom: evenement.detail.code, marque: null, image: null,
+        nom: code, marque: null, image: null,
         statut: 'Connexion indisponible — réessayez.',
       };
+      // Un `/item/<code>` que le serveur ne sait pas résoudre n'a rien à
+      // montrer : on retombe sur le scanner, où le message ci-dessus
+      // s'affiche — en `replace`, pour ne pas piéger le bouton Retour.
+      if (!naviguer) this.naviguerVers('scanner', null, true);
     }
-  };
+  }
 
   /** La fiche a résolu l'article (créé au besoin) et dit ce qu'elle veut en
    *  faire. En session (courses en cours), ajouter au panier ne demande rien
@@ -226,13 +308,13 @@ export class PanneauGardeManger extends LitElement {
       });
       this.derniereFiche = resumeDe(this.resultatCourant, 'Ajouté au panier.', offDroppedFields);
       this.resultatCourant = null;
-      this.ecran = 'scanner';
+      this.naviguerVers('scanner');
       return;
     }
     const ligne = ligneAutonomeDepuis(this.resultatCourant, articleId, quantite, prixUnitaire);
     this.enAttenteRangement = [...this.enAttenteRangement, ligne];
     this.resultatCourant = null;
-    this.ecran = 'rangement';
+    this.naviguerVers('rangement');
   };
 
   /** L'écran « Courses » vient d'ouvrir ou de clore une session côté
@@ -241,7 +323,7 @@ export class PanneauGardeManger extends LitElement {
    *  n'a qu'un but, scanner en rayon ; la clore n'en laisse plus aucun. */
   private surSessionChangee = async (): Promise<void> => {
     await this.actualiserSession();
-    this.ecran = 'scanner';
+    this.naviguerVers('scanner');
   };
 
   /** La fiche ou le catalogue désignent un produit à manger : on le retient
@@ -249,7 +331,7 @@ export class PanneauGardeManger extends LitElement {
    *  rangement en attente prévienne d'abord, comme pour toute autre cible. */
   private surMangerProduit = (evenement: CustomEvent<{ product_id: number }>): void => {
     this.produitAManger = evenement.detail.product_id;
-    this.demanderNavigation('consommation');
+    this.demanderNavigation('consommation', evenement.detail.product_id);
   };
 
   /** La déclaration est enregistrée (ou en file, hors ligne) : l'écran
@@ -257,7 +339,7 @@ export class PanneauGardeManger extends LitElement {
    *  comme l'ajout au panier depuis la fiche. */
   private surConsommationEnregistree = (): void => {
     this.produitAManger = null;
-    this.ecran = 'scanner';
+    this.naviguerVers('scanner');
   };
 
   private surLigneAutonomeRangee = (evenement: CustomEvent<{ id: string }>): void => {
@@ -269,7 +351,7 @@ export class PanneauGardeManger extends LitElement {
     // mais un départ resté armé d'un geste précédent ne doit pas survivre à
     // un écran qui n'existe plus.
     this.navigationArmee = null;
-    this.ecran = 'scanner';
+    this.naviguerVers('scanner');
   };
 
   /** Le panier et le rangement écrivent directement dans la file (chacun
@@ -346,7 +428,9 @@ export class PanneauGardeManger extends LitElement {
                                               agent_configure?: boolean }>): void => {
     this.ticketOuvert = e.detail.ticket;
     this.agentTicketConfigure = e.detail.agent_configure ?? true;
-    this.demanderNavigation('ticket');
+    // `null` quand on vient photographier un ticket qui n'existe pas encore :
+    // aucun `/receipt/<id>` ne le désigne alors, et `cheminDe` le sait.
+    this.demanderNavigation('ticket', e.detail.ticket?.id ?? null);
   };
 
   @state() recetteOuverte: number | null = null;
@@ -356,12 +440,12 @@ export class PanneauGardeManger extends LitElement {
   private surRecetteOuverte = (e: CustomEvent) => {
     this.recetteOuverte = e.detail.recipe_id;
     this.repasDeLaRecette = e.detail.meal_id ?? null;
-    this.demanderNavigation('recette');
+    this.demanderNavigation('recette', e.detail.recipe_id);
   };
 
   private surValiderRepas = (e: CustomEvent) => {
     this.repasAValider = e.detail.meal_id;
-    this.demanderNavigation('validation');
+    this.demanderNavigation('validation', e.detail.meal_id);
   };
 
   private surRepasValide = () => {
@@ -369,132 +453,143 @@ export class PanneauGardeManger extends LitElement {
     this.demanderNavigation('planning');
   };
 
-  private demanderNavigation(cible: Ecran): void {
+  /** Le paramètre de la cible armée, retenu avec elle : sans lui,
+   *  confirmer « Quitter quand même » vers `/recipe/12` produirait un chemin
+   *  sans identifiant, que `pathOf` refuse. */
+  private parametreArme: string | number | null = null;
+
+  /** Change d'écran, sauf s'il faut d'abord prévenir (voir plus haut). Le
+   *  garde-fou s'arme AVANT toute navigation : ni l'URL, ni l'historique, ni
+   *  `ecran` ne bougent tant que le second appui n'est pas venu. */
+  private demanderNavigation(cible: Ecran, param: string | number | null = null): void {
     if (this.ecran === 'rangement' && cible !== 'rangement' && this.enAttenteRangement.length > 0) {
       this.navigationArmee = cible;
+      this.parametreArme = param;
       return;
     }
-    this.ecran = cible;
+    this.naviguerVers(cible, param);
   }
 
-  private confirmerNavigation(): void {
-    const cible = this.navigationArmee;
-    this.navigationArmee = null;
-    if (cible) this.ecran = cible;
+  /** Le chemin d'un écran, ou `null` quand il n'en a pas : un ticket qu'on
+   *  vient d'ouvrir pour le photographier n'existe pas encore côté serveur,
+   *  donc aucun `/receipt/<id>` ne le désigne. On y va alors sans toucher à
+   *  l'URL, plutôt que de laisser `pathOf` lever sur un cas légitime. */
+  private cheminDe(ecran: Ecran, param: string | number | null): string | null {
+    if (destinationOf(ecran).param && (param === null || param === undefined)) return null;
+    return pathOf(ecran, param);
   }
 
-  private annulerNavigation(): void {
-    this.navigationArmee = null;
-  }
-
-  private rendreNavigation() {
-    if (this.ecran === 'fiche') return nothing;
-    if (this.navigationArmee) {
-      return html`
-        <div class="confirmation-quitter-rangement">
-          <p>
-            Des articles rapportés seuls n’ont pas encore été rangés : ils seront perdus si vous quittez
-            maintenant.
-          </p>
-          <button class="confirmer-quitter" @click=${this.confirmerNavigation}>Quitter quand même</button>
-          <button class="annuler-quitter" @click=${this.annulerNavigation}>Rester ici</button>
-        </div>
-      `;
+  /** La navigation passe TOUJOURS par l'URL : `history.pushState` puis
+   *  `location-changed`, la convention du frontend HA. Home Assistant nous
+   *  repasse alors `route`, et `willUpdate` applique l'écran. Un seul chemin
+   *  de navigation, donc le bouton Retour du navigateur et le geste système
+   *  d'Android marchent sans une ligne de plus.
+   *
+   *  Le paramètre ne sert qu'à fabriquer l'URL : l'appelant a déjà posé la
+   *  donnée (`recetteOuverte`, `ticketOuvert`…) avant d'appeler — la relire
+   *  depuis une chaîne d'URL rejouerait un aller-retour serveur pour rien. */
+  private naviguerVers(ecran: Ecran, param: string | number | null = null,
+                       remplacer = false): void {
+    const chemin = this.cheminDe(ecran, param);
+    if (chemin !== null) {
+      const url = `${this.route?.prefix ?? '/home-stock'}${chemin}`;
+      if (remplacer) window.history.replaceState(null, '', url);
+      else window.history.pushState(null, '', url);
+      window.dispatchEvent(new CustomEvent('location-changed', {
+        detail: { replace: remplacer }, bubbles: true, composed: true,
+      }));
+      // HA ne nous repassera `route` que s'il écoute vraiment ; en test, et si
+      // une version future changeait de convention, on applique nous-mêmes.
+      this.dernierChemin = chemin;
     }
-    const enCourses = this.session?.session?.state === 'shopping';
-    const lignesRangement = this.lignesARanger;
+    this.ecran = ecran;
+  }
+
+  private confirmerNavigation = (): void => {
+    const cible = this.navigationArmee;
+    const param = this.parametreArme;
+    this.navigationArmee = null;
+    this.parametreArme = null;
+    if (cible) this.naviguerVers(cible, param);
+  };
+
+  private annulerNavigation = (): void => {
+    this.navigationArmee = null;
+    this.parametreArme = null;
+  };
+
+  /** Les pastilles de la barre : un seul compte, sur « Courses ». Ce qui
+   *  attend un geste, c'est ce qu'on a rapporté et pas encore rangé — sinon,
+   *  à défaut, le panier en cours. Jamais les deux additionnés : ce sont deux
+   *  choses différentes, et un chiffre qui mêle les deux ne veut rien dire. */
+  private get pastilles(): Partial<Record<FamilyId, number>> {
+    const aRanger = this.lignesARanger.length;
+    const enPanier = this.session?.session?.state === 'shopping'
+      ? this.session.totals.lines : 0;
+    return { shopping: aRanger || enPanier };
+  }
+
+  private rendreConfirmationQuitter() {
     return html`
-      <nav class="navigation">
-        ${this.ecran !== 'scanner' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('scanner')}>Scanner</button>
-        ` : nothing}
-        ${enCourses && this.ecran !== 'panier' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('panier')}>
-            Panier${this.session!.totals.lines ? ` (${this.session!.totals.lines})` : ''}
-          </button>
-        ` : nothing}
-        ${lignesRangement.length > 0 && this.ecran !== 'rangement' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('rangement')}>
-            Ranger (${lignesRangement.length})
-          </button>
-        ` : nothing}
-        ${this.ecran !== 'session' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('session')}>
-            Courses
-          </button>
-        ` : nothing}
-        ${this.ecran !== 'catalogue' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('catalogue')}>Catalogue</button>
-        ` : nothing}
-        ${this.ecran !== 'journal' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('journal')}>Journal</button>
-        ` : nothing}
-        ${this.ecran !== 'piles' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('piles')}>Piles</button>
-        ` : nothing}
-        ${this.ecran !== 'equipements' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('equipements')}>
-            Équipements
-          </button>
-        ` : nothing}
-        ${this.ecran !== 'liste' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('liste')}>Liste</button>
-        ` : nothing}
-        ${this.ecran !== 'reglages' ? html`
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('recettes')}>Recettes</button>
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('planning')}>Planning</button>
-          <button class="nav-bouton" @click=${() => this.demanderNavigation('reglages')}>Réglages</button>
-        ` : nothing}
-      </nav>
+      <div class="confirmation-quitter-rangement">
+        <p>
+          Des articles rapportés seuls n’ont pas encore été rangés : ils seront perdus si vous quittez
+          maintenant.
+        </p>
+        <button class="confirmer-quitter" @click=${this.confirmerNavigation}>Quitter quand même</button>
+        <button class="annuler-quitter" @click=${this.annulerNavigation}>Rester ici</button>
+      </div>
     `;
   }
 
-  private rendreErreurFile() {
-    if (!this.erreurFile) return nothing;
-    return html`
-      <p class="erreur-file">
-        ${this.erreurFile}
-        <button class="fermer-erreur-file" @click=${() => { this.erreurFile = null; }}>OK</button>
-      </p>
-    `;
-  }
+  /** La famille choisie mène à SA racine, jamais à l’écran d’où l’on
+   *  vient : c’est ce qui rend la barre prévisible. */
+  private surFamilleChoisie = (evenement: CustomEvent<{ family: FamilyId }>): void => {
+    const famille = FAMILIES.find((f) => f.id === evenement.detail.family);
+    if (famille) this.demanderNavigation(famille.root);
+  };
+
+  /** Le retour remonte à la racine de la famille courante — jamais à
+   *  `history.back()`, qui ramènerait à l’écran précédent quelle que soit sa
+   *  famille et ferait sauter l’utilisateur d’un bout à l’autre du panneau. */
+  private surRetour = (): void => {
+    const famille = FAMILIES.find((f) => f.id === familyOf(this.ecran));
+    if (famille) this.demanderNavigation(famille.root);
+  };
+
+  private surErreurAcquittee = (): void => {
+    this.erreurFile = null;
+  };
 
   static styles = [tokens, css`
     :host { display: block; height: 100%; background: var(--hs-surface-2); }
-    /* flex-wrap : jusqu'à six boutons cohabitent ici (Scanner, Panier,
-       Ranger, Courses, Catalogue, Réglages). Sur 412 px de large ils ne
-       tiennent pas tous sur une ligne, et un dépassement horizontal fait
-       échouer le vérificateur de rendu — à juste titre. Ils passent donc à
-       la ligne plutôt que de rétrécir sous la cible de 62 px ou de tronquer
-       leur libellé. */
-    .navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px 0; }
-    .nav-bouton {
-      flex: 1 1 auto; min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px; border: none; font-size: 0.95rem;
-      background: var(--hs-surface-2); color: var(--hs-text);
-    }
-    /* Pas d'aplat sous du texte (§ 6.1 ter) : le texte reste --hs-text sur
-       --hs-surface, le danger se dit par le liseré. */
-    .erreur-file {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      margin: 8px 12px 0; padding: 8px 12px; border-radius: 8px;
-      background: var(--hs-surface); color: var(--hs-text); font-size: 0.9rem;
-      border-left: 4px solid var(--hs-danger);
-    }
-    .fermer-erreur-file {
-      min-height: var(--hs-touch); min-width: var(--hs-touch); border-radius: 8px;
-      background: var(--hs-surface); color: var(--hs-text); font-weight: 600;
-      border: 2px solid var(--hs-danger);
-    }
+    /* Ordre du DOM : la barre AVANT la colonne, pour que le rail se pose
+       naturellement à gauche en row. En column-reverse, la barre repasse en
+       bas de l’écran sans quitter sa place dans le DOM — donc sans casser
+       l’ordre de tabulation, et sans dvh ni :has(), absents de Chrome 100
+       (la tablette de la cuisine). */
+    .coquille { display: flex; flex-direction: column-reverse; height: 100%; }
+    .coquille.large { flex-direction: row; }
+    .colonne { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .contenu { flex: 1; overflow-y: auto; }
+    .navigation { flex: 0 0 auto; }
     .confirmation-quitter-rangement {
-      display: flex; flex-direction: column; gap: 8px; padding: 12px;
-      background: var(--hs-surface-2); color: var(--hs-text);
+      display: flex; flex-direction: column; gap: var(--hs-space-2);
+      padding: var(--hs-space-3);
+      background: var(--hs-surface); color: var(--hs-text);
     }
     .confirmation-quitter-rangement p { margin: 0; }
     .confirmer-quitter, .annuler-quitter {
-      min-height: var(--hs-touch); width: 100%; border-radius: 8px; border: none; font-size: 0.95rem;
+      min-height: var(--hs-touch); width: 100%;
+      border-radius: var(--hs-radius-s); border: none; font-size: 0.95rem;
+      font-family: var(--hs-font); cursor: pointer;
     }
+    /* Bordure, pas aplat : aucun texte ne tient 4,5:1 sur --hs-danger sous le
+       thème HA par défaut (spec § 6.1 ter). Ce qui protège ce geste, c’est
+       qu’il demande deux appuis — pas sa couleur. */
     .confirmer-quitter {
-      background: var(--hs-surface); color: var(--hs-text); border: 2px solid var(--hs-danger);
+      background: var(--hs-surface); color: var(--hs-text);
+      border: 2px solid var(--hs-danger);
     }
     .annuler-quitter { background: var(--hs-accent); color: var(--hs-on-accent); }
   `];
@@ -611,6 +706,38 @@ export class PanneauGardeManger extends LitElement {
   }
 
   render() {
-    return html`${this.rendreNavigation()}${this.rendreErreurFile()}${this.rendreEcran()}`;
+    // La fiche occupe l’écran entier : c’était déjà le cas (l’ancienne
+    // `rendreNavigation` rendait `nothing` sur `fiche`), et pour la même
+    // raison — on y scanne, la coquille ne doit rien voler à la caméra.
+    if (this.ecran === 'fiche') return this.rendreEcran();
+    // La confirmation prend l’écran : tant qu’un départ est armé, aucune
+    // autre destination ne doit être à un doigt de distance.
+    if (this.navigationArmee) return this.rendreConfirmationQuitter();
+    return html`
+      <div class="coquille ${this.large ? 'large' : ''}">
+        <hs-nav-bar class="navigation" .current=${this.ecran} .rail=${this.large}
+          .badges=${this.pastilles} @famille-choisie=${this.surFamilleChoisie}></hs-nav-bar>
+        <div class="colonne">
+          <hs-header .current=${this.ecran} .pending=${this.enAttente} .error=${this.erreurFile}
+            @retour-demande=${this.surRetour}
+            @erreur-acquittee=${this.surErreurAcquittee}></hs-header>
+          <main class="contenu">${this.rendreEcran()}</main>
+        </div>
+      </div>`;
+  }
+
+  firstUpdated(): void {
+    // Pas dans `connectedCallback` : la sonde de `on-color` a besoin de la
+    // feuille adoptée pour résoudre `var(--hs-accent)`, et elle n’existe
+    // qu’après le premier rendu.
+    appliquerCouleursDeTexte(this);
+  }
+
+  updated(changees: PropertyValues): void {
+    // Le thème peut changer sous nos pieds (bascule clair/sombre, changement
+    // de thème dans le profil) : HA repasse alors un nouvel objet `hass`.
+    // L’appel est bon marché — une sonde, trois lectures — et `on-color.ts`
+    // ne pose rien s’il ne sait pas lire.
+    if (changees.has('hass')) appliquerCouleursDeTexte(this);
   }
 }
