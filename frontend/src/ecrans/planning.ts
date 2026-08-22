@@ -297,6 +297,11 @@ export class EcranPlanning extends LitElement {
        Chrome 100 (la tablette de la cuisine) ne le connaît pas. Pas de
        backtick dans ce commentaire : il est DANS un littéral de gabarit. */
     .calendrier { height: 78vh; min-height: 380px; }
+    /* La carte de Lovelace pose height:100% sur SON ha-card interne — un
+       pourcentage qui ne résout à rien tant que l'élément carte lui-même n'a
+       pas de hauteur. Sans cette ligne, la chaîne casse au premier maillon et
+       le calendrier se replie sur sa hauteur de contenu. */
+    .calendrier > * { display: block; height: 100%; }
     .entete { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .periode { flex: 1; text-align: center; font-weight: 600; }
     .entete button, .poser, .repas-nom {
