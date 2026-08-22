@@ -1,12 +1,21 @@
 /** Un bouton. Trois variantes seulement — c'est assez pour tout le panneau, et
  *  chacune porte SA paire fond/texte : jamais un `#fff` en dur sur une couleur
- *  de thème, qui donnerait 2,38:1 sous Graphite (primaire orange). */
+ *  de thème, qui donnerait 2,38:1 sous Graphite (primaire orange).
+ *
+ *  Contrairement à `hs-card` et `hs-icon`, PAS d'enveloppe autour de `ha-button`
+ *  : vérifié dans le bundle HA 2026.8.2 (chunk `52345.8a897507db31c9f9.js`),
+ *  `ha-button` peint son fond sur un `.button` interne à SON shadow DOM, piloté
+ *  par ses propres attributs `appearance`/`variant` (défaut `variant = "brand"`)
+ *  via des variables `--wa-color-*`/`--button-color-*`. Une classe posée sur
+ *  l'hôte ne touche jamais ce `.button` interne : la variante serait invisible
+ *  dès que HA est chargé — un bouton « danger » sans rien de dangereux à
+ *  l'œil, la même panne silencieuse que le `label` muet de `ha-svg-icon`.
+ *  Épouser cette API interne nous lierait à un contrat non public, qui a déjà
+ *  changé une fois (mwc → Web Awesome). On rend donc TOUJOURS notre `<button>`
+ *  ; il tire ses couleurs des mêmes jetons HA, donc il a déjà l'air natif. */
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { tokens } from './tokens';
-import { isDefined, whenDefined } from './ha-available';
-
-const HA_BUTTON = 'ha-button';
 
 @customElement('hs-button')
 export class HsButton extends LitElement {
@@ -14,22 +23,6 @@ export class HsButton extends LitElement {
   @property({ type: Boolean, reflect: true }) disabled = false;
   /** Occupe toute la largeur disponible. */
   @property({ type: Boolean }) full = false;
-
-  /** Même raison que dans `hs-card` : `whenDefined` rend un désabonnement, et
-   *  ne pas l'appeler fait fuir la table sur l'appareil où `ha-button` ne se
-   *  charge jamais. */
-  private desabonner?: () => void;
-
-  connectedCallback(): void {
-    super.connectedCallback();
-    this.desabonner = whenDefined(HA_BUTTON, () => this.requestUpdate());
-  }
-
-  disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.desabonner?.();
-    this.desabonner = undefined;
-  }
 
   static styles = [tokens, css`
     :host { display: inline-block; }
@@ -54,14 +47,6 @@ export class HsButton extends LitElement {
 
   render() {
     const classes = `${this.variant}${this.full ? ' full' : ''}`;
-    // `ha-button` n'est utilisé que lorsqu'il est chargé ; sa variante est
-    // portée par la classe, comme pour le repli, pour que les deux chemins
-    // aient exactement le même contrat de style.
-    if (isDefined(HA_BUTTON)) {
-      return html`<ha-button class=${classes} ?disabled=${this.disabled}>
-        <slot></slot>
-      </ha-button>`;
-    }
     return html`<button class=${classes} ?disabled=${this.disabled}>
       <slot></slot>
     </button>`;

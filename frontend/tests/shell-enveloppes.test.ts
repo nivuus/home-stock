@@ -17,6 +17,23 @@ async function monter(balise: string, attributs: Record<string, string> = {}) {
 }
 
 describe('hs-card', () => {
+  // DOIT rester le premier test de `hs-card` : `customElements.define('ha-card', …)`,
+  // plus bas dans ce fichier, est une opération irréversible qu'aucun `resetForTests`
+  // ne peut annuler. Si ce test s'exécutait après, `isDefined('ha-card')` serait déjà
+  // vrai au montage, `whenDefined` court-circuiterait sans jamais entrer l'instance
+  // dans la table de `ha-available.ts`, et le test « passerait » sans avoir observé
+  // le désabonnement — même piège qu'à la Task 3, une assertion vraie pour une
+  // raison différente de celle qu'elle annonce. Voir le même ordre imposé dans
+  // `shell-icons.test.ts`. `hs-button` n'a plus d'abonnement du tout depuis la
+  // correction 1 (plus de branche `ha-button`) : ce test ne concerne donc plus que
+  // `hs-card`.
+  it('se désabonne au démontage', async () => {
+    const avant = pendingCountForTests();
+    const el = await monter('hs-card');
+    el.remove();
+    expect(pendingCountForTests()).toBe(avant);
+  });
+
   it('rend son repli quand ha-card n’est pas chargé', async () => {
     const el = await monter('hs-card');
     expect(el.shadowRoot!.querySelector('.repli')).not.toBeNull();
@@ -34,7 +51,11 @@ describe('hs-card', () => {
 });
 
 describe('hs-button', () => {
-  it('rend un bouton natif quand ha-button n’est pas chargé', async () => {
+  // Pas de branche `ha-button` à tester : `hs-button` rend toujours son propre
+  // `<button>` (voir le commentaire de tête de `hs-button.ts` — `ha-button` peint
+  // sa variante sur un élément interne à SON shadow DOM, hors d'atteinte d'une
+  // classe posée sur l'hôte).
+  it('rend un bouton natif', async () => {
     const el = await monter('hs-button');
     expect(el.shadowRoot!.querySelector('button')).not.toBeNull();
   });
@@ -55,18 +76,6 @@ describe('hs-button', () => {
     el.addEventListener('click', surClic);
     el.shadowRoot!.querySelector('button')!.click();
     expect(surClic).not.toHaveBeenCalled();
-  });
-
-  it('se désabonne au démontage, dans les deux enveloppes', async () => {
-    // La fuite que ce test interdit est bornée à l'appareil où l'élément HA
-    // n'arrive jamais — la tablette cuisine — mais c'est un kiosque qui tourne
-    // en continu, avec des dizaines de boutons remontés à chaque navigation.
-    const avant = pendingCountForTests();
-    const carte = await monter('hs-card');
-    const bouton = await monter('hs-button');
-    carte.remove();
-    bouton.remove();
-    expect(pendingCountForTests()).toBe(avant);
   });
 
   it('tient la cible tactile de la tablette', async () => {
