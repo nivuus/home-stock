@@ -84,6 +84,35 @@ describe('détection des composants Home Assistant', () => {
     expect(pendingCountForTests()).toBe(0);
   });
 
+  it('ne rappelle plus un abonné qui s’est désabonné', async () => {
+    // La tablette cuisine ouvre /home-stock directement : ha-svg-icon ne s'y
+    // charge JAMAIS. Chaque montage/démontage d'icône doit donc pouvoir se
+    // retirer de la file d'attente, sinon elle grossit sans fin sur ce
+    // kiosque qui tourne en continu.
+    const nom = `ha-card-desabonne-${Math.random().toString(36).slice(2)}`;
+    const rappel = vi.fn();
+    const seDesabonner = whenDefined(nom, rappel);
+    seDesabonner();
+
+    customElements.define(nom, class extends HTMLElement {});
+    for (let tour = 0; tour < 5; tour += 1) await Promise.resolve();
+
+    expect(rappel).not.toHaveBeenCalled();
+  });
+
+  it('ne laisse pas d’entrée morte quand le dernier abonné d’un nom se désabonne', () => {
+    const nom = `ha-card-derniere-entree-${Math.random().toString(36).slice(2)}`;
+    const seDesabonnerA = whenDefined(nom, vi.fn());
+    const seDesabonnerB = whenDefined(nom, vi.fn());
+    expect(pendingCountForTests()).toBe(1);
+
+    seDesabonnerA();
+    expect(pendingCountForTests()).toBe(1); // B reste abonné : l'entrée doit rester.
+
+    seDesabonnerB();
+    expect(pendingCountForTests()).toBe(0); // Plus aucun abonné : rien ne doit rester.
+  });
+
   it('appelle loadCardHelpers une seule fois, et survit à son absence', () => {
     const loadCardHelpers = vi.fn().mockResolvedValue({});
     const fenetre = { loadCardHelpers } as unknown as Window;

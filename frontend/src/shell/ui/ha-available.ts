@@ -22,19 +22,35 @@ export function isDefined(name: string): boolean {
 
 /** Rappelle `onDefined` si l'élément est enregistré plus tard. Un seul
  *  `customElements.whenDefined` par nom, quel que soit le nombre
- *  d'instances : elles sont potentiellement des dizaines à l'écran. */
-export function whenDefined(name: string, onDefined: Rappel): void {
-  if (isDefined(name)) return;
+ *  d'instances : elles sont potentiellement des dizaines à l'écran.
+ *
+ *  Retourne une fonction de désabonnement. Sur la tablette cuisine — qui
+ *  ouvre `/home-stock` directement, sans jamais charger `ha-svg-icon` —
+ *  chaque montage d'icône empilerait un rappel qui ne se résout jamais si
+ *  rien ne pouvait le retirer au démontage : une fuite qui grossit à chaque
+ *  navigation sur un kiosque qui tourne en continu. */
+export function whenDefined(name: string, onDefined: Rappel): () => void {
+  if (isDefined(name)) return () => {};
   const existants = abonnes.get(name);
   if (existants) {
     existants.push(onDefined);
-    return;
+  } else {
+    abonnes.set(name, [onDefined]);
+    void customElements.whenDefined(name).then(() => {
+      for (const rappel of abonnes.get(name) ?? []) rappel();
+      abonnes.delete(name);
+    });
   }
-  abonnes.set(name, [onDefined]);
-  void customElements.whenDefined(name).then(() => {
-    for (const rappel of abonnes.get(name) ?? []) rappel();
-    abonnes.delete(name);
-  });
+  return () => {
+    const restants = abonnes.get(name);
+    if (!restants) return;
+    const index = restants.indexOf(onDefined);
+    if (index >= 0) restants.splice(index, 1);
+    // Ne pas laisser une entrée vide dans la table : sinon
+    // `pendingCountForTests` (et tout futur code qui s'y fierait) verrait un
+    // nom encore « en attente » alors que plus personne n'écoute.
+    if (restants.length === 0) abonnes.delete(name);
+  };
 }
 
 /** Tente une fois de forcer le chunk Lovelace, qui enregistre `ha-card` et
