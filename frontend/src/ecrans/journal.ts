@@ -521,15 +521,16 @@ export class EcranJournal extends LitElement {
        graphe passe donc en liste de lignes empilées, chacune pleine largeur,
        où c'est la largeur du remplissage qui porte la valeur. */
     .barres {
-      display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 16px;
+      display: flex; gap: 4px; margin: 8px 0 16px;
       padding: 8px; border-radius: 8px; background: var(--hs-surface-2); box-sizing: border-box;
     }
     .barre {
       /* Cible tactile réelle, pas juste visuelle : min-width tient la
-         colonne à 62 px. Quand quatorze seaux ne rentrent plus sur une
-         ligne dans la colonne « série » de la vue dense, ils passent à la
-         ligne (flex-wrap) plutôt que d'écraser des cibles sous le seuil ou
-         de faire défiler la page horizontalement (défaut Task 6). */
+         colonne à 62 px. La vue dense élargit la colonne « série » (voir
+         plus bas) pour que les quatorze tiennent sur une seule ligne — un
+         flex-wrap essayé ici étalait les deux dernières barres orphelines
+         sur toute la largeur de leur ligne (round de correction 1), un
+         défaut pire que l'original et invisible du vérificateur. */
       flex: 1 1 auto; min-width: var(--hs-touch); height: 120px; min-height: var(--hs-touch); box-sizing: border-box;
       display: flex; align-items: flex-end; border: none; border-radius: 4px; background: transparent; padding: 0;
     }
@@ -566,17 +567,21 @@ export class EcranJournal extends LitElement {
     }
 
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
-       Deux tiers pour la série, un tiers pour le détail — et ce n'est pas un
-       goût : quatorze barres à 62 px de cible tactile réclament plus de
-       700 px, ce qu'une demi-largeur de 1280 ne donne pas. Le vérificateur de
-       rendu l'a signalé avant qu'on s'en aperçoive. Largeur minimale nulle
-       sur les deux colonnes, sans quoi une entrée longue pousserait la
-       grille hors cadre. */
-    .deux-colonnes {
-      display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-      gap: 16px; align-items: start;
-    }
-    .colonne-serie, .colonne-detail { min-width: 0; }
+       Quatorze cibles à 62 px de cible tactile chacune, quel que soit ce
+       qui est peint dedans, ça fait 868 px de plancher pour la colonne
+       « série » — un partage 2:1 n'en donnait que ~800 à 1280 px, d'où le
+       défaut que le vérificateur a signalé (round Task 6) et le flex-wrap
+       essayé puis écarté (round de correction 1 : il étalait les barres
+       orphelines de la dernière ligne sur toute sa largeur). La colonne
+       « série » prend donc sa largeur naturelle (0 0 auto) — quatorze
+       barres + gouttières — et la colonne « détail » absorbe tout le reste
+       en restant élastique (1 1 0, min-width nulle pour ne jamais pousser
+       la grille hors cadre). À 1280 px il reste ~330 px au détail, plus
+       qu'un téléphone où il tient déjà ; à 1920 la question ne se pose
+       plus. */
+    .deux-colonnes { display: flex; gap: 16px; align-items: start; }
+    .colonne-serie { flex: 0 0 auto; }
+    .colonne-detail { flex: 1 1 0; min-width: 0; }
     .deux-colonnes .barres { margin-top: 0; }
     .deux-colonnes .jour { margin-top: 0; }
   `];

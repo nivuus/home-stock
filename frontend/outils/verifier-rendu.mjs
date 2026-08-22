@@ -1404,14 +1404,21 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
   }
 
   // Une troncature suppose un conteneur qui masque réellement le
-  // débordement (overflow ≠ visible) : un élément `overflow: visible` ne
-  // tronque jamais rien, il déborde dans le flux — ce que le test de
-  // débordement ci-dessus couvre déjà séparément.
+  // débordement SANS offrir de moyen de le voir : `overflow: visible` ne
+  // tronque jamais rien (déborde dans le flux, couvert par le test de
+  // débordement ci-dessus) — et `auto`/`scroll` non plus : le contenu qui
+  // dépasse `clientWidth` y reste entièrement accessible par défilement,
+  // c'est un choix délibéré, pas une perte. Round de correction 1 (Task 6) :
+  // seuls `hidden` et `clip` masquent réellement quelque chose sans recours,
+  // donc seuls eux comptent comme troncature. Avant cette correction, tout
+  // `overflow-x: auto` scrollable était signalé à tort — c'est ce faux
+  // positif qui avait fait écarter une colonne de graphique défilable au
+  // profit d'un `flex-wrap` qui, lui, étalait des barres orphelines.
   const texteTronque = [];
   for (const el of elements) {
     if (el.tagName === 'OPTION' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
     const style = getComputedStyle(el);
-    if (style.overflowX === 'visible') continue;
+    if (style.overflowX !== 'hidden' && style.overflowX !== 'clip') continue;
     if (el.scrollWidth > el.clientWidth + 1) {
       texteTronque.push({ element: decrire(el) });
     }

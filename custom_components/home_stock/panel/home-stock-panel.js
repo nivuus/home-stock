@@ -1383,15 +1383,16 @@ const ce=e=>(t,i)=>{void 0!==i?i.addInitializer(()=>{customElements.define(e,t)}
        graphe passe donc en liste de lignes empilées, chacune pleine largeur,
        où c'est la largeur du remplissage qui porte la valeur. */
     .barres {
-      display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 16px;
+      display: flex; gap: 4px; margin: 8px 0 16px;
       padding: 8px; border-radius: 8px; background: var(--hs-surface-2); box-sizing: border-box;
     }
     .barre {
       /* Cible tactile réelle, pas juste visuelle : min-width tient la
-         colonne à 62 px. Quand quatorze seaux ne rentrent plus sur une
-         ligne dans la colonne « série » de la vue dense, ils passent à la
-         ligne (flex-wrap) plutôt que d'écraser des cibles sous le seuil ou
-         de faire défiler la page horizontalement (défaut Task 6). */
+         colonne à 62 px. La vue dense élargit la colonne « série » (voir
+         plus bas) pour que les quatorze tiennent sur une seule ligne — un
+         flex-wrap essayé ici étalait les deux dernières barres orphelines
+         sur toute la largeur de leur ligne (round de correction 1), un
+         défaut pire que l'original et invisible du vérificateur. */
       flex: 1 1 auto; min-width: var(--hs-touch); height: 120px; min-height: var(--hs-touch); box-sizing: border-box;
       display: flex; align-items: flex-end; border: none; border-radius: 4px; background: transparent; padding: 0;
     }
@@ -1428,17 +1429,21 @@ const ce=e=>(t,i)=>{void 0!==i?i.addInitializer(()=>{customElements.define(e,t)}
     }
 
     /* --- la vue dense (lot 6), au-delà de 1000 px --------------------------
-       Deux tiers pour la série, un tiers pour le détail — et ce n'est pas un
-       goût : quatorze barres à 62 px de cible tactile réclament plus de
-       700 px, ce qu'une demi-largeur de 1280 ne donne pas. Le vérificateur de
-       rendu l'a signalé avant qu'on s'en aperçoive. Largeur minimale nulle
-       sur les deux colonnes, sans quoi une entrée longue pousserait la
-       grille hors cadre. */
-    .deux-colonnes {
-      display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-      gap: 16px; align-items: start;
-    }
-    .colonne-serie, .colonne-detail { min-width: 0; }
+       Quatorze cibles à 62 px de cible tactile chacune, quel que soit ce
+       qui est peint dedans, ça fait 868 px de plancher pour la colonne
+       « série » — un partage 2:1 n'en donnait que ~800 à 1280 px, d'où le
+       défaut que le vérificateur a signalé (round Task 6) et le flex-wrap
+       essayé puis écarté (round de correction 1 : il étalait les barres
+       orphelines de la dernière ligne sur toute sa largeur). La colonne
+       « série » prend donc sa largeur naturelle (0 0 auto) — quatorze
+       barres + gouttières — et la colonne « détail » absorbe tout le reste
+       en restant élastique (1 1 0, min-width nulle pour ne jamais pousser
+       la grille hors cadre). À 1280 px il reste ~330 px au détail, plus
+       qu'un téléphone où il tient déjà ; à 1920 la question ne se pose
+       plus. */
+    .deux-colonnes { display: flex; gap: 16px; align-items: start; }
+    .colonne-serie { flex: 0 0 auto; }
+    .colonne-detail { flex: 1 1 0; min-width: 0; }
     .deux-colonnes .barres { margin-top: 0; }
     .deux-colonnes .jour { margin-top: 0; }
   `],e([pe({attribute:!1})],nt.prototype,"connexion",void 0),e([pe({type:Boolean})],nt.prototype,"large",void 0),e([de()],nt.prototype,"jour",void 0),e([de()],nt.prototype,"serie",void 0),e([de()],nt.prototype,"granularite",void 0),e([de()],nt.prototype,"enCours",void 0),e([de()],nt.prototype,"seauSelectionne",void 0),e([pe({attribute:!1})],nt.prototype,"file",void 0),e([de()],nt.prototype,"detailOuvert",void 0),e([de()],nt.prototype,"apercu",void 0),e([de()],nt.prototype,"correctionArmee",void 0),nt=e([ce("home-stock-journal")],nt);let ot=class extends oe{constructor(){super(...arguments),this.enAttente=!1,this.recettes=[],this.filtre="",this.fiches=null,this.chercheEnLigne=!1,this.message=""}connectedCallback(){super.connectedCallback(),this.charger()}async charger(){if(!this.connexion)return;const e=await this.connexion.appeler("home_stock/recipes/list",{});this.recettes=e.recipes??[]}get recettesFiltrees(){if(!this.filtre.trim())return this.recettes;const e=at(this.filtre.trim());return this.recettes.filter(t=>at(t.name).includes(e))}ouvrir(e){this.dispatchEvent(new CustomEvent("recette-ouverte",{detail:{recipe_id:e.id},bubbles:!0,composed:!0}))}async chercherAilleurs(){if(this.connexion&&!this.enAttente){this.chercheEnLigne=!0,this.message="";try{const e=await this.connexion.appeler("home_stock/recipe/search_external",{query:this.filtre.trim()});this.fiches=e.hits??[],this.fiches.length||(this.message=!1===e.reachable?"La source de recettes est injoignable pour le moment.":"Aucune recette trouvée à la source.")}finally{this.chercheEnLigne=!1}}}async importer(e){if(!this.connexion)return;const t=await this.connexion.appeler("home_stock/recipe/import_external",{source_ref:e.source_ref});this.message=t.adapted?`« ${e.name} » a été importée et adaptée en français.`:`« ${e.name} » a été importée. Elle est en anglais : à relire.`,this.fiches=null,await this.charger()}async marquerRelue(e){this.file&&(this.file.ajouter("home_stock/recipe/update",{recipe_id:e.id,fields:{needs_review:0}}),this.recettes=this.recettes.map(t=>t.id===e.id?{...t,needs_review:0}:t))}rendreRecette(e){return B`
