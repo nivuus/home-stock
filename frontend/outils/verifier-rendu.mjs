@@ -1263,6 +1263,35 @@ const SCENARIOS = [
     elementAttendu: { enfant: null, selector: '.confirmation-quitter-rangement' },
   },
   {
+    // Le chemin le plus probable, et celui qui a régressé : l'historique est
+    // /scan → /item/<code> → /put-away, donc un Retour depuis le rangement
+    // vise la fiche de l'article qu'on vient de rapporter. Confirmer doit
+    // rejouer la route ENTIÈRE, paramètre compris — sans le `lookup`, le
+    // panneau tombait sur le scanner sans barre ni en-tête, sous une URL
+    // d'article : aucun bouton pour sortir. `ecranAttendu` le prouve ici dans
+    // un vrai navigateur, puisque la fiche ne se monte qu'avec son résultat.
+    nom: 'Coquille : départ confirmé vers un écran paramétré (/item/<code>)',
+    fixture: {
+      reponses: {
+        'home_stock/session/current': null,
+        'home_stock/lookup': RESULTAT_LOOKUP_INCONNU,
+        'home_stock/locations/list': { locations: EMPLACEMENTS },
+      },
+    },
+    actions: [
+      { type: 'dispatch-code-lu', code: '3229820129488' },
+      { type: 'dispatch-article-pret', detail: {
+        articleId: 99, quantite: 1000, prixUnitaire: 0.0018,
+        mode: 'rangement', offDroppedFields: [],
+      } },
+      { type: 'route', path: '/item/3229820129488' },
+      { type: 'click-in-child', enfant: null, selector: '.confirmer-quitter' },
+    ],
+    ecranAttendu: 'home-stock-fiche',
+    // La fiche occupe l'écran entier, ici comme partout ailleurs.
+    elementAbsent: { enfant: null, selector: 'hs-nav-bar' },
+  },
+  {
     nom: 'Coquille : pastille de compte sur Courses',
     fixture: {
       reponses: {
@@ -1421,9 +1450,13 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
         detail: action.detail, bubbles: true, composed: true,
       }));
     } else if (action.type === 'click-in-child') {
-      const enfant = panneau.shadowRoot.querySelector(action.enfant);
-      if (enfant && enfant.shadowRoot) {
-        const cible = enfant.shadowRoot.querySelector(action.selector);
+      // `enfant: null` vise le shadow root du panneau lui-même — la coquille
+      // y pose ses propres boutons (la confirmation de départ), et rien ne
+      // pouvait les cliquer jusqu'ici. Même chaîne de shadow roots que pour
+      // `elementAttendu`.
+      const racine = racineEnfant(action.enfant ?? null);
+      if (racine) {
+        const cible = racine.querySelector(action.selector);
         if (cible) cible.click();
       }
     }

@@ -167,8 +167,11 @@ describe('panneau : routes d’URL', () => {
     expect((el as any).navigationArmee).toBe('liste');
   });
 
-  it('repose l’URL du rangement, UNE seule fois : écran et URL ne divergent pas, et ça ne boucle pas',
-     async () => {
+  it('repose l’URL du rangement une seule fois, et jamais en pushState', async () => {
+    // Ce test ne prouve QUE ça : une repose, en `replace`. Il ne distingue pas
+    // les deux verrous qui empêchent l'écho de route de réarmer (l'égalité de
+    // `dernierChemin` et l'idempotence du chemin reposé) — c'est le test
+    // suivant qui s'en charge, et lui seul.
     const el = await monterSurUnRangementInacheve();
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const pushState = vi.spyOn(window.history, 'pushState');
@@ -180,14 +183,71 @@ describe('panneau : routes d’URL', () => {
     expect(replaceState).toHaveBeenCalledWith(null, '', '/home-stock/put-away');
     // Un départ refusé ne mérite aucune entrée d'historique.
     expect(pushState).not.toHaveBeenCalled();
+    expect(el.ecran).toBe('rangement');
+  });
 
-    // Ce que Home Assistant fait en retour du `location-changed` : il nous
-    // repasse la route qu'on vient de reposer. Ce second passage doit être un
-    // no-op — sinon c'est la boucle.
-    el.route = { prefix: '/home-stock', path: '/put-away' };
+  it('un écho de route qui désigne le rangement AUTREMENT ne réarme rien', async () => {
+    // Le vrai verrou n'est pas `dernierChemin` mais l'IDEMPOTENCE du chemin
+    // reposé : `/put-away` reparse vers `rangement`, donc la cible est l'écran
+    // courant et `departARisque` est faux. Pour le prouver, il faut un écho
+    // que `dernierChemin` ne peut PAS court-circuiter : un chemin
+    // textuellement différent qui désigne le même écran — exactement ce que
+    // produirait une normalisation de chemin côté Home Assistant. Si le
+    // verrou tenait à la seule égalité de chaînes, ce second passage
+    // réarmerait et reposerait l'URL une seconde fois.
+    const el = await monterSurUnRangementInacheve();
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+
+    el.route = { prefix: '/home-stock', path: '/catalog' };
     await el.updateComplete;
     expect(replaceState).toHaveBeenCalledTimes(1);
+
+    el.route = { prefix: '/home-stock', path: '/put-away/42' };
+    await el.updateComplete;
+
+    expect(replaceState).toHaveBeenCalledTimes(1);
     expect(el.ecran).toBe('rangement');
+    // Et la confirmation précédente n'a pas été remplacée par une nouvelle
+    // qui viserait le rangement lui-même.
+    expect((el as any).navigationArmee).toBe('catalogue');
+  });
+
+  it('« Quitter quand même » vers un écran PARAMÉTRÉ applique son paramètre', async () => {
+    // L'historique typique est /scan → /item/<code> → /put-away : un Retour
+    // depuis le rangement vise donc la fiche de l'article qu'on vient de
+    // rapporter. C'est le cas le plus fréquent, et c'était le pire — le
+    // panneau tombait sur le scanner, sans barre ni en-tête (l'écran entier
+    // de la fiche), sous une URL d'article : aucun bouton pour sortir.
+    const el = await monterSurUnRangementInacheve();
+    el.route = { prefix: '/home-stock', path: '/item/3229820129488' };
+    await el.updateComplete;
+    expect((el as any).navigationArmee).toBe('fiche');
+
+    (el.shadowRoot!.querySelector('.confirmer-quitter') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+
+    expect(el.ecran).toBe('fiche');
+    // Pas seulement l'écran : la fiche doit être MONTÉE, avec son résultat.
+    const fiche = el.shadowRoot!.querySelector('home-stock-fiche') as any;
+    expect(fiche).not.toBeNull();
+    expect(fiche.resultat.code).toBe('3229820129488');
+    expect(el.shadowRoot!.querySelector('home-stock-scanner')).toBeNull();
+  });
+
+  it('… et vaut pour un second écran paramétré, /recipe/12', async () => {
+    const el = await monterSurUnRangementInacheve();
+    el.route = { prefix: '/home-stock', path: '/recipe/12' };
+    await el.updateComplete;
+    expect((el as any).navigationArmee).toBe('recette');
+
+    (el.shadowRoot!.querySelector('.confirmer-quitter') as HTMLButtonElement).click();
+    await laisserPasserLesMicrotaches();
+    await el.updateComplete;
+
+    expect(el.ecran).toBe('recette');
+    expect((el as any).recetteOuverte).toBe(12);
+    expect(el.shadowRoot!.querySelector('home-stock-recette')).not.toBeNull();
   });
 
   it('« Quitter quand même » va bien où la route voulait aller', async () => {

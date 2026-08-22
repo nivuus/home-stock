@@ -88,9 +88,12 @@ export class PanneauGardeManger extends LitElement {
    *  serveur ne les représente tant qu'ils n'ont pas de lot, donc le panneau
    *  les garde le temps que l'écran de rangement les traite. */
   @state() private enAttenteRangement: LigneRangementAutonome[] = [];
-  /** Le dernier refus du serveur sur une écriture en file, en français
-   *  (c'est déjà le message du serveur) — jusqu'à ce qu'on l'accuse
-   *  réception ou qu'un nouveau refus le remplace. */
+  /** Le dernier refus du serveur, en français — jusqu'à ce qu'on l'accuse
+   *  réception ou qu'un nouveau le remplace. Deux sources depuis le lot 7 :
+   *  une ÉCRITURE en file refusée (c'est alors déjà le message du serveur),
+   *  et une LECTURE que la route a demandée et qui n'a rien rendu (un
+   *  `/receipt/<id>` introuvable — voir `chargerTicket`). Le nom garde son
+   *  histoire ; la bannière, elle, n'est plus réservée à la file. */
   @state() private erreurFile: string | null = null;
   /** La cible de navigation en attente de confirmation, quand on quitte le
    *  rangement avec des articles autonomes encore en attente — `null` tant
@@ -122,24 +125,39 @@ export class PanneauGardeManger extends LitElement {
     this.appliquerChemin(chemin);
   }
 
-  private appliquerChemin(chemin: string): void {
+  /** Traduit un chemin en état — LE seul endroit qui le sache, et le seul qui
+   *  applique le paramètre d'un écran paramétré.
+   *
+   *  `avecGardeFou` n'est faux qu'au rejeu d'un départ confirmé : le garde-fou
+   *  vient précisément d'être levé par le second appui, le rejouer réarmerait
+   *  la même confirmation en boucle. */
+  private appliquerChemin(chemin: string, avecGardeFou = true): void {
     const route = parsePath(chemin);
     // Une route inconnue vaut la racine — mais elle la vaut EN PASSANT PAR LE
     // MÊME GARDE-FOU : c'était le second contournement, aussi silencieux que
     // le premier.
     const cible: Ecran = route ? route.screen : 'liste';
-    if (this.departARisque(cible)) {
-      this.armer(cible, route?.param ?? null);
+    if (avecGardeFou && this.departARisque(cible)) {
+      // On retient le CHEMIN, pas la cible : lui seul porte le paramètre, et
+      // le rejouer tel quel évite d'avoir un second endroit qui sait traduire
+      // un chemin en état. Sans ça, confirmer un départ vers `/item/<code>`
+      // posait l'écran sans jamais faire le `lookup`.
+      this.armer(cible, null, chemin);
       // L'URL vient de bouger sous nos pieds (bouton Retour du navigateur,
       // geste système d'Android, URL tapée) et l'écran, lui, ne bouge pas :
       // on repose donc celle du rangement, pour qu'écran et URL ne divergent
       // jamais. `replace`, pas `push` — un départ refusé ne mérite aucune
       // entrée d'historique.
       //
-      // PAS DE BOUCLE : ce `replaceState` fera repasser Home Assistant par
-      // `route`, mais `naviguerVers` vient d'y poser `dernierChemin`, donc
-      // `willUpdate` sortira tout de suite sur son test d'égalité. C'est
-      // exactement ce que couvre le test « ne boucle pas ».
+      // PAS DE BOUCLE, et le mérite n'en revient PAS à `dernierChemin` : le
+      // chemin qu'on repose est celui du rangement, donc l'écho que Home
+      // Assistant nous renverra reparse vers `rangement` — la cible EST
+      // l'écran courant, `departARisque` y est faux, il n'y a rien à
+      // réarmer. Ce verrou-là tient même si HA nous rend le chemin sous une
+      // autre forme (`/put-away/`, un segment de trop) ; `dernierChemin`,
+      // lui, ne ferait qu'épargner un rendu. Le test
+      // « un écho de route qui désigne le rangement autrement » vise
+      // précisément ce verrou-ci, en défaisant l'égalité de chemins.
       this.naviguerVers('rangement', null, true);
       return;
     }
@@ -490,6 +508,10 @@ export class PanneauGardeManger extends LitElement {
    *  sans identifiant, que `pathOf` refuse. */
   private parametreArme: string | number | null = null;
 
+  /** Le chemin d'URL qui a armé le départ, quand c'est une route qui l'a fait
+   *  — `null` pour un geste de l'application. Voir `armer`. */
+  private cheminArme: string | null = null;
+
   /** Change d'écran, sauf s'il faut d'abord prévenir (voir plus haut). Le
    *  garde-fou s'arme AVANT toute navigation : ni l'URL, ni l'historique, ni
    *  `ecran` ne bougent tant que le second appui n'est pas venu. */
@@ -502,9 +524,15 @@ export class PanneauGardeManger extends LitElement {
       && this.enAttenteRangement.length > 0;
   }
 
-  private armer(cible: Ecran, param: string | number | null): void {
+  /** `chemin` n'est renseigné que pour un départ armé par une ROUTE : c'est
+   *  lui qu'on rejouera, parce qu'une route n'a que son chemin pour dire ce
+   *  qu'elle veut. Un geste de l'application, lui, a déjà posé sa donnée
+   *  (`recetteOuverte`, `ticketOuvert`…) avant d'armer. */
+  private armer(cible: Ecran, param: string | number | null,
+                chemin: string | null = null): void {
     this.navigationArmee = cible;
     this.parametreArme = param;
+    this.cheminArme = chemin;
   }
 
   private demanderNavigation(cible: Ecran, param: string | number | null = null): void {
@@ -535,34 +563,56 @@ export class PanneauGardeManger extends LitElement {
    *  Le paramètre ne sert qu'à fabriquer l'URL : l'appelant a déjà posé la
    *  donnée (`recetteOuverte`, `ticketOuvert`…) avant d'appeler — la relire
    *  depuis une chaîne d'URL rejouerait un aller-retour serveur pour rien. */
+  /** Écrit l'URL et prévient Home Assistant, sans rien décider de l'écran.
+   *  `dernierChemin` est posé ici : HA nous repassera `route`, et cet écho
+   *  n'a pas à refaire un rendu pour ce qu'on vient d'appliquer. */
+  private pousserUrl(chemin: string, remplacer = false): void {
+    const url = `${this.route?.prefix ?? '/home-stock'}${chemin}`;
+    if (remplacer) window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+    window.dispatchEvent(new CustomEvent('location-changed', {
+      detail: { replace: remplacer }, bubbles: true, composed: true,
+    }));
+    this.dernierChemin = chemin;
+  }
+
   private naviguerVers(ecran: Ecran, param: string | number | null = null,
                        remplacer = false): void {
     const chemin = this.cheminDe(ecran, param);
-    if (chemin !== null) {
-      const url = `${this.route?.prefix ?? '/home-stock'}${chemin}`;
-      if (remplacer) window.history.replaceState(null, '', url);
-      else window.history.pushState(null, '', url);
-      window.dispatchEvent(new CustomEvent('location-changed', {
-        detail: { replace: remplacer }, bubbles: true, composed: true,
-      }));
-      // HA ne nous repassera `route` que s'il écoute vraiment ; en test, et si
-      // une version future changeait de convention, on applique nous-mêmes.
-      this.dernierChemin = chemin;
-    }
+    // HA ne nous repassera `route` que s'il écoute vraiment ; en test, et si
+    // une version future changeait de convention, on applique nous-mêmes.
+    if (chemin !== null) this.pousserUrl(chemin, remplacer);
     this.ecran = ecran;
   }
 
   private confirmerNavigation = (): void => {
     const cible = this.navigationArmee;
     const param = this.parametreArme;
+    const chemin = this.cheminArme;
     this.navigationArmee = null;
     this.parametreArme = null;
-    if (cible) this.naviguerVers(cible, param);
+    this.cheminArme = null;
+    if (!cible) return;
+    if (chemin !== null) {
+      // Départ armé par une ROUTE : on la rejoue à la lettre, par le seul
+      // endroit qui sait traduire un chemin en état. C'est lui, et lui seul,
+      // qui applique le paramètre — `naviguerVers` ne le fait pas, exprès (un
+      // geste de l'application a déjà posé sa donnée, et la relire d'une URL
+      // rejouerait un aller-retour serveur pour rien). Garde-fou débranché :
+      // le second appui vient de le lever.
+      this.pousserUrl(chemin);
+      this.appliquerChemin(chemin, false);
+      return;
+    }
+    // Armé par un geste de l'application : l'appelant a déjà posé sa donnée,
+    // il ne reste que l'URL et l'écran.
+    this.naviguerVers(cible, param);
   };
 
   private annulerNavigation = (): void => {
     this.navigationArmee = null;
     this.parametreArme = null;
+    this.cheminArme = null;
   };
 
   /** Les pastilles de la barre : un seul compte, sur « Courses ». Ce qui
