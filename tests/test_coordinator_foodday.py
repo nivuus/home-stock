@@ -23,7 +23,11 @@ async def test_the_day_resets_at_four_without_any_activity(hass, setup_entry):
 
     with freeze_time("2026-08-21T04:00:01+02:00"):
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
-        await hass.async_block_till_done()
+        # Le rendez-vous ne rafraîchit pas lui-même : il *demande* un
+        # rafraîchissement, que l'anti-rebond du coordinateur exécute en
+        # tâche de FOND. `async_block_till_done()` ne les attend pas, d'où
+        # un test qui réussissait ou échouait au hasard de l'ordonnancement.
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert coordinator.data["today"]["food_day"] == "2026-08-21"
     assert coordinator.data["today"]["kcal"] == 0.0
@@ -93,7 +97,11 @@ async def test_a_breach_of_yesterday_is_gone_after_the_four_o_clock_rendezvous(
 
     with freeze_time("2026-08-21T04:00:01+02:00"):
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
-        await hass.async_block_till_done()
+        # Le rendez-vous ne rafraîchit pas lui-même : il *demande* un
+        # rafraîchissement, que l'anti-rebond du coordinateur exécute en
+        # tâche de FOND. `async_block_till_done()` ne les attend pas, d'où
+        # un test qui réussissait ou échouait au hasard de l'ordonnancement.
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert coordinator.data["goals"]["count"] == 0
     assert hass.states.get("binary_sensor.home_stock_nutrition_goals").state == "off"

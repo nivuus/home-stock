@@ -635,7 +635,11 @@ def test_all_twelve_pass_on_a_fully_migrated_database(db_piles, grocy_reel_db,
 # --- archive ----------------------------------------------------------------
 
 def _archive(db, grocy_path, tmp_path):
-    chemin = check_migration(db, grocy_path, archive=True,
+    # `now` figé, comme `today` l'est pour l'import : la coupure passé/futur du
+    # planning est prise à cette date-là, et les fixtures sont celles du
+    # 2026-08-21. Sans elle, le décompte des entrées passées grandit d'un jour
+    # sur l'autre et le test vieillit tout seul.
+    chemin = check_migration(db, grocy_path, archive=True, now=AUJOURD_HUI,
                              archive_dir=str(tmp_path)).archive_path
     return json.loads(Path(chemin).read_text("utf-8"))
 
