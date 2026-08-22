@@ -78,6 +78,17 @@ export type VueRecette = {
 /** La page affichée : la couverture, puis une par étape. */
 const COUVERTURE = 0;
 
+/** Ce que `meals/list` rend et que cet écran lit — un sous-ensemble strict de
+ *  `RepasPlanning` (planning.ts). Redéclaré plutôt qu'importé pour que la
+ *  fiche recette ne dépende pas de l'écran planning, qu'elle ne monte jamais
+ *  avec elle. */
+type RepasCandidat = {
+  id: number;
+  day: string;
+  recipe_id: number | null;
+  state: 'planned' | 'done' | 'skipped';
+};
+
 @customElement('home-stock-recette')
 export class EcranRecette extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
@@ -91,6 +102,9 @@ export class EcranRecette extends LitElement {
    *  exactement où on en était. */
   @state() ingredientsOuverts = false;
   @state() minuteurs: Record<number, EtatMinuteur> = {};
+  /** Le repas planifié que CETTE recette honore, quand personne ne nous l'a
+   *  passé. Voir `chercherRepasPlanifie`. */
+  @state() private repasDeduit: number | null = null;
 
   private _wakeLock: { release: () => Promise<void> } | null = null;
   private _tic?: ReturnType<typeof setInterval>;
@@ -112,6 +126,52 @@ export class EcranRecette extends LitElement {
     if (!this.connexion || this.recipeId === undefined) return;
     this.vue = await this.connexion.appeler<VueRecette>(
       'home_stock/recipe/get', { recipe_id: this.recipeId });
+    if (this.mealId === undefined) await this.chercherRepasPlanifie();
+  }
+
+  /** Le repas que valider, quand on n'est pas arrivé par le planning.
+   *
+   *  Depuis que le planning est la carte calendrier de Home Assistant, plus
+   *  rien n'émet `recette-ouverte` avec un `meal_id` : on ouvre une recette
+   *  depuis la liste des recettes, qui n'en connaît aucun. Sans cette
+   *  recherche, « J'ai cuisiné » ne s'afficherait jamais et le décrément de
+   *  stock deviendrait injoignable — c'est-à-dire tout ce que le planning
+   *  sert à faire.
+   *
+   *  Fenêtre courte et volontairement asymétrique : deux jours en arrière
+   *  (on valide souvent le lendemain matin), une semaine en avant. On retient
+   *  le plus PROCHE dans le futur, à défaut le plus récent dans le passé —
+   *  jamais un repas du mois prochain, qu'on n'a pas cuisiné.
+   *
+   *  Une lecture qui échoue ne dit rien de plus qu'avant : pas de bouton. */
+  private async chercherRepasPlanifie(): Promise<void> {
+    if (!this.connexion || this.recipeId === undefined) return;
+    const decale = (delta: number): string => {
+      const date = new Date();
+      date.setDate(date.getDate() + delta);
+      return date.toISOString().slice(0, 10);
+    };
+    const aujourdhui = decale(0);
+    try {
+      const reponse = await this.connexion.appeler<{ meals: RepasCandidat[] }>(
+        'home_stock/meals/list', { start: decale(-2), end: decale(7) });
+      const candidats = (reponse.meals ?? [])
+        .filter((r) => r.recipe_id === this.recipeId && r.state === 'planned');
+      if (candidats.length === 0) return;
+      const futurs = candidats.filter((r) => r.day >= aujourdhui)
+        .sort((a, b) => a.day.localeCompare(b.day));
+      const passes = candidats.filter((r) => r.day < aujourdhui)
+        .sort((a, b) => b.day.localeCompare(a.day));
+      this.repasDeduit = (futurs[0] ?? passes[0]).id;
+    } catch {
+      // Rien : `repasDeduit` reste nul, le bouton reste absent.
+    }
+  }
+
+  /** Le repas à valider : celui qu'on nous a passé, sinon celui qu'on a
+   *  trouvé au planning. */
+  private get repasAValider(): number | undefined {
+    return this.mealId ?? this.repasDeduit ?? undefined;
   }
 
   /** Garde l'écran allumé pendant qu'on cuisine. L'absence de l'API n'est pas
@@ -171,9 +231,10 @@ export class EcranRecette extends LitElement {
   }
 
   validerRepas(): void {
-    if (this.mealId === undefined) return;
+    const repas = this.repasAValider;
+    if (repas === undefined) return;
     this.dispatchEvent(new CustomEvent('valider-repas', {
-      detail: { meal_id: this.mealId }, bubbles: true, composed: true,
+      detail: { meal_id: repas }, bubbles: true, composed: true,
     }));
   }
 
@@ -334,7 +395,7 @@ export class EcranRecette extends LitElement {
           Ingrédients
         </button>
         <span class="position">${this.page + 1} / ${this.nombreDePages}</span>
-        ${derniere && this.mealId !== undefined
+        ${derniere && this.repasAValider !== undefined
           ? html`<button class="cuisine" @click=${() => this.validerRepas()}>
               J'ai cuisiné
             </button>`

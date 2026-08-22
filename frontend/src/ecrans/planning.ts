@@ -1,4 +1,16 @@
-/** L'écran « planning » : la semaine en large, la journée en étroit.
+/** L'écran « planning » : la carte calendrier de Home Assistant.
+ *
+ *  Le planning des repas est déjà une entité `calendar.*` (voir
+ *  `custom_components/home_stock/calendar.py`), avec création, modification et
+ *  suppression d'événements. On affiche donc la carte calendrier de Lovelace
+ *  sur cette entité plutôt qu'une grille maison : mois / semaine / jour /
+ *  liste, le thème et la langue de l'utilisateur, et un clic sur un jour ouvre
+ *  la boîte de dialogue de Home Assistant, qui écrit un vrai repas.
+ *
+ *  LA GRILLE MAISON RESTE, en repli. Elle n'est pas là par nostalgie :
+ *  `loadCardHelpers` vient d'un chunk que seul Lovelace charge (voir
+ *  `shell/ui/carte-calendrier.ts`), donc une ouverture directe de
+ *  `/home-stock` n'a pas la carte. Sans repli, cet écran serait vide.
  *
  *  Sept colonnes × quatre créneaux en 1280 × 800. En 412 × 915, UNE journée à
  *  la fois avec précédent / suivant — pas une grille de sept colonnes réduite,
@@ -7,12 +19,14 @@
  *
  *  Les jours sont des journées ALIMENTAIRES : elles courent de 4 h à 4 h.
  */
-import { LitElement, html, css, nothing } from 'lit';
+import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { tokens } from '../shell/ui/tokens';
 import '../shell/ui/hs-icon';
+import { creerCarteCalendrier, entiteCalendrierRepas,
+         type HassCalendrier } from '../shell/ui/carte-calendrier';
 
 export type CleCreneau = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 
@@ -61,6 +75,10 @@ export class EcranPlanning extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
   @property({ attribute: false }) file?: FileAttente;
   @property({ type: Boolean }) large = false;
+  /** L'objet `hass` du panneau : la carte calendrier en a besoin, et elle
+   *  seule. Absent en test unitaire et à l'ouverture directe — l'écran
+   *  retombe alors sur sa grille. */
+  @property({ attribute: false }) hass?: HassCalendrier;
   /** Le premier jour affiché. En étroit, le seul. */
   @property({ type: String }) debut = new Date().toISOString().slice(0, 10);
 
@@ -68,10 +86,36 @@ export class EcranPlanning extends LitElement {
   @state() manquants: ProduitManquant[] = [];
   @state() armeAnnulation: number | null = null;
   @state() message: string | null = null;
+  /** La carte Lovelace, une fois construite — `null` tant qu'on n'a pas
+   *  essayé, ou quand Home Assistant n'a pas de quoi la faire. */
+  @state() private carte: HTMLElement | null = null;
+  /** Une seule tentative : `hass` est remplacé par Home Assistant à chaque
+   *  état de la maison, et rebâtir la carte à chaque fois la ferait clignoter
+   *  et perdrait la vue choisie par l'utilisateur. */
+  private carteDemandee = false;
 
   connectedCallback(): void {
     super.connectedCallback();
     void this.charger();
+  }
+
+  protected willUpdate(changees: PropertyValues): void {
+    if (!changees.has('hass')) return;
+    // La carte est un élément Lovelace ordinaire : c'est à son parent de lui
+    // repasser `hass`, à chaque fois, comme le ferait un tableau de bord.
+    if (this.carte) (this.carte as { hass?: unknown }).hass = this.hass;
+    void this.demanderCarte();
+  }
+
+  private async demanderCarte(): Promise<void> {
+    if (this.carteDemandee || !this.hass) return;
+    const entite = entiteCalendrierRepas(this.hass);
+    if (!entite) return;
+    this.carteDemandee = true;
+    const carte = await creerCarteCalendrier(entite);
+    if (!carte) return;
+    (carte as { hass?: unknown }).hass = this.hass;
+    this.carte = carte;
   }
 
   get jours(): string[] {
@@ -202,6 +246,17 @@ export class EcranPlanning extends LitElement {
   }
 
   render() {
+    // La carte quand Home Assistant sait la faire, la grille sinon. Jamais les
+    // deux : ce seraient deux plannings sur le même écran, chacun avec sa
+    // notion de « la semaine affichée ».
+    return this.carte ? this.rendreCarte() : this.rendreGrille();
+  }
+
+  private rendreCarte() {
+    return html`<div class="calendrier">${this.carte}</div>`;
+  }
+
+  private rendreGrille() {
     const jours = this.jours;
     return html`
       <div class="entete">
@@ -236,6 +291,12 @@ export class EcranPlanning extends LitElement {
 
   static styles = [tokens, css`
     :host { display: block; padding: 12px; color: var(--hs-text); }
+    /* ha-full-calendar se dimensionne sur son parent (height: "parent") :
+       sans hauteur ici, il se replierait à zéro. 78 vh laisse la barre de
+       navigation et l'en-tête visibles sur les trois tailles ; pas de dvh,
+       Chrome 100 (la tablette de la cuisine) ne le connaît pas. Pas de
+       backtick dans ce commentaire : il est DANS un littéral de gabarit. */
+    .calendrier { height: 78vh; min-height: 380px; }
     .entete { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .periode { flex: 1; text-align: center; font-weight: 600; }
     .entete button, .poser, .repas-nom {

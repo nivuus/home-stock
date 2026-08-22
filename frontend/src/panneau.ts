@@ -789,6 +789,7 @@ export class PanneauGardeManger extends LitElement {
     if (this.ecran === 'planning') {
       return html`
         <home-stock-planning .connexion=${this.connexion} .file=${this.file}
+          .hass=${this.hass}
           .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-planning>`;
     }

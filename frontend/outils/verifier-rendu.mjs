@@ -306,6 +306,30 @@ const DEFINIR_HA_MINIMAL = `
   }
 `;
 
+/** Ce que Lovelace pose en plus quand il a chargé son chunk de cartes : le
+ *  `loadCardHelpers` global, et une carte calendrier crédible pour l'occuper.
+ *
+ *  Ce n'est PAS `hui-calendar-card` : ce composant vit dans un chunk de Home
+ *  Assistant, qu'aucun harnais ne peut charger sans faire tourner tout le
+ *  frontend. Ce qui est mesuré ici est donc précisément ce qui NOUS appartient
+ *  — que la carte reçoive bien sa configuration, qu'elle prenne la place que
+ *  notre conteneur lui donne, et qu'elle ne pousse ni le document ni la zone
+ *  de contenu au débordement horizontal. La hauteur choisie (900 px) est plus
+ *  grande que la dalle de tous les formats mesurés : un conteneur qui ne
+ *  saurait pas la contenir se verrait tout de suite. */
+const DEFINIR_CALENDRIER_MINIMAL = `
+  window.loadCardHelpers = async () => ({
+    createCardElement(config) {
+      const carte = document.createElement('div');
+      carte.className = 'faux-calendrier';
+      carte.dataset.config = JSON.stringify(config);
+      carte.style.cssText = 'display:block;height:900px;width:100%;background:#fff;color:#141414';
+      carte.textContent = 'calendrier';
+      return carte;
+    },
+  });
+`;
+
 /** Le corps est VIDE : chaque scénario monte son propre `<home-stock-panel>`
  *  avec son `hass` factice (voir `monterEtMesurer`). Un élément statique
  *  traînait ici, monté SANS `hass` — il levait donc une TypeError à chaque
@@ -1395,6 +1419,12 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
       sendMessagePromise: (msg) => reponsePour(msg),
       subscribeMessage: () => Promise.resolve(() => {}),
     },
+    // Le registre et les états : lus par `carte-calendrier.ts` pour trouver
+    // l'entité calendrier du garde-manger. Vides par défaut — un panneau qui
+    // n'en trouve pas retombe sur sa grille, et c'est ce que mesurent tous
+    // les autres scénarios.
+    states: fixture.states ?? {},
+    entities: fixture.entities ?? {},
     language: 'fr',
     callService: (domaine, service) => {
       const cle = `${domaine}.${service}`;
@@ -2080,13 +2110,31 @@ const SCENARIOS_HA_CHARGE = [
     ecranAttendu: 'home-stock-scanner',
     elementAttendu: { enfant: 'hs-header hs-icon', selector: 'ha-svg-icon' },
   },
+  {
+    // Le planning n'est plus une grille maison quand Lovelace est là : c'est
+    // la carte calendrier de Home Assistant. Les autres scénarios mesurent
+    // l'autre branche — la grille de repli, servie à l'ouverture directe —
+    // parce qu'ils n'ont pas de `loadCardHelpers`.
+    nom: 'Planning servi par la carte calendrier de Home Assistant',
+    page: 'cal',
+    fixture: {
+      entities: { 'calendar.repas': { platform: 'home_stock' } },
+      reponses: { 'home_stock/session/current': null, 'home_stock/meals/list': { meals: [] } },
+    },
+    actions: [{ type: 'click-nav', ecran: 'planning' }],
+    ecranAttendu: 'home-stock-planning',
+    elementAttendu: { enfant: 'home-stock-planning', selector: '.faux-calendrier' },
+    // Les deux ensemble seraient deux plannings sur un écran.
+    elementAbsent: { enfant: 'home-stock-planning', selector: '.grille' },
+  },
 ];
 
-async function executerScenariosHaCharge(navigateur, urlHa, familleParEcran) {
+async function executerScenariosHaCharge(navigateur, urlHa, urlHaCal, familleParEcran) {
   console.log('\n=== Éléments Home Assistant chargés (arrivée depuis Lovelace) ===');
   let fautes = 0;
   for (const scenario of SCENARIOS_HA_CHARGE) {
-    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, urlHa, { width: 412, height: 915 });
+    const url = scenario.page === 'cal' ? urlHaCal : urlHa;
+    const { contexte, page, erreursPage } = await ouvrirPage(navigateur, url, { width: 412, height: 915 });
     const resultat = await page.evaluate(monterEtMesurer, {
       fixture: scenario.fixture, actions: preparerActions(scenario.actions, familleParEcran),
       cibleMinPx: CIBLE_MIN_PX, contrasteMin: CONTRASTE_MIN,
@@ -2284,9 +2332,14 @@ async function main() {
   // La même page, mais avec les `ha-*` enregistrés avant le bundle : voir
   // SCENARIOS_HA_CHARGE.
   pages['/ha'] = pageHtml(bundle, PALETTES[0], DEFINIR_HA_MINIMAL);
+  // La même, plus le `loadCardHelpers` de Lovelace : le chemin du planning
+  // servi par la carte calendrier de Home Assistant.
+  pages['/ha-cal'] = pageHtml(bundle, PALETTES[0],
+    DEFINIR_HA_MINIMAL + DEFINIR_CALENDRIER_MINIMAL);
   const { url: urlHarnais, fermer: fermerServeur } = await servirPagesStatiques(pages);
   const urlsParPalette = PALETTES.map((_, i) => (i === 0 ? urlHarnais : `${urlHarnais}p${i}`));
   const urlHa = `${urlHarnais}ha`;
+  const urlHaCal = `${urlHarnais}ha-cal`;
   // Une seconde page, servie sur son propre port, avec le bundle MINIFIÉ —
   // celui que `npm run build` déploie réellement. Voir SCENARIOS_MINIFIES.
   // Ces scénarios-là ne connaissent que la palette par défaut : le bundle
@@ -2307,7 +2360,7 @@ async function main() {
     fautes += fautesMinifie;
     total += SCENARIOS_MINIFIES.length;
     // Le chemin réellement servi à qui arrive depuis Lovelace.
-    fautes += await executerScenariosHaCharge(navigateur, urlHa, familleParEcran);
+    fautes += await executerScenariosHaCharge(navigateur, urlHa, urlHaCal, familleParEcran);
     total += SCENARIOS_HA_CHARGE.length;
     // Le balayage : trois scénarios représentatifs, sous toutes les palettes
     // qu'aucun autre passage ne mesure jamais (voir NOMS_BALAYAGE).

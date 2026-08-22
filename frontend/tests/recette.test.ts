@@ -36,10 +36,14 @@ const RECETTE = {
   ],
 };
 
-function monter(options: { mealId?: number; recette?: unknown } = {}) {
+function monter(options: { mealId?: number; recette?: unknown;
+                          repas?: unknown[] } = {}) {
   const element = document.createElement('home-stock-recette') as any;
   element.connexion = {
-    appeler: vi.fn(async () => options.recette ?? RECETTE),
+    appeler: vi.fn(async (type: string) => (
+      type === 'home_stock/meals/list'
+        ? { meals: options.repas ?? [] }
+        : options.recette ?? RECETTE)),
   };
   element.recipeId = 4;
   if (options.mealId !== undefined) element.mealId = options.mealId;
@@ -241,13 +245,104 @@ describe('<home-stock-recette>', () => {
     element.remove();
   });
 
+  // Depuis que le planning est la carte calendrier de Home Assistant, plus
+  // rien n'émet « recette-ouverte » avec un meal_id : sans cette recherche,
+  // « J'ai cuisiné » ne s'afficherait jamais et le décrément de stock — tout
+  // ce à quoi le planning sert — deviendrait injoignable.
+  describe('retrouve son repas au planning quand personne ne le lui passe', () => {
+    const jour = (delta: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + delta);
+      return d.toISOString().slice(0, 10);
+    };
+    const repas = (id: number, delta: number, extra: Record<string, unknown> = {}) => ({
+      id, day: jour(delta), recipe_id: 4, state: 'planned', ...extra,
+    });
+    const allerAuBout = async (element: any) => {
+      for (let i = 0; i < 6; i += 1) {
+        const suivant = element.shadowRoot.querySelector('.suivant');
+        if (!suivant || suivant.disabled) break;
+        suivant.click();
+        await stabiliser(element);
+      }
+    };
+
+    it('propose « J’ai cuisiné » sur le repas planifié le plus proche à venir', async () => {
+      const element = monter({ repas: [repas(7, 3), repas(9, 1), repas(5, -1)] });
+      await stabiliser(element);
+      await allerAuBout(element);
+      expect(element.shadowRoot.querySelector('.cuisine')).not.toBeNull();
+      const vus: any[] = [];
+      element.addEventListener('valider-repas', (e: any) => vus.push(e.detail));
+      element.shadowRoot.querySelector('.cuisine').click();
+      expect(vus).toEqual([{ meal_id: 9 }]);
+    });
+
+    it('retient le passé le plus récent quand rien n’est à venir', async () => {
+      const element = monter({ repas: [repas(5, -2), repas(6, -1)] });
+      await stabiliser(element);
+      await allerAuBout(element);
+      const vus: any[] = [];
+      element.addEventListener('valider-repas', (e: any) => vus.push(e.detail));
+      element.shadowRoot.querySelector('.cuisine').click();
+      expect(vus).toEqual([{ meal_id: 6 }]);
+    });
+
+    it('ignore un repas déjà validé, et celui d’une autre recette', async () => {
+      const element = monter({ repas: [
+        repas(5, 1, { state: 'done' }),
+        repas(6, 1, { recipe_id: 99 }),
+      ] });
+      await stabiliser(element);
+      await allerAuBout(element);
+      expect(element.shadowRoot.querySelector('.cuisine')).toBeNull();
+      expect(element.shadowRoot.querySelector('.suivant')).not.toBeNull();
+    });
+
+    it('ne cherche rien quand le planning nous a déjà passé son repas', async () => {
+      const element = monter({ mealId: 12, repas: [repas(9, 1)] });
+      await stabiliser(element);
+      const types = element.connexion.appeler.mock.calls.map(([t]: [string]) => t);
+      expect(types).not.toContain('home_stock/meals/list');
+      await allerAuBout(element);
+      const vus: any[] = [];
+      element.addEventListener('valider-repas', (e: any) => vus.push(e.detail));
+      element.shadowRoot.querySelector('.cuisine').click();
+      expect(vus).toEqual([{ meal_id: 12 }]);
+    });
+
+    it('reste utilisable quand la lecture du planning échoue', async () => {
+      const element = document.createElement('home-stock-recette') as any;
+      element.connexion = { appeler: vi.fn(async (type: string) => {
+        if (type === 'home_stock/meals/list') throw new Error('hors ligne');
+        return RECETTE;
+      }) };
+      element.recipeId = 4;
+      document.body.append(element);
+      await stabiliser(element);
+      // `charger()` doit ABSORBER l'échec, pas le laisser remonter : il est
+      // lancé en `void` depuis connectedCallback, donc un rejet y devient une
+      // promesse non gérée que rien n'observe — et le seul contrôle sur le DOM
+      // resterait vert avec ou sans le catch.
+      await expect(element.charger()).resolves.toBeUndefined();
+      await allerAuBout(element);
+      expect(element.shadowRoot.querySelector('.cuisine')).toBeNull();
+      expect(texte(element, '.position')).toBeTruthy();
+    });
+  });
+
   it('n’appelle recipe/get qu’une seule fois', async () => {
     const element = monter();
     await stabiliser(element);
     element.shadowRoot.querySelector('.suivant').click();
     element.shadowRoot.querySelector('.ingredients-bouton').click();
     await stabiliser(element);
-    expect(element.connexion.appeler).toHaveBeenCalledTimes(1);
+    // Compté PAR TYPE, pas en tout : l'écran lit aussi le planning pour
+    // savoir s'il a un repas à valider, et un total nu comptait ce second
+    // appel comme une régression de celui-ci.
+    const gets = element.connexion.appeler.mock.calls
+      .filter(([type]: [string]) => type === 'home_stock/recipe/get');
+    expect(gets).toHaveLength(1);
   });
 
   it('reste lisible quand la connexion échoue après le chargement', async () => {
