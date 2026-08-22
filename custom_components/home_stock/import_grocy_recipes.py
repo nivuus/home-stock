@@ -37,6 +37,7 @@ from typing import Any, Mapping
 from .const import GROCY_MEAL_UID_TEMPLATE, GROCY_RECIPE_REF_PREFIX
 from .grocy import html as gh
 from .grocy import pictures as gp
+from .grocy.refs import grocy_product_id
 from .grocy.units import base_unit
 from .storage import repositories as repo
 
@@ -252,7 +253,10 @@ def _import_ingredients_within(conn, grocy, recipe_ids: Mapping[int, int],
         "       prod.base_unit AS base_unit"
         " FROM product AS prod WHERE prod.external_ref IS NOT NULL"
     ):
-        produits[int(row["ref"])] = row
+        grocy_id = grocy_product_id(row["ref"])
+        if grocy_id is None:
+            continue                # `grocy:spare:` — pas un produit Grocy
+        produits[grocy_id] = row
 
     stock_units = {row["id"]: row["qu_id_stock"] for row in
                    grocy.execute("SELECT id, qu_id_stock FROM products")}

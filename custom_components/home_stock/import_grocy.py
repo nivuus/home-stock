@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .grocy.refs import grocy_product_id
 from .grocy.units import (
     CONTAINER_UNITS,
     DOSAGE_UNITS,
@@ -106,7 +107,9 @@ def import_catalog(db: Database, grocy_path: str, *, apply: bool = False) -> Imp
                 " FROM product p JOIN article a ON a.product_id = p.id AND a.is_generic = 1"
                 " WHERE p.external_ref IS NOT NULL"
             ):
-                gid = int(row["ref"])
+                gid = grocy_product_id(row["ref"])
+                if gid is None:
+                    continue        # `grocy:spare:` — pas un produit Grocy
                 article_ids[gid] = row["article_id"]
                 base_units[gid] = row["base_unit"]
             known = set(article_ids)
