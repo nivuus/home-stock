@@ -266,6 +266,28 @@ export class EcranPiles extends LitElement {
     }
   `];
 
+  /** Le second temps d'« Ignorer » : le motif, puis la confirmation.
+   *
+   *  Rendu DANS la boucle, sous le capteur visé — jamais en bas de section.
+   *  Il y était : avec six capteurs à déclarer (le compte de la maison), le
+   *  champ apparaissait douze cents pixels sous le bouton qu'on venait
+   *  d'appuyer, hors écran. Un geste à deux appuis dont le second temps n'est
+   *  pas visible n'est pas un geste à deux appuis, c'est un bouton mort. */
+  private rendreMotif() {
+    return html`
+      <label class="detail" for="motif">Motif — pourquoi cette pile n’est pas suivie</label>
+      <input id="motif" class="motif" .value=${this.motif}
+        @input=${(e: Event) => { this.motif = (e.target as HTMLInputElement).value; }}>
+      ${this.erreurMotif ? html`<p class="erreur">${this.erreurMotif}</p>` : nothing}
+      <button class="action confirmer-ignorer" @click=${() => this.confirmerIgnorer()}>
+        Confirmer et ignorer
+      </button>
+      <button class="action ignorer annuler-ignorer" @click=${() => {
+        this.ignoree = null; this.erreurMotif = null;
+      }}>Annuler</button>
+    `;
+  }
+
   private rendreADeclarer() {
     if (this.aDeclarer.length === 0) return nothing;
     return html`
@@ -281,16 +303,8 @@ export class EcranPiles extends LitElement {
           <button class="action ignorer" @click=${() => {
             this.ignoree = capteur; this.erreurMotif = null;
           }}>Ignorer</button>
+          ${this.ignoree?.entity_id === capteur.entity_id ? this.rendreMotif() : nothing}
         `)}
-        ${this.ignoree ? html`
-          <label class="detail" for="motif">Motif — pourquoi cette pile n’est pas suivie</label>
-          <input id="motif" class="motif" .value=${this.motif}
-            @input=${(e: Event) => { this.motif = (e.target as HTMLInputElement).value; }}>
-          ${this.erreurMotif ? html`<p class="erreur">${this.erreurMotif}</p>` : nothing}
-          <button class="action confirmer-ignorer" @click=${() => this.confirmerIgnorer()}>
-            Confirmer et ignorer
-          </button>
-        ` : nothing}
       </section>
     `;
   }

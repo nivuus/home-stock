@@ -15,10 +15,12 @@ export class HsNavBar extends LitElement {
   @property({ attribute: false }) current: Ecran = 'liste';
   @property({ type: Boolean }) rail = false;
   @property({ attribute: false }) badges: Partial<Record<FamilyId, number>> = {};
-  /** L'action primaire de la famille courante — pour l'instant le scan, sur
-   *  Courses. `null` ailleurs : un bouton flottant sans action à offrir vaut
-   *  moins que rien. */
-  @property({ attribute: false }) action: { icon: IconName; label: string } | null = null;
+  /** L'action primaire de la famille courante — le scan, sur Courses et sur
+   *  Stock. `null` ailleurs : un bouton flottant sans action à offrir vaut
+   *  moins que rien. `text` est ce qui s'AFFICHE ; `label` reste le nom
+   *  accessible, qui peut être plus long. */
+  @property({ attribute: false }) action:
+    { icon: IconName; label: string; text: string } | null = null;
 
   static styles = [tokens, css`
     :host { display: block; }
@@ -32,12 +34,19 @@ export class HsNavBar extends LitElement {
       border-top: none; border-right: 1px solid var(--hs-divider);
       height: 100%;
     }
+    /* Un bouton flottant NOMMÉ, pas un rond muet. La version ronde ne portait
+       son libellé que dans son aria-label : à l'œil, c'était une pastille de
+       couleur sans rien qui dise « scanner », et c'est le premier geste de
+       l'application. Le texte n'est pas un ornement — c'est la seule chose
+       qui distingue ce bouton d'une décoration. */
     .action {
       position: absolute; right: var(--hs-space-4); bottom: 100%;
       margin-bottom: var(--hs-space-3);
-      width: var(--hs-touch); height: var(--hs-touch);
+      min-width: var(--hs-touch); height: var(--hs-touch);
+      padding: 0 var(--hs-space-4); gap: var(--hs-space-2);
       display: inline-flex; align-items: center; justify-content: center;
-      border: none; border-radius: 50%;
+      border: none; border-radius: 999px;
+      font-family: var(--hs-font); font-size: 0.95rem; font-weight: 600;
       background: var(--hs-accent); color: var(--hs-on-accent);
       /* Seule couleur littérale tolérée dans tout le projet (voir la Task
          13) : une ombre n'a pas de jeton et ne participe à aucun contraste
@@ -108,6 +117,7 @@ export class HsNavBar extends LitElement {
                  d'écran (même parti pris que les pastilles de famille
                  ci-dessus, qui portent déjà leur aria-label sur le bouton). -->
             <hs-icon name=${this.action.icon}></hs-icon>
+            <span class="action-libelle">${this.action.text}</span>
           </button>` : nothing}
         ${FAMILIES.map((famille) => {
           const compte = this.badges[famille.id] ?? 0;

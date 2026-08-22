@@ -254,9 +254,46 @@ describe('<home-stock-validation>', () => {
     await stabiliser(element);
     element.shadowRoot.querySelector('.valider').click();
     await stabiliser(element);
+    // 3, pas 1 : le champ « Parts mangées » suit les parts que le repas fait
+    // réellement (`preview.servings`), pas une constante.
     expect(element.file.ajouter).toHaveBeenCalledWith('home_stock/meal/validate', {
-      meal_id: 12, portions_eaten: 1, skip_ingredient_ids: [41],
+      meal_id: 12, portions_eaten: 3, skip_ingredient_ids: [41],
     });
+  });
+
+  // Le défaut qui rendait injouables neuf repas sur trente-neuf, tous hérités
+  // de Grocy : le champ affichait « 1 » en dur, le plat n'en faisait que 0,15,
+  // et la garde « on ne mange pas plus de parts que le plat n'en fait »
+  // refusait la validation à tous les coups. La garde était juste ; la valeur
+  // par défaut, fausse.
+  it('pré-remplit les parts avec celles du repas, même fractionnaires', async () => {
+    const element = monter({ preview: preview({
+      servings: 0.15,
+      dish: { ...preview().dish, parts: 0.15 },
+    }) });
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.parts-mangees').value).toBe('0,15');
+    element.shadowRoot.querySelector('.valider').click();
+    await stabiliser(element);
+    element.shadowRoot.querySelector('.valider').click();
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.erreur')).toBeNull();
+    expect(element.file.ajouter).toHaveBeenCalledWith('home_stock/meal/validate',
+      expect.objectContaining({ portions_eaten: 0.15 }));
+  });
+
+  it('ne réécrit pas les parts que l’utilisateur vient de taper', async () => {
+    const element = monter();
+    await stabiliser(element);
+    const champ = element.shadowRoot.querySelector('.parts-mangees');
+    champ.value = '2';
+    champ.dispatchEvent(new Event('input'));
+    await stabiliser(element);
+    // Retirer une ligne rejoue `meal/preview` : sans le garde-fou, la réponse
+    // écraserait le 2 par les 3 parts du plat.
+    element.shadowRoot.querySelector('.sorties .retirer').click();
+    await stabiliser(element);
+    expect(element.shadowRoot.querySelector('.parts-mangees').value).toBe('2');
   });
 
   it('émet « repas-valide » quand l’envoi est parti', async () => {

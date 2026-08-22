@@ -38,7 +38,7 @@ export const FAMILIES: ReadonlyArray<{
 
 export const DESTINATIONS: ReadonlyArray<Destination> = [
   { screen: 'liste', label: 'Liste de courses', family: 'shopping', segment: 'list', root: true },
-  { screen: 'session', label: 'Courses', family: 'shopping', segment: 'shopping', root: false },
+  { screen: 'session', label: 'Magasin', family: 'shopping', segment: 'shopping', root: false },
   { screen: 'panier', label: 'Panier', family: 'shopping', segment: 'cart', root: false },
   { screen: 'rangement', label: 'Rangement', family: 'shopping', segment: 'put-away', root: false },
   { screen: 'ticket', label: 'Ticket', family: 'shopping', segment: 'receipt', param: 'id', root: false },

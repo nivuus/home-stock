@@ -371,14 +371,31 @@ describe('panneau : routes d’URL', () => {
     expect(window.location.pathname).toBe('/home-stock/settings');
   });
 
-  it('propose le scan sur la famille Courses, et pas sur les autres', async () => {
-    const surListe = await monter('/list');
-    expect(surListe.shadowRoot!.querySelector('hs-nav-bar')!
-      .shadowRoot!.querySelector('.action')).not.toBeNull();
-    document.body.innerHTML = '';
-    const surPiles = await monter('/batteries');
-    expect(surPiles.shadowRoot!.querySelector('hs-nav-bar')!
-      .shadowRoot!.querySelector('.action')).toBeNull();
+  // Les QUATRE familles, pas deux. La version précédente s'appelait « et pas
+  // sur les autres » en n'en vérifiant qu'une seule (Maison) : elle aurait
+  // laissé passer le scan apparaissant en Cuisine sans rien dire.
+  it('propose le scan sur Courses et sur Stock, jamais sur Cuisine ni Maison', async () => {
+    const attendu: Array<[string, boolean]> = [
+      ['/list', true], ['/catalog', true], ['/planner', false], ['/batteries', false],
+    ];
+    for (const [chemin, offert] of attendu) {
+      document.body.innerHTML = '';
+      const el = await monter(chemin);
+      const action = el.shadowRoot!.querySelector('hs-nav-bar')!
+        .shadowRoot!.querySelector('.action');
+      if (offert) expect(action, chemin).not.toBeNull();
+      else expect(action, chemin).toBeNull();
+    }
+  });
+
+  // Le rond bleu muet : son seul libellé vivait dans aria-label, donc à l'œil
+  // rien ne disait « scanner ». C'est le premier geste de l'application.
+  it('le bouton de scan porte son nom À L’ÉCRAN, pas seulement aux lecteurs d’écran', async () => {
+    const el = await monter('/list');
+    const action = el.shadowRoot!.querySelector('hs-nav-bar')!
+      .shadowRoot!.querySelector('.action') as HTMLElement;
+    expect(action.textContent!.trim()).toContain('Scanner');
+    expect(action.getAttribute('aria-label')).toBe('Scanner un article');
   });
 
   it('l’action primaire conduit au scanner, avec son URL', async () => {

@@ -75,7 +75,20 @@ export class EcranValidation extends LitElement {
   @property({ type: Number }) mealId?: number;
 
   @state() preview: Preview | null = null;
+  /** Pré-rempli avec les parts que le repas fait RÉELLEMENT, dès que la
+   *  simulation a répondu — pas avec 1.
+   *
+   *  Un « 1 » en dur refusait toute validation des repas hérités de Grocy,
+   *  dont neuf sur trente-neuf portent une part fractionnaire (0,15 / 0,2 /
+   *  0,25 : une portion d'un batch du dimanche). L'écran affichait « 1 »,
+   *  le plat en faisait 0,15, et le garde-fou « on ne mange pas plus de
+   *  parts que le plat n'en fait » se déclenchait mécaniquement. Le défaut
+   *  était la valeur par défaut, jamais la garde. */
   @state() partsMangees: number | null = 1;
+  /** Vrai dès que l'utilisateur a touché le champ : la simulation ne doit
+   *  plus écraser ce qu'il vient de taper. `simuler()` est rejouée à chaque
+   *  retrait de ligne. */
+  private partsTouchees = false;
   @state() partage = false;
   @state() partsTotal = 4;
   @state() partsMoi = 1;
@@ -98,6 +111,12 @@ export class EcranValidation extends LitElement {
     this.preview = await this.connexion.appeler<Preview>('home_stock/meal/preview', {
       meal_id: this.mealId, skip_ingredient_ids: this.retirees,
     });
+    // `servings` plutôt que `dish.parts` : c'est la même valeur, et elle
+    // existe aussi pour un repas sans plat cuisiné (un yaourt), où `dish`
+    // vaut null.
+    if (!this.partsTouchees && typeof this.preview?.servings === 'number') {
+      this.partsMangees = this.preview.servings;
+    }
   }
 
   async retirerLigne(ligne: LignePreview): Promise<void> {
@@ -272,6 +291,7 @@ export class EcranValidation extends LitElement {
           .value=${this.partsMangees === null ? '' : formaterNombre(this.partsMangees)}
           @input=${(e: Event) => {
             const lu = analyserNombre((e.target as HTMLInputElement).value);
+            this.partsTouchees = true;
             // `analyserNombre` gère déjà la virgule ET le point : réécrire un
             // parseur ici referait l'incident du lot 1, où une virgule effaçait
             // un seuil en silence.

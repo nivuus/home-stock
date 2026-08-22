@@ -132,6 +132,45 @@ describe('<home-stock-piles>', () => {
     expect(texte(element)).toContain('muette');
   });
 
+  // « J'appuie sur Ignorer, rien ne se passe. » Le champ de motif existait,
+  // mais il était rendu APRÈS la boucle : avec les six capteurs à déclarer de
+  // la maison, il apparaissait environ mille deux cents pixels sous le bouton
+  // qu'on venait d'appuyer, donc hors écran. Le test ancre sa POSITION dans le
+  // DOM — entre le capteur visé et le suivant — parce que jsdom ne calcule
+  // aucune mise en page et qu'une simple présence ne dirait rien du défaut.
+  it('ouvre le motif d’« Ignorer » sous le capteur visé, pas en bas de la section', async () => {
+    const trois = [0, 1, 2].map((i) => ({
+      entity_registry_id: `u${i}`, entity_id: `sensor.capteur_${i}_batterie`,
+      device_id: `d${i}`, device_name: `Capteur ${i}`, model: 'ZG-204ZV', state: '50',
+    }));
+    const { element } = monter({ decouvertes: trois });
+    await attendre(element);
+    const boutons = element.shadowRoot.querySelectorAll('.ignorer');
+    expect(boutons.length).toBe(3);
+    boutons[1].click();
+    await attendre(element);
+
+    const motif = element.shadowRoot.querySelector('.motif');
+    expect(motif).not.toBeNull();
+    const section = element.shadowRoot.querySelector('.section');
+    const rang = (n: Element) => Array.from(section.children).indexOf(n);
+    const capteurs = element.shadowRoot.querySelectorAll('.capteur');
+    // Après le capteur visé, et AVANT le suivant.
+    expect(rang(motif)).toBeGreaterThan(rang(capteurs[1]));
+    expect(rang(motif)).toBeLessThan(rang(capteurs[2]));
+  });
+
+  it('referme le motif d’« Ignorer » sans rien écrire', async () => {
+    const { element, ajouter } = monter({ decouvertes: DECOUVERTES });
+    await attendre(element);
+    element.shadowRoot.querySelector('.ignorer').click();
+    await attendre(element);
+    element.shadowRoot.querySelector('.annuler-ignorer').click();
+    await attendre(element);
+    expect(element.shadowRoot.querySelector('.motif')).toBeNull();
+    expect(ajouter).not.toHaveBeenCalled();
+  });
+
   it('liste le bloc « à déclarer » en tête quand discover rend des capteurs', async () => {
     const { element } = monter({ decouvertes: DECOUVERTES });
     await attendre(element);

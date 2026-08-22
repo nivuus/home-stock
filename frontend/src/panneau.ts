@@ -627,12 +627,17 @@ export class PanneauGardeManger extends LitElement {
     return { shopping: aRanger || enPanier };
   }
 
-  private get actionPrimaire(): { icon: IconName; label: string } | null {
-    // Le scan appartient aux Courses : c'est là qu'on rapporte un article,
-    // qu'on le mette au panier ou qu'on le range. Ailleurs il n'aurait rien à
-    // faire de ce qu'il lirait.
-    return familyOf(this.ecran) === 'shopping' && this.ecran !== 'scanner'
-      ? { icon: 'scan', label: 'Scanner un article' } : null;
+  private get actionPrimaire(): { icon: IconName; label: string; text: string } | null {
+    // Le scan sert aux Courses — rapporter un article, au panier ou au
+    // rangement — ET au Stock : un code lu depuis le catalogue mène à la même
+    // fiche, d'où l'on déclare une consommation. Le réserver aux Courses
+    // obligeait à changer de famille pour scanner un produit qu'on tient
+    // déjà dans la main. Ailleurs (Cuisine, Maison) il n'aurait rien à faire
+    // de ce qu'il lirait.
+    const famille = familyOf(this.ecran);
+    const offert = famille === 'shopping' || famille === 'stock';
+    return offert && this.ecran !== 'scanner'
+      ? { icon: 'scan', label: 'Scanner un article', text: 'Scanner' } : null;
   }
 
   private rendreConfirmationQuitter() {
