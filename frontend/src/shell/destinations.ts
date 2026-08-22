@@ -21,6 +21,10 @@ export type Destination = {
   param?: 'id' | 'code';
   /** La destination racine de sa famille : celle qu'atteint la barre. */
   root: boolean;
+  /** Écarté de la ligne secondaire parce qu'il est offert autrement — le
+   *  scanner est l'action flottante de sa famille, l'y remettre en pastille
+   *  le proposerait deux fois sur le même écran. */
+  hiddenInFamilyNav?: boolean;
 };
 
 export const FAMILIES: ReadonlyArray<{
@@ -38,7 +42,7 @@ export const DESTINATIONS: ReadonlyArray<Destination> = [
   { screen: 'panier', label: 'Panier', family: 'shopping', segment: 'cart', root: false },
   { screen: 'rangement', label: 'Rangement', family: 'shopping', segment: 'put-away', root: false },
   { screen: 'ticket', label: 'Ticket', family: 'shopping', segment: 'receipt', param: 'id', root: false },
-  { screen: 'scanner', label: 'Scanner', family: 'shopping', segment: 'scan', root: false },
+  { screen: 'scanner', label: 'Scanner', family: 'shopping', segment: 'scan', root: false, hiddenInFamilyNav: true },
   { screen: 'fiche', label: 'Article', family: 'shopping', segment: 'item', param: 'code', root: false },
 
   { screen: 'catalogue', label: 'Catalogue', family: 'stock', segment: 'catalog', root: true },
@@ -75,7 +79,9 @@ export function familyOf(screen: Ecran): FamilyId {
  *  saurait pas quel identifiant leur passer, on y entre depuis l'écran qui le
  *  connaît. Panier et Rangement y restent même sans session ouverte — des
  *  boutons qui apparaissent et disparaissent font perdre le repère, ce qui
- *  était le défaut de l'ancienne barre. */
+ *  était le défaut de l'ancienne barre. `hiddenInFamilyNav` en écarte aussi
+ *  ce qui est offert autrement (le scanner, devenu l'action flottante de sa
+ *  famille) : sans ce second filtre, il y figurerait deux fois. */
 export function familyScreens(family: FamilyId): Destination[] {
-  return DESTINATIONS.filter((d) => d.family === family && !d.param);
+  return DESTINATIONS.filter((d) => d.family === family && !d.param && !d.hiddenInFamilyNav);
 }

@@ -8,16 +8,22 @@ import { tokens } from './ui/tokens';
 import './ui/hs-icon';
 import { FAMILIES, familyOf, type FamilyId } from './destinations';
 import type { Ecran } from '../panneau';
+import type { IconName } from './ui/icons';
 
 @customElement('hs-nav-bar')
 export class HsNavBar extends LitElement {
   @property({ attribute: false }) current: Ecran = 'liste';
   @property({ type: Boolean }) rail = false;
   @property({ attribute: false }) badges: Partial<Record<FamilyId, number>> = {};
+  /** L'action primaire de la famille courante — pour l'instant le scan, sur
+   *  Courses. `null` ailleurs : un bouton flottant sans action à offrir vaut
+   *  moins que rien. */
+  @property({ attribute: false }) action: { icon: IconName; label: string } | null = null;
 
   static styles = [tokens, css`
     :host { display: block; }
     .barre {
+      position: relative;
       display: flex; background: var(--hs-surface);
       border-top: 1px solid var(--hs-divider);
     }
@@ -25,6 +31,23 @@ export class HsNavBar extends LitElement {
       flex-direction: column;
       border-top: none; border-right: 1px solid var(--hs-divider);
       height: 100%;
+    }
+    .action {
+      position: absolute; right: var(--hs-space-4); bottom: 100%;
+      margin-bottom: var(--hs-space-3);
+      width: var(--hs-touch); height: var(--hs-touch);
+      display: inline-flex; align-items: center; justify-content: center;
+      border: none; border-radius: 50%;
+      background: var(--hs-accent); color: var(--hs-on-accent);
+      /* Seule couleur littérale tolérée dans tout le projet (voir la Task
+         13) : une ombre n'a pas de jeton et ne participe à aucun contraste
+         texte/fond. */
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+    }
+    /* En rail, l'action reprend le flux, en tête de colonne. */
+    .barre.rail .action {
+      position: static; margin: var(--hs-space-3) auto 0;
     }
     .destination {
       flex: 1 1 0; position: relative;
@@ -76,6 +99,16 @@ export class HsNavBar extends LitElement {
     const familleCourante = familyOf(this.current);
     return html`
       <nav class="barre ${this.rail ? 'rail' : ''}">
+        ${this.action ? html`
+          <button class="action" aria-label=${this.action.label}
+                  @click=${() => this.dispatchEvent(new CustomEvent('action-primaire',
+                    { bubbles: true, composed: true }))}>
+            <!-- Le nom accessible vient du bouton, pas de l'icône : sans
+                 label, hs-icon reste décorative et s'efface aux lecteurs
+                 d'écran (même parti pris que les pastilles de famille
+                 ci-dessus, qui portent déjà leur aria-label sur le bouton). -->
+            <hs-icon name=${this.action.icon}></hs-icon>
+          </button>` : nothing}
         ${FAMILIES.map((famille) => {
           const compte = this.badges[famille.id] ?? 0;
           const active = famille.id === familleCourante;

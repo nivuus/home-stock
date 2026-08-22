@@ -61,4 +61,24 @@ describe('barre de navigation', () => {
     const el = await monter({ rail: true });
     expect(el.shadowRoot!.querySelector('.barre')!.classList.contains('rail')).toBe(true);
   });
+
+  it('rend une action primaire quand on lui en donne une', async () => {
+    const el = await monter({ action: { icon: 'scan', label: 'Scanner un article' } });
+    const bouton = el.shadowRoot!.querySelector('.action') as HTMLElement;
+    expect(bouton).not.toBeNull();
+    expect(bouton.getAttribute('aria-label')).toBe('Scanner un article');
+  });
+
+  it('n’en rend aucune quand il n’y en a pas', async () => {
+    const el = await monter({ action: null });
+    expect(el.shadowRoot!.querySelector('.action')).toBeNull();
+  });
+
+  it('émet l’action primaire', async () => {
+    const el = await monter({ action: { icon: 'scan', label: 'Scanner un article' } });
+    const recu = vi.fn();
+    el.addEventListener('action-primaire', recu);
+    (el.shadowRoot!.querySelector('.action') as HTMLElement).click();
+    expect(recu).toHaveBeenCalledTimes(1);
+  });
 });

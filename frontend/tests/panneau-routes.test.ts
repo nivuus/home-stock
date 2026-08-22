@@ -330,4 +330,23 @@ describe('panneau : routes d’URL', () => {
     expect(el.ecran).toBe('reglages');
     expect(window.location.pathname).toBe('/home-stock/settings');
   });
+
+  it('propose le scan sur la famille Courses, et pas sur les autres', async () => {
+    const surListe = await monter('/list');
+    expect(surListe.shadowRoot!.querySelector('hs-nav-bar')!
+      .shadowRoot!.querySelector('.action')).not.toBeNull();
+    document.body.innerHTML = '';
+    const surPiles = await monter('/batteries');
+    expect(surPiles.shadowRoot!.querySelector('hs-nav-bar')!
+      .shadowRoot!.querySelector('.action')).toBeNull();
+  });
+
+  it('l’action primaire conduit au scanner, avec son URL', async () => {
+    const el = await monter('/list');
+    const barre = el.shadowRoot!.querySelector('hs-nav-bar')!;
+    barre.dispatchEvent(new CustomEvent('action-primaire', { bubbles: true, composed: true }));
+    await el.updateComplete;
+    expect(el.ecran).toBe('scanner');
+    expect(window.location.pathname).toBe('/home-stock/scan');
+  });
 });

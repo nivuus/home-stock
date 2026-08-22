@@ -31,6 +31,7 @@ import { appliquerCouleursDeTexte } from './shell/ui/on-color';
 import { tokens } from './shell/ui/tokens';
 import { FAMILIES, destinationOf, familyOf, type FamilyId } from './shell/destinations';
 import { parsePath, pathOf } from './shell/router';
+import type { IconName } from './shell/ui/icons';
 
 export type Ecran = 'scanner' | 'fiche' | 'panier' | 'rangement' | 'session'
   | 'catalogue' | 'reglages' | 'consommation' | 'journal'
@@ -626,6 +627,14 @@ export class PanneauGardeManger extends LitElement {
     return { shopping: aRanger || enPanier };
   }
 
+  private get actionPrimaire(): { icon: IconName; label: string } | null {
+    // Le scan appartient aux Courses : c'est là qu'on rapporte un article,
+    // qu'on le mette au panier ou qu'on le range. Ailleurs il n'aurait rien à
+    // faire de ce qu'il lirait.
+    return familyOf(this.ecran) === 'shopping' && this.ecran !== 'scanner'
+      ? { icon: 'scan', label: 'Scanner un article' } : null;
+  }
+
   private rendreConfirmationQuitter() {
     return html`
       <div class="confirmation-quitter-rangement">
@@ -818,7 +827,9 @@ export class PanneauGardeManger extends LitElement {
     return html`
       <div class="coquille ${this.large ? 'large' : ''}">
         <hs-nav-bar class="navigation" .current=${this.ecran} .rail=${this.large}
-          .badges=${this.pastilles} @famille-choisie=${this.surFamilleChoisie}></hs-nav-bar>
+          .badges=${this.pastilles} .action=${this.actionPrimaire}
+          @famille-choisie=${this.surFamilleChoisie}
+          @action-primaire=${() => this.demanderNavigation('scanner')}></hs-nav-bar>
         <div class="colonne">
           <hs-header .current=${this.ecran} .pending=${this.enAttente} .error=${this.erreurFile}
             @retour-demande=${this.surRetour}

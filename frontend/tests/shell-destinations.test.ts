@@ -50,8 +50,10 @@ describe('table des destinations', () => {
 
 describe('sous-navigation de famille', () => {
   it('donne les écrans atteignables de chaque famille, dans l’ordre', () => {
+    // Le scanner n'y figure plus : il est devenu l'action flottante de la
+    // famille (voir « hiddenInFamilyNav » ci-dessous), pas une pastille.
     expect(familyScreens('shopping').map((d) => d.screen))
-      .toEqual(['liste', 'session', 'panier', 'rangement', 'scanner']);
+      .toEqual(['liste', 'session', 'panier', 'rangement']);
     expect(familyScreens('stock').map((d) => d.screen)).toEqual(['catalogue', 'journal']);
     expect(familyScreens('kitchen').map((d) => d.screen)).toEqual(['planning', 'recettes']);
     expect(familyScreens('house').map((d) => d.screen))
@@ -70,9 +72,13 @@ describe('sous-navigation de famille', () => {
     // C'est le test qui interdit la régression : la barre de dix boutons
     // exposait les dix-sept écrans, les quatre familles n'exposaient que leurs
     // racines, et six écrans étaient devenus introuvables autrement que par
-    // leur URL.
+    // leur URL. Un écran sans paramètre doit être dans la ligne OU
+    // explicitement marqué `hiddenInFamilyNav` (offert autrement — le
+    // scanner est l'action flottante de sa famille) : jamais ignoré en dur
+    // ici, sinon ce test cesserait d'attraper un écran oublié.
     const dansLaNav = FAMILIES.flatMap((f) => familyScreens(f.id).map((d) => d.screen));
+    const masquesExplicitement = DESTINATIONS.filter((d) => d.hiddenInFamilyNav).map((d) => d.screen);
     const sansParametre = DESTINATIONS.filter((d) => !d.param).map((d) => d.screen);
-    expect([...dansLaNav].sort()).toEqual([...sansParametre].sort());
+    expect([...dansLaNav, ...masquesExplicitement].sort()).toEqual([...sansParametre].sort());
   });
 });
