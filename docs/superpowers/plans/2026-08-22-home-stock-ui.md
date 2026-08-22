@@ -22,7 +22,11 @@ Ces règles s'appliquent à **toutes** les tâches. Les valeurs sont copiées de
 - **Chrome 100** (tablette cuisine) : interdit — `dvh`, `:has()`, `@container`, imbrication CSS native, `:is()` avec sélecteurs complexes.
 - **Aucun geste de navigation** : le retour est un bouton. Une action destructive demande deux appuis (armement puis confirmation).
 - **Aucune couleur littérale** (`#rrggbb`, `rgb(...)`) hors du repli d'un `var()` dans `src/shell/ui/tokens.ts`.
-- **Jamais de paire découplée** : un fond `--hs-accent` impose son texte `--hs-on-accent` ; un fond `--hs-danger` impose `--hs-on-danger`.
+- **Jamais de paire découplée** : un fond `--hs-accent` impose son texte `--hs-on-accent`.
+- **Aucun texte sur un aplat `--hs-danger`** (spec § 6.1 ter) : `#db4437`, le rouge d'erreur
+  par défaut de HA, a une luminance au point de bascule exact — blanc dessus 4,29:1, noir
+  dessus 4,29:1, aucune couleur ne passe 4,5:1. Le danger se dit par une bordure et une
+  icône. Le jeton `--hs-on-danger` n'existe pas.
 - **Ne jamais toucher** : le métier, les commandes websocket, la base, `custom_components/home_stock/**` (sauf le bundle que `npm run build` écrit).
 - **`npm run build` DÉPLOIE en production.** Ne l'exécuter qu'aux points explicitement indiqués (fin de lot).
 - Toutes les commandes s'exécutent depuis `/opt/nivuus/HomeAssistant/data/meal/frontend`.
@@ -290,7 +294,7 @@ describe('jetons partagés', () => {
       '--hs-radius-s', '--hs-radius-m', '--hs-radius-l',
       '--hs-text', '--hs-text-2', '--hs-surface', '--hs-surface-2',
       '--hs-divider', '--hs-accent', '--hs-on-accent',
-      '--hs-danger', '--hs-on-danger', '--hs-warning', '--hs-on-warning',
+      '--hs-danger', '--hs-warning', '--hs-on-warning',
       '--hs-font', '--hs-touch',
     ]) {
       expect(css).toContain(`${jeton}:`);
@@ -319,7 +323,7 @@ describe('jetons partagés', () => {
     const sansVar = css.replace(/var\([^)]*\)/g, '');
     const litteraux = [...sansVar.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))/g)];
     expect(litteraux.map((m) => m[1]).sort())
-      .toEqual(['--hs-on-accent', '--hs-on-danger', '--hs-on-warning']);
+      .toEqual(['--hs-on-accent', '--hs-on-warning']);
     // Et ce défaut est le SOMBRE : sur une couleur de marque inconnue, le
     // sombre est le pari le moins risqué (la plupart des primaires de thème
     // sont des teintes moyennes à vives, où le blanc échoue).
@@ -387,7 +391,6 @@ export const tokens = css`
     /* Recalculés par on-color.ts au montage. Le sombre est le défaut le moins
        risqué sur une couleur de marque inconnue. */
     --hs-on-accent: #141414;
-    --hs-on-danger: #141414;
     --hs-on-warning: #141414;
 
     --hs-font: var(--ha-font-family-body, Roboto, Noto, sans-serif);
@@ -510,7 +513,6 @@ const SOMBRE = '#141414';
 /** Les paires fond → jeton de texte à recalculer. */
 const PAIRES: ReadonlyArray<readonly [string, string]> = [
   ['--hs-accent', '--hs-on-accent'],
-  ['--hs-danger', '--hs-on-danger'],
   ['--hs-warning', '--hs-on-warning'],
 ];
 
@@ -1173,7 +1175,10 @@ export class HsButton extends LitElement {
     .neutral { background: var(--hs-surface-2); color: var(--hs-text);
                border-color: var(--hs-divider); }
     .primary { background: var(--hs-accent); color: var(--hs-on-accent); }
-    .danger  { background: var(--hs-danger); color: var(--hs-on-danger); }
+    /* Bordure, jamais aplat : aucun texte ne tient 4,5:1 sur --hs-danger sous
+       le thème HA par défaut. Voir spec § 6.1 ter. */
+    .danger  { background: var(--hs-surface); color: var(--hs-text);
+               border-color: var(--hs-danger); border-width: 2px; }
   `];
 
   render() {
@@ -1214,6 +1219,14 @@ Mécanique, mais c'est la tâche qui fait disparaître les défauts inventoriés
 **Files:**
 - Modify: les 17 `src/ecrans/*.ts` (bloc `static styles` de chacun)
 - Modify: `src/panneau.ts` (bloc `static styles`)
+- Modify: `src/shell/ui/tokens.ts`, `src/shell/ui/on-color.ts`, `src/shell/ui/hs-button.ts`
+- Modify: `tests/shell-tokens.test.ts`, `tests/shell-on-color.test.ts`, `tests/shell-enveloppes.test.ts`
+
+**Réconciliation préalable (spec § 6.1 ter, tranchée après l'écriture des Tasks 2 et 5)** :
+retirer le jeton `--hs-on-danger` de `tokens.ts`, retirer sa paire de la table `PAIRES` de
+`on-color.ts`, adapter les deux assertions de `tests/shell-tokens.test.ts` qui l'énumèrent,
+et passer la variante `danger` de `hs-button.ts` en bordure plutôt qu'en aplat (avec son
+test). Faire cela **d'abord** : les dix-sept écrans s'y appuient ensuite.
 
 **Interfaces:**
 - Consumes: `tokens` (Task 2).
@@ -1247,18 +1260,31 @@ Dans les mêmes fichiers, substituer :
 | `var(--divider-color)` | `var(--hs-divider)` |
 | `var(--primary-color)` | `var(--hs-accent)` |
 | `var(--text-primary-color, #fff)` | `var(--hs-on-accent)` |
-| `var(--error-color, #b3261e)` | `var(--hs-danger)` |
+| `var(--error-color, #b3261e)` | `var(--hs-danger)` — **en bordure ou en icône, jamais en fond sous du texte** |
 | `var(--warning-color)` | `var(--hs-warning)` |
 
 Puis, **et c'est le cœur de la tâche** : tout `color: #fff` (ou toute autre couleur littérale) posé sur un fond de thème devient le `--hs-on-*` de ce fond. Exemples présents dans `panneau.ts` :
 
 ```ts
 /* avant */ background: var(--error-color, #b3261e); color: #fff;
-/* après */ background: var(--hs-danger); color: var(--hs-on-danger);
+/* après */ background: var(--hs-surface); color: var(--hs-text);
+            border-left: 4px solid var(--hs-danger);
 
 /* avant */ background: rgba(255, 255, 255, 0.2); color: #fff;
 /* après */ background: var(--hs-surface); color: var(--hs-text);
+            border: 2px solid var(--hs-danger);
 ```
+
+> ⚠️ **Aucun texte ne se pose sur un aplat `--hs-danger`** (spec § 6.1 ter).
+> `--error-color` vaut `#db4437` sous le thème HA par défaut, dont la luminance
+> tombe **exactement au point de bascule** : blanc dessus 4,29:1, noir dessus
+> 4,29:1 — aucune couleur de texte ne passe 4,5:1. Un aplat rouge sous du texte
+> ferait donc échouer le vérificateur quoi qu'on écrive. Le danger se dit par
+> une **bordure**, une **icône** et un **liseré**, le texte restant
+> `--hs-text` sur `--hs-surface`. Le jeton `--hs-on-danger` n'existe pas.
+>
+> Le geste destructif reste protégé par ce qui le protégeait déjà : **deux
+> appuis**, armement puis confirmation.
 
 - [ ] **Step 3 : porter les cibles tactiles à 62 px**
 
@@ -1908,17 +1934,25 @@ export class HsHeader extends LitElement {
       display: inline-flex; align-items: center; gap: var(--hs-space-1);
       color: var(--hs-text-2); font-size: 0.85rem;
     }
+    /* Pas d'aplat rouge sous ce texte : `--error-color` vaut #db4437 sous le
+       thème HA par défaut, une luminance au point de bascule exact où blanc et
+       noir donnent tous deux 4,29:1 — sous le seuil. Le danger passe par le
+       liseré et l'icône ; le texte garde 17:1. Voir spec § 6.1 ter. */
     .erreur {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: var(--hs-space-2);
+      display: flex; align-items: center; gap: var(--hs-space-2);
       margin: 0; padding: var(--hs-space-2) var(--hs-space-3);
-      background: var(--hs-danger); color: var(--hs-on-danger);
+      background: var(--hs-surface); color: var(--hs-text);
+      border-left: 4px solid var(--hs-danger);
+      border-bottom: 1px solid var(--hs-divider);
       font-size: 0.9rem;
     }
+    .erreur hs-icon { color: var(--hs-danger); flex: 0 0 auto; }
+    .message-erreur { flex: 1; }
     .fermer-erreur {
       min-height: var(--hs-touch); min-width: var(--hs-touch);
-      border: 1px solid currentColor; border-radius: var(--hs-radius-s);
-      background: none; color: inherit; font-weight: 600; cursor: pointer;
+      border: 1px solid var(--hs-divider); border-radius: var(--hs-radius-s);
+      background: var(--hs-surface-2); color: var(--hs-text);
+      font-weight: 600; cursor: pointer;
     }
   `];
 
@@ -1939,7 +1973,8 @@ export class HsHeader extends LitElement {
       </div>
       ${this.error ? html`
         <p class="erreur" role="alert">
-          ${this.error}
+          <hs-icon name="alert"></hs-icon>
+          <span class="message-erreur">${this.error}</span>
           <button class="fermer-erreur" @click=${() => this.dispatchEvent(
             new CustomEvent('erreur-acquittee', { bubbles: true, composed: true }))}>OK</button>
         </p>` : nothing}`;
@@ -2236,9 +2271,15 @@ Et les styles de la coquille, en remplacement de `.navigation` / `.nav-bouton` /
     .confirmer-quitter, .annuler-quitter {
       min-height: var(--hs-touch); width: 100%;
       border-radius: var(--hs-radius-s); border: none; font-size: 0.95rem;
-      font-family: var(--hs-font);
+      font-family: var(--hs-font); cursor: pointer;
     }
-    .confirmer-quitter { background: var(--hs-danger); color: var(--hs-on-danger); }
+    /* Bordure, pas aplat : aucun texte ne tient 4,5:1 sur --hs-danger sous le
+       thème HA par défaut (spec § 6.1 ter). Ce qui protège ce geste, c'est
+       qu'il demande deux appuis — pas sa couleur. */
+    .confirmer-quitter {
+      background: var(--hs-surface); color: var(--hs-text);
+      border: 2px solid var(--hs-danger);
+    }
     .annuler-quitter { background: var(--hs-accent); color: var(--hs-on-accent); }
   `];
 ```

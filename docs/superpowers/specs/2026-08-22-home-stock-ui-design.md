@@ -203,7 +203,6 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 --hs-accent                      var(--primary-color, #009ac7)
 --hs-on-accent                   #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-danger                      var(--error-color, #db4437)
---hs-on-danger                   #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-warning                     var(--warning-color, #ffa600)
 --hs-on-warning                  #141414  /* défaut prudent, recalculé — cf. § 6.1 bis */
 --hs-font                        var(--ha-font-family-body, Roboto, Noto, sans-serif)
@@ -213,6 +212,36 @@ c'est précisément l'absence de repli qui a produit le § 3 :
 **Règle 1** : plus aucune variable HA lue directement dans un écran. Un écran
 lit un jeton `--hs-*`, jamais `var(--divider-color)`. Ainsi une variable HA
 absente ne peut plus annuler une déclaration.
+
+### 6.1 ter — Aucun texte sur un aplat DANGER
+
+Le calcul du § 6.1 bis règle l'accent. Il ne règle pas le danger, et la raison
+est arithmétique :
+
+`--error-color` vaut `#db4437` sous le thème HA par défaut. Sa luminance
+relative est ≈ 0,1946 — **exactement le point de bascule** où le blanc et le
+noir contrastent à égalité. Résultat : **4,29:1 dans les deux cas**. Il n'existe
+aucune couleur de texte qui passe 4,5:1 sur ce fond. Ce n'est pas un mauvais
+choix de notre part, c'est une propriété de la couleur.
+
+Donc : **le danger ne se dit jamais par un aplat sous du texte.** Il se dit par
+une bordure, une icône, et un liseré — le texte restant `--hs-text` sur
+`--hs-surface`, soit 17:1 partout.
+
+| Élément | Avant | Après |
+|---|---|---|
+| Bannière de refus | fond `--hs-danger`, texte blanc | fond `--hs-surface`, liseré `--hs-danger`, icône `alert`, texte `--hs-text` |
+| Bouton destructif | fond `--hs-danger`, texte blanc | fond `--hs-surface`, **bordure** `--hs-danger` de 2 px, icône, texte `--hs-text` |
+
+`--hs-on-danger` **disparaît** : plus rien ne se pose sur un aplat danger.
+`--hs-danger` ne sert plus qu'à des bordures et des icônes, où le seuil
+applicable est celui des éléments non textuels (3:1) — et où la couleur n'est
+de toute façon pas le seul porteur de l'information, puisque le message est
+écrit et l'icône dessinée.
+
+C'est aussi ce qui rend le geste destructif conforme au reste du panneau : il
+demande déjà **deux appuis**, l'armement puis la confirmation. Ce n'est pas la
+couleur qui protège, c'est le geste.
 
 ### 6.1 bis — La couleur du texte sur un fond de marque se CALCULE
 
@@ -239,7 +268,7 @@ Trois issues envisagées :
 3. **Calculer** — retenue.
 
 `src/shell/ui/on-color.ts` lit la couleur RÉSOLUE du fond, calcule sa
-luminance, et pose `--hs-on-accent` / `--hs-on-danger` / `--hs-on-warning` sur
+luminance, et pose `--hs-on-accent` / `--hs-on-warning` sur
 l'hôte, en clair ou en sombre selon celle qui contraste le mieux. Sous HA
 défaut : sombre sur le cyan (6,4:1 au lieu de 3,26). Sous Graphite : navy sur
 l'orange (7,41:1). Le panneau garde ses aplats **et** reste lisible sous
@@ -270,7 +299,7 @@ en dur **casse la paire que le thème avait faite**. Sous le thème HA par défa
 la paire elle-même ne tient pas (blanc `#fff` sur `#009ac7` = **3,26:1**).
 
 Donc : un fond `--hs-accent` impose son texte `--hs-on-accent`, un fond
-`--hs-danger` impose `--hs-on-danger`, et aucun `#rrggbb` littéral n'apparaît
+`--hs-danger` ne porte JAMAIS de texte (§ 6.1 ter), et aucun `#rrggbb` littéral n'apparaît
 ailleurs que dans le repli d'un `var()` de la liste ci-dessus.
 
 `--hs-touch` vaut 62 px (contrainte Fire 7), donc au-dessus des 48 px actuels :
