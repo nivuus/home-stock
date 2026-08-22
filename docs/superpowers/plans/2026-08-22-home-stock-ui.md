@@ -2828,6 +2828,236 @@ git commit -m "docs: les routes, les jetons, et les deux pièges qui reviendront
 
 ---
 
+## Task 16 : la sous-navigation de famille (URGENT — régression en production)
+
+**Découvert en branchant la coquille.** Six écrans — Réglages, Équipements,
+Journal, Recettes, Courses, Panier — n'ont plus **aucun point d'entrée** dans
+l'application : ils ne sont ni racines de famille, ni ouverts par un événement
+métier. La barre de dix boutons les exposait tous. Le bundle de la Task 11
+étant déployé, la régression est **en production**.
+
+**Files:**
+- Modify: `src/shell/destinations.ts` (marquer les écrans de la ligne secondaire)
+- Modify: `src/shell/header.ts` (rendre la ligne secondaire)
+- Modify: `src/panneau.ts` (câbler l'événement de navigation)
+- Test: `tests/shell-destinations.test.ts`, `tests/shell-header.test.ts`, `tests/panneau-routes.test.ts`
+- Modify: `outils/verifier-rendu.mjs` (un scénario)
+
+**Interfaces:**
+- Consumes: `DESTINATIONS`, `familyOf` (Task 7), `tokens`, `hs-icon`.
+- Produces: `export function familyScreens(family: FamilyId): Destination[]`
+  — les écrans de la famille qui figurent dans la ligne secondaire, dans
+  l'ordre de la table. `<hs-header>` émet
+  `CustomEvent<{ screen: Ecran }>('ecran-choisi', {bubbles, composed})`.
+
+- [ ] **Step 1 : écrire les tests de la table**
+
+Dans `tests/shell-destinations.test.ts` :
+
+```ts
+describe('sous-navigation de famille', () => {
+  it('donne les écrans atteignables de chaque famille, dans l’ordre', () => {
+    expect(familyScreens('shopping').map((d) => d.screen))
+      .toEqual(['liste', 'session', 'panier', 'rangement', 'scanner']);
+    expect(familyScreens('stock').map((d) => d.screen)).toEqual(['catalogue', 'journal']);
+    expect(familyScreens('kitchen').map((d) => d.screen)).toEqual(['planning', 'recettes']);
+    expect(familyScreens('house').map((d) => d.screen))
+      .toEqual(['piles', 'equipements', 'reglages']);
+  });
+
+  it('exclut les écrans qui exigent un paramètre', () => {
+    // fiche, recette, validation, ticket, manger : un bouton nu ne saurait pas
+    // quel identifiant leur passer. On y entre depuis l'écran qui le connaît.
+    for (const famille of FAMILIES) {
+      for (const d of familyScreens(famille.id)) expect(d.param).toBeUndefined();
+    }
+  });
+
+  it('couvre TOUT écran sans paramètre — aucun ne doit rester inatteignable', () => {
+    // C'est le test qui interdit la régression : la barre de dix boutons
+    // exposait les dix-sept écrans, les quatre familles n'exposaient que leurs
+    // racines, et six écrans étaient devenus introuvables autrement que par
+    // leur URL.
+    const dansLaNav = FAMILIES.flatMap((f) => familyScreens(f.id).map((d) => d.screen));
+    const sansParametre = DESTINATIONS.filter((d) => !d.param).map((d) => d.screen);
+    expect([...dansLaNav].sort()).toEqual([...sansParametre].sort());
+  });
+});
+```
+
+- [ ] **Step 2 : lancer, voir échouer**
+
+Run: `npx vitest run tests/shell-destinations.test.ts`
+Expected: FAIL — `familyScreens` n'existe pas.
+
+- [ ] **Step 3 : ajouter `familyScreens`**
+
+```ts
+/** Les écrans d'une famille qui figurent dans la ligne secondaire de
+ *  l'en-tête. Ceux qui exigent un paramètre en sont exclus : un bouton nu ne
+ *  saurait pas quel identifiant leur passer, on y entre depuis l'écran qui le
+ *  connaît. Panier et Rangement y restent même sans session ouverte — des
+ *  boutons qui apparaissent et disparaissent font perdre le repère, ce qui
+ *  était le défaut de l'ancienne barre. */
+export function familyScreens(family: FamilyId): Destination[] {
+  return DESTINATIONS.filter((d) => d.family === family && !d.param);
+}
+```
+
+- [ ] **Step 4 : les tests de l'en-tête**
+
+Dans `tests/shell-header.test.ts` :
+
+```ts
+describe('en-tête : ligne secondaire', () => {
+  it('rend les écrans de la famille courante', async () => {
+    const el = await monter({ current: 'piles' });
+    const liens = el.shadowRoot!.querySelectorAll('.sous-nav .sous-lien');
+    expect([...liens].map((n) => n.textContent!.trim()))
+      .toEqual(['Piles', 'Équipements', 'Réglages']);
+  });
+
+  it('marque l’écran courant, et lui seul', async () => {
+    const el = await monter({ current: 'reglages' });
+    const actifs = el.shadowRoot!.querySelectorAll('.sous-lien.actif');
+    expect(actifs).toHaveLength(1);
+    expect(actifs[0].getAttribute('aria-current')).toBe('page');
+    expect(actifs[0].textContent!.trim()).toBe('Réglages');
+  });
+
+  it('ne change pas de contenu entre deux écrans d’une même famille', async () => {
+    // La ligne est stable : seule la marque d'actif se déplace. C'est ce qui
+    // distingue cette navigation de l'ancienne barre, où les boutons bougeaient.
+    const a = await monter({ current: 'piles' });
+    const avant = [...a.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    document.body.innerHTML = '';
+    const b = await monter({ current: 'reglages' });
+    const apres = [...b.shadowRoot!.querySelectorAll('.sous-lien')].map((n) => n.textContent!.trim());
+    expect(apres).toEqual(avant);
+  });
+
+  it('émet l’écran choisi', async () => {
+    const el = await monter({ current: 'piles' });
+    const recu = vi.fn();
+    el.addEventListener('ecran-choisi', (e) => recu((e as CustomEvent).detail));
+    (el.shadowRoot!.querySelectorAll('.sous-lien')[2] as HTMLElement).click();
+    expect(recu).toHaveBeenCalledWith({ screen: 'reglages' });
+  });
+
+  it('n’émet rien pour l’écran déjà affiché', async () => {
+    const el = await monter({ current: 'piles' });
+    const recu = vi.fn();
+    el.addEventListener('ecran-choisi', recu);
+    (el.shadowRoot!.querySelectorAll('.sous-lien')[0] as HTMLElement).click();
+    expect(recu).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 5 : rendre la ligne dans `header.ts`**
+
+Sous la barre de titre, avant la bannière :
+
+```ts
+${this.rendreSousNav()}
+```
+
+```ts
+  private rendreSousNav() {
+    const ecrans = familyScreens(familyOf(this.current));
+    // Une famille à un seul écran n'a rien à proposer : la ligne serait un
+    // bouton qui ne mène qu'à lui-même.
+    if (ecrans.length < 2) return nothing;
+    return html`
+      <nav class="sous-nav">
+        ${ecrans.map((d) => {
+          const actif = d.screen === this.current;
+          return html`
+            <button class="sous-lien ${actif ? 'actif' : ''}"
+                    aria-current=${actif ? 'page' : nothing}
+                    ?disabled=${actif}
+                    @click=${() => this.dispatchEvent(new CustomEvent('ecran-choisi', {
+                      detail: { screen: d.screen }, bubbles: true, composed: true }))}>
+              ${d.label}
+            </button>`;
+        })}
+      </nav>`;
+  }
+```
+
+```css
+    .sous-nav {
+      display: flex; flex-wrap: wrap; gap: var(--hs-space-2);
+      padding: 0 var(--hs-space-3) var(--hs-space-2);
+      background: var(--hs-surface);
+      border-bottom: 1px solid var(--hs-divider);
+    }
+    .sous-lien {
+      min-height: var(--hs-touch); padding: 0 var(--hs-space-3);
+      border: 1px solid var(--hs-divider); border-radius: var(--hs-radius-s);
+      background: var(--hs-surface-2); color: var(--hs-text);
+      font-family: var(--hs-font); font-size: 0.9rem; cursor: pointer;
+    }
+    /* L'actif se dit par l'aplat et la graisse, JAMAIS par la couleur du
+       libellé : --hs-accent en texte donne 3,26:1 sous HA et 2,38:1 sous
+       Graphite (spec § 6.5). */
+    .sous-lien.actif {
+      background: var(--hs-accent); color: var(--hs-on-accent);
+      border-color: var(--hs-accent); font-weight: 600;
+    }
+```
+
+- [ ] **Step 6 : câbler dans `panneau.ts`**
+
+```ts
+@ecran-choisi=${(e: CustomEvent<{ screen: Ecran }>) => this.demanderNavigation(e.detail.screen)}
+```
+
+Passe par `demanderNavigation`, **pas** `naviguerVers` : quitter un rangement inachevé doit continuer d'armer la confirmation.
+
+- [ ] **Step 7 : le test de bout en bout**
+
+Dans `tests/panneau-routes.test.ts` :
+
+```ts
+it('atteint Réglages depuis Piles, sans passer par une URL tapée à la main', async () => {
+  // La régression que ce test interdit : Réglages n'était plus atteignable
+  // dans l'application, seulement en tapant son URL.
+  const el = await monter('/batteries');
+  const entete = el.shadowRoot!.querySelector('hs-header')!;
+  entete.dispatchEvent(new CustomEvent('ecran-choisi', {
+    detail: { screen: 'reglages' }, bubbles: true, composed: true }));
+  await el.updateComplete;
+  expect(el.ecran).toBe('reglages');
+  expect(window.location.pathname).toBe('/home-stock/settings');
+});
+```
+
+- [ ] **Step 8 : le scénario de rendu**
+
+Ajouter à `SCENARIOS` : « Coquille : ligne secondaire de la famille Maison, Réglages actif ». La famille Courses en a cinq — vérifier qu'ils tiennent sur 412 px sans déborder (la ligne a `flex-wrap`, donc elle passe à la ligne plutôt que de rétrécir sous 62 px).
+
+Run: `npx vitest run` puis `node outils/verifier-rendu.mjs`
+Expected: tout vert.
+
+- [ ] **Step 9 : déployer et commiter**
+
+```bash
+npm run build
+node outils/verifier-rendu.mjs --deploye
+git add -A src/ tests/ outils/ ../custom_components/home_stock/panel/
+git commit -m "fix(shell): six écrans étaient devenus inatteignables
+
+Réglages, Équipements, Journal, Recettes, Courses et Panier n'avaient plus
+aucun point d'entrée : ni racines de famille, ni ouverts par un événement.
+La barre de dix boutons les exposait tous ; les quatre familles n'exposaient
+que leurs racines. L'en-tête porte désormais la ligne des écrans de la
+famille courante, stable d'un écran à l'autre — seule la marque d'actif s'y
+déplace."
+```
+
+---
+
 ## Auto-revue du plan
 
 **Couverture de la spec :**

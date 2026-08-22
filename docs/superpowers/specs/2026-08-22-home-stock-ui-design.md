@@ -353,6 +353,52 @@ la moindre erreur en console : l'écran casserait **silencieusement**.
 3. s'abonne à `customElements.whenDefined(nom)` et demande un nouveau rendu si
    l'élément arrive après coup.
 
+## 6.4 — La sous-navigation de famille
+
+**Trou de conception, découvert en branchant la coquille (Task 11).** La barre
+de dix boutons exposait les dix-sept écrans. Les quatre familles n'exposent que
+leurs quatre racines, et rien ne mène aux autres : **Réglages, Équipements,
+Journal, Recettes, Courses et Panier sont devenus inatteignables** autrement
+que par leur URL.
+
+L'en-tête porte donc une **seconde ligne** : les écrans de la famille courante,
+en navigation secondaire. Elle ne change pas selon l'écran affiché — seule la
+marque d'actif se déplace, comme dans la barre principale.
+
+| Famille | Ligne secondaire |
+|---|---|
+| Courses | Liste · Courses · Panier · Rangement · Scanner |
+| Stock | Catalogue · Journal |
+| Cuisine | Planning · Recettes |
+| Maison | Piles · Équipements · Réglages |
+
+**Les écrans paramétrés n'y figurent pas** — fiche, recette, validation, ticket,
+manger. Ils exigent un contexte (un code, un identifiant) qu'un bouton nu ne
+saurait pas fournir : on y entre depuis l'écran qui le connaît.
+
+**Panier et Rangement y figurent en permanence**, même sans session ouverte,
+plutôt que d'apparaître et disparaître. C'est précisément le défaut de
+l'ancienne barre : des boutons qui bougent font perdre le repère. Leur écran
+affiche son état vide, ce qui est une réponse honnête.
+
+## 6.5 — Aucune couleur de marque en texte
+
+Corollaire du § 6.1 ter, mesuré en branchant la barre : `--hs-accent` **en
+couleur de texte** sur une surface donne **3,26:1** sous le thème HA par défaut
+et **2,38:1** sous Graphite. Marquer la destination active par
+`color: var(--hs-accent)` a fait tomber 88 des 91 scénarios du vérificateur.
+
+La règle générale est donc :
+
+| Usage | Accent | Danger / Warning |
+|---|---|---|
+| Aplat sous du texte | ✅ avec `--hs-on-accent` **calculé** (§ 6.1 bis) | ❌ jamais (§ 6.1 ter) |
+| Couleur de texte | ❌ jamais | ❌ jamais |
+| Bordure, icône, liseré | ✅ | ✅ |
+
+Un état actif se dit donc par la **graisse**, une **pastille d'aplat** derrière
+une icône, ou une **bordure** — jamais par la couleur du libellé.
+
 ## 7. Les trois écrans repris
 
 Repris pour un défaut **structurel**, pas cosmétique. Les quatorze autres
