@@ -1,0 +1,31 @@
+apiVersion: nivuus.dev/v1
+name: home-stock
+version: 1.0.0
+label: "Garde-manger (stocks, dates limites, courses)"
+tier: userspace
+
+# Le premier satellite. `requires.packages` fait installer home-manager
+# AVANT ce package : le hook depose ses fichiers dans le repertoire de
+# configuration que le socle vient de creer. Sans cette ligne, le moteur
+# ordonne alphabetiquement — ici l'ordre serait bon par hasard, et un
+# renommage le casserait sans que rien ne le signale.
+requires:
+  packages: [home-manager]
+
+# Ni `apt:`, ni `wizard:`, ni hook `activate` — les trois deliberement.
+#
+# `apt:` : manifest.json ne declare aucun `requirements` Python. Les trois
+# `dependencies` de l'integration (http, websocket_api, panel_custom) sont des
+# composants internes de Home Assistant, deja presents.
+#
+# `wizard:` : le chemin de depot vient du socle, et la base de donnees se cree
+# seule au premier demarrage. Il n'y a rien a demander, et une question sans
+# effet est une promesse qu'on ne tient pas.
+#
+# `activate` : le tri topologique garantit que ce package s'installe avant que
+# le socle ne demarre Home Assistant, donc l'integration est chargee des le
+# premier demarrage. Un activate serait au mieux inutile, au pire une course :
+# les unites nivuus-package-activate@<nom>.service vivent toutes dans
+# multi-user.target.wants, et systemd ne les ordonne pas entre elles.
+hooks:
+  install: hooks/install.py
