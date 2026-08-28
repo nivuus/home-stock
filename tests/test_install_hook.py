@@ -148,6 +148,27 @@ with tempfile.TemporaryDirectory() as root:
     proc = run(root)
     check("deuxieme passage sans erreur", proc.returncode, 0)
 
+# --- variantes de declaration ------------------------------------------
+# `!include_dir_merge_named` charge le repertoire tout autant : signaler une
+# ligne a ajouter serait inviter l'operateur a creer une cle en double.
+with tempfile.TemporaryDirectory() as root:
+    config = socle(root,
+                   "homeassistant:\n"
+                   "  packages: !include_dir_merge_named packages\n")
+    proc = run(root)
+    check("la variante merge_named est reconnue",
+          "!include_dir_named" in proc.stdout, False)
+
+# Le cas silencieux : une declaration qui ne designe PAS le repertoire ou ce
+# hook depose. Le fragment ne sera jamais charge — le hook doit le dire.
+with tempfile.TemporaryDirectory() as root:
+    config = socle(root,
+                   "homeassistant:\n"
+                   "  packages: !include_dir_named autre_dossier\n")
+    proc = run(root)
+    check("une declaration visant un autre repertoire est signalee",
+          "packages: !include_dir_named packages" in proc.stdout, True)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

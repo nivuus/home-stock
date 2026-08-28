@@ -53,7 +53,14 @@ SHARED_FILES = (
 
 # La declaration sans laquelle Home Assistant ignore config/packages/.
 PACKAGES_DECLARATION = "packages: !include_dir_named packages"
-PACKAGES_RE = re.compile(r"^\s*packages:\s*!include_dir_named\s", re.MULTILINE)
+# Les deux tags que Home Assistant accepte pour charger un repertoire de
+# paquets, et le nom du repertoire qu'ils designent — capture indispensable :
+# `packages: !include_dir_named autre_dossier` declare bien quelque chose,
+# mais pas le repertoire `packages/` ou ce hook depose son fragment. Sans la
+# capture, le hook se tairait sur une configuration qui n'a aucune chance de
+# charger ce qu'il vient d'ecrire.
+PACKAGES_RE = re.compile(
+    r"^\s*packages:\s*!include_dir_(?:merge_)?named\s+(\S+)\s*$", re.MULTILINE)
 
 
 def emit(event):
@@ -75,18 +82,25 @@ def copy_file(source, dest):
 
 
 def declares_packages(config_dir):
-    """configuration.yaml charge-t-il le repertoire packages/ ?
+    """configuration.yaml charge-t-il le repertoire ou ce hook depose ?
 
     Une recherche textuelle, pas un yaml.safe_load : configuration.yaml est
-    plein de tags !include et !secret que le parseur standard refuse. La
-    question posee ici est litterale, la reponse peut l'etre aussi.
+    plein de tags !include et !secret que le parseur standard refuse.
+
+    LIMITE ASSUMEE : une declaration logee dans un fichier inclus
+    (`homeassistant: !include core.yaml`) echappe a cette recherche, qui ne
+    lit que configuration.yaml. Le hook signalera alors une ligne deja
+    presente ailleurs — un message superflu, jamais une perte.
     """
     path = os.path.join(config_dir, "configuration.yaml")
     try:
         with open(path) as fh:
-            return bool(PACKAGES_RE.search(fh.read()))
+            text = fh.read()
     except OSError:
         return False
+    wanted = os.path.dirname(SHARED_FILES[1][1])
+    return any(match.group(1) == wanted
+               for match in PACKAGES_RE.finditer(text))
 
 
 def main():
