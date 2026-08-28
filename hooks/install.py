@@ -6,7 +6,7 @@ il ecrit dans celui que `home-manager` a cree. Son manifeste le declare par
 `requires: packages: [home-manager]`, ce qui fait installer le socle en
 premier.
 
-DEUX REGLES.
+PLUSIEURS REGLES.
 
 1. IL REFUSE SI LE SOCLE EST ABSENT. `requires.packages` bloque deja le cas
    dans le wizard, mais ce hook tourne aussi en autonome — `--root /`, un
@@ -22,12 +22,28 @@ DEUX REGLES.
    integrations : les remplacer supprimerait leur travail. Pour ceux-la, un
    fichier est copie, jamais un repertoire.
 
+3. LES PHRASES VOCALES SONT CONDITIONNELLES AU FRAGMENT D'INTENTS. Les deux
+   portent les memes sept identifiants, mais leurs regles de chargement sont
+   opposees : `custom_sentences/` est charge automatiquement par Home
+   Assistant, `packages/` seulement si `configuration.yaml` declare
+   `packages:`. Deposer les phrases sans le fragment rendrait les sept
+   phrases RECONNUES SANS GESTIONNAIRE : l'assistant repondrait une erreur au
+   lieu de passer la main a l'agent de repli. Voir CONDITIONAL_FILES plus bas.
+
+4. DEUX EXECUTIONS CONCURRENTES SE SERIALISENT. Reexecuter ce hook est le seul
+   mecanisme de mise a jour, et rien n'empechait deux passages simultanes de
+   s'entrelacer — l'un sortant en 0 pendant que l'autre a mi-chemin a deja
+   efface ce qu'il n'a pas fini de redeposer. Voir exclusive_deposit().
+
 CE HOOK N'ECRIT JAMAIS DANS configuration.yaml. Le fragment d'intents porte
 lui-meme la regle : « intent_script est une cle de configuration.yaml, un
 fichier que le proprietaire tient a la main ». Quand la declaration `packages:`
-manque, le hook la SIGNALE, avec la ligne exacte a ajouter.
+manque, le hook la SIGNALE, avec la ligne exacte a ajouter — et dit que les
+phrases vocales restent en attente de cette ligne.
 """
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -45,10 +61,24 @@ OWNED_TREES = (
     ("blueprints/automation/home_stock", "blueprints/automation/home_stock"),
 )
 
-# Fichiers deposes dans des repertoires PARTAGES : copies un par un.
+# Fichier depose dans un repertoire PARTAGE : copie seul, jamais par
+# remplacement du repertoire, qui appartient aussi aux autres integrations.
+# Il est depose INCONDITIONNELLEMENT : c'est du texte inerte tant que rien ne
+# le charge, et son absence est ce qui rend les phrases dangereuses (regle 3).
+INTENTS_REL = "packages/home_stock_intents.yaml"
 SHARED_FILES = (
+    (INTENTS_REL, INTENTS_REL),
+)
+
+# Les phrases vocales, elles, sont CONDITIONNELLES — et ce n'est pas une
+# precaution, c'est une correction de bug. Home Assistant charge
+# custom_sentences/ tout seul, mais l'intent_script qui repond a ces phrases
+# vit dans le fragment ci-dessus, que HA n'inclut que si configuration.yaml
+# declare `packages:`. Deposees sans lui, les sept phrases deviennent
+# reconnues SANS gestionnaire : l'assistant repond une erreur au lieu de
+# passer la main a l'agent de repli. Les deux, ou aucun.
+CONDITIONAL_FILES = (
     ("custom_sentences/fr/home_stock.yaml", "custom_sentences/fr/home_stock.yaml"),
-    ("packages/home_stock_intents.yaml", "packages/home_stock_intents.yaml"),
 )
 
 # La declaration sans laquelle Home Assistant ignore config/packages/.
@@ -67,12 +97,66 @@ def emit(event):
     print(json.dumps(event), flush=True)
 
 
+def _discard(path):
+    """Ecarter ce qui occupe deja `path`, quelle que soit sa nature.
+
+    rmtree refuse un lien symbolique et un fichier simple ; ce sont pourtant
+    deux etats releves en revue a cet emplacement (une reinstallation qui
+    suit une bidouille manuelle, par exemple). On distingue donc explicitement
+    plutot que de laisser un traceback nu decider a la place de l'operateur.
+    """
+    if not os.path.lexists(path):
+        return
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
 def replace_tree(source, dest):
-    """Remplacer dest par source, entierement."""
-    if os.path.isdir(dest):
-        shutil.rmtree(dest)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.copytree(source, dest, symlinks=True)
+    """Remplacer dest par source, entierement, sans jamais laisser dest absent.
+
+    L'ancienne version faisait rmtree() puis copytree() : entre les deux, dest
+    n'existe pas. La revue a mesure 291 lectures sur fichier absent pendant
+    cette fenetre — panel.py relit son bundle de 234 Ko sur le disque a chaque
+    chargement de page, sans cache — et si le processus meurt entre les deux
+    appels, l'integration a purement disparu.
+
+    On copie donc vers un repertoire voisin temporaire (l'ancien arbre reste
+    intact tant que cette copie n'est pas terminee), puis on bascule par
+    os.replace(), atomique sur un meme systeme de fichiers. os.replace() sur
+    un repertoire exige une cible vide ou absente : on ecarte donc l'ancien
+    dest juste avant le double remplacement, en le deplacant plutot qu'en
+    l'effacant, pour ne le supprimer qu'une fois le nouveau en place.
+    """
+    parent = os.path.dirname(dest)
+    os.makedirs(parent, exist_ok=True)
+
+    tmp = dest + ".new"
+    old_aside = dest + ".old"
+    _discard(tmp)
+    _discard(old_aside)
+
+    try:
+        shutil.copytree(source, tmp, symlinks=True)
+    except Exception:
+        _discard(tmp)
+        raise
+
+    moved_old = os.path.lexists(dest)
+    if moved_old:
+        if os.path.isdir(dest) and not os.path.islink(dest):
+            os.replace(dest, old_aside)
+        else:
+            # Un lien symbolique ou un fichier simple a cet emplacement : rien
+            # a preserver, rien que rmtree() saurait de toute facon traiter.
+            os.remove(dest)
+            moved_old = False
+
+    os.replace(tmp, dest)
+
+    if moved_old:
+        shutil.rmtree(old_aside)
 
 
 def copy_file(source, dest):
@@ -91,16 +175,44 @@ def declares_packages(config_dir):
     (`homeassistant: !include core.yaml`) echappe a cette recherche, qui ne
     lit que configuration.yaml. Le hook signalera alors une ligne deja
     presente ailleurs — un message superflu, jamais une perte.
+
+    La lecture est TOLERANTE a l'encodage : ce controle tourne apres les
+    depots (regle 2 et 3 plus haut), donc une UnicodeDecodeError ici ferait
+    echouer l'installation entiere alors que tous les fichiers sont deja en
+    place — pire que le message superflu qu'elle empecherait.
     """
     path = os.path.join(config_dir, "configuration.yaml")
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
         return False
-    wanted = os.path.dirname(SHARED_FILES[1][1])
+    wanted = os.path.dirname(INTENTS_REL)
     return any(match.group(1) == wanted
                for match in PACKAGES_RE.finditer(text))
+
+
+@contextlib.contextmanager
+def exclusive_deposit(config_dir):
+    """Serialiser les executions concurrentes du hook sur le meme socle.
+
+    Reexecuter ce hook est le seul mecanisme de mise a jour du package, et
+    rien ne l'empechait de tourner deux fois en meme temps : une revue en a
+    lance quatre en parallele et vu l'une sortir en 0 avec {"event": "done"}
+    alors que onze fichiers manquaient, panel.py compris.
+
+    Le verrou porte sur config_dir lui-meme : il existe forcement a cet
+    instant (la regle 1 vient de le verifier) et ce n'est l'artefact d'aucune
+    des deux executions — contrairement a tout ce que ce hook depose, qui
+    n'existerait pas encore lors d'un tout premier passage.
+    """
+    fd = os.open(config_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def main():
@@ -121,27 +233,37 @@ def main():
               "lui-meme", file=sys.stderr)
         return 1
 
-    emit({"event": "progress", "pct": 20, "msg": "Depose de l'integration"})
-    for rel_source, rel_dest in OWNED_TREES:
-        replace_tree(os.path.join(HERE, rel_source),
-                     os.path.join(config_dir, rel_dest))
+    with exclusive_deposit(config_dir):
+        emit({"event": "progress", "pct": 20, "msg": "Depose de l'integration"})
+        for rel_source, rel_dest in OWNED_TREES:
+            replace_tree(os.path.join(HERE, rel_source),
+                         os.path.join(config_dir, rel_dest))
 
-    emit({"event": "progress", "pct": 60,
-          "msg": "Depose des phrases et du fragment d'intents"})
-    for rel_source, rel_dest in SHARED_FILES:
-        copy_file(os.path.join(HERE, rel_source),
-                  os.path.join(config_dir, rel_dest))
+        emit({"event": "progress", "pct": 55,
+              "msg": "Depose du fragment d'intents"})
+        for rel_source, rel_dest in SHARED_FILES:
+            copy_file(os.path.join(HERE, rel_source),
+                      os.path.join(config_dir, rel_dest))
 
-    # Le fragment est depose, mais Home Assistant ne le lira que si
-    # configuration.yaml le declare — et ce fichier appartient a l'operateur.
-    if not declares_packages(config_dir):
-        emit({"event": "progress", "pct": 90,
-              "msg": "Les phrases vocales du garde-manger demandent une ligne "
-                     "dans configuration.yaml, sous « homeassistant: » : "
-                     f"{PACKAGES_DECLARATION}"})
+        # Regle 3 : les phrases ne partent que si le fragment ci-dessus sera
+        # vraiment charge. Sans quoi elles seraient reconnues sans gestionnaire.
+        packages_declared = declares_packages(config_dir)
+        if packages_declared:
+            emit({"event": "progress", "pct": 75,
+                  "msg": "Depose des phrases vocales"})
+            for rel_source, rel_dest in CONDITIONAL_FILES:
+                copy_file(os.path.join(HERE, rel_source),
+                          os.path.join(config_dir, rel_dest))
+        else:
+            emit({"event": "progress", "pct": 90,
+                  "msg": "Les phrases vocales du garde-manger ne sont PAS "
+                         "deposees : elles sont en attente d'une ligne dans "
+                         "configuration.yaml, sous « homeassistant: » : "
+                         f"{PACKAGES_DECLARATION}"})
 
-    emit({"event": "progress", "pct": 95,
-          "msg": "Garde-manger depose dans la configuration de Home Assistant"})
+        emit({"event": "progress", "pct": 95,
+              "msg": "Garde-manger depose dans la configuration de Home Assistant"})
+
     emit({"event": "done"})
     return 0
 
