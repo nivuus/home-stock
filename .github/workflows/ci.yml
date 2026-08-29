@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  policy:
+    uses: nivuus/.github/.github/workflows/policy.yml@main
+  security:
+    uses: nivuus/.github/.github/workflows/security.yml@main
+    with:
+      # pytest-homeassistant-custom-component pins Home Assistant, which uses
+      # Python 3.14 syntax. The socle's 3.12 default cannot run this suite.
+      python-version: "3.14"
+  python:
+    uses: nivuus/.github/.github/workflows/ci-python.yml@main
+    with:
+      test-paths: tests
+      # pytest-homeassistant-custom-component pins Home Assistant, which uses
+      # Python 3.14 syntax. The socle's 3.12 default cannot run this suite.
+      python-version: "3.14"
