@@ -175,31 +175,43 @@ def test_every_action_validates_through_home_assistant():
 # De quoi rendre chaque mise en phrase sur son cas PLEIN. Les clés sont celles
 # que les services rendent réellement (`query_stock` → `products`,
 # `query_shopping_list` → `items`/`count`, `validate_meal` → `lines`).
+#
+# LE NOM DE LA VARIABLE EST `action_response`, ET CE N'EST PAS UN DÉTAIL.
+# Ce jeu de variables nommait `reponse` et `apercu` — les noms posés par
+# `response_variable:` dans le script. Home Assistant n'en fournit AUCUN au
+# gabarit `speech:` : il n'y met que `action_response`, et seulement si le
+# script se termine par un `stop:` porteur du `response_variable`. Les tests
+# fabriquaient donc un contrat que le produit n'honore pas, et sont passés au
+# vert pendant que cinq des sept intents répondaient « Une erreur est
+# intervenue » en production (relevé le 2026-09-05). Un test qui invente ses
+# entrées ne prouve rien : il faut employer le nom que HA emploie.
 VARIABLES_PLEINES = {
     "HomeStockQueryStock": {
         "product": "lait",
-        "reponse": {"products": [
+        "action_response": {"products": [
             {"product_name": "Lait", "display": "1 l"},
             {"product_name": "Lait de coco", "display": "400 ml"},
         ]},
     },
     "HomeStockQueryMeals": {
-        "reponse": {"meals": [
+        "action_response": {"meals": [
             {"recipe_name": "Gratin", "product_name": None, "note": None},
             {"recipe_name": None, "product_name": None, "note": "Restaurant"},
         ]},
     },
     "HomeStockQueryShoppingList": {
-        "reponse": {"count": 3,
-                    "items": {"Frais": [{"name": "Lait"}, {"name": "Beurre"}],
-                              "Boulangerie": [{"name": "Pain"}]}},
+        "action_response": {"count": 3,
+                            "items": {"Frais": [{"name": "Lait"},
+                                                {"name": "Beurre"}],
+                                      "Boulangerie": [{"name": "Pain"}]}},
     },
     "HomeStockAddToShoppingList": {
-        "product": "beurre", "reponse": {"item_id": 4, "created": True},
+        "product": "beurre",
+        "action_response": {"item_id": 4, "created": True},
     },
     "HomeStockQueryExpirations": {},
     "HomeStockValidateMeal": {
-        "apercu": {"lines": [
+        "action_response": {"lines": [
             {"label": "200 g", "product_name": "Pommes de terre"},
             {"label": "2 pièces", "product_name": "Œufs"},
         ]},
@@ -217,19 +229,22 @@ def test_every_speech_template_is_valid_jinja(hass):
         Template(corps["speech"]["text"], hass).ensure_valid()
 
 
-# Le même jeu, mais rien à dire. `reponse` reste DÉFINI : c'est un
-# `response_variable`, il existe toujours après l'appel — ce qui est vide,
-# c'est son contenu. Les deux intents sans service n'ont, eux, aucune variable.
+# Le même jeu, mais rien à dire. `action_response` reste DÉFINI quand le script
+# est allé jusqu'à son `stop:` — ce qui est vide, c'est son contenu. Les deux
+# intents sans service n'ont, eux, aucune variable.
 VARIABLES_VIDES = {
-    "HomeStockQueryStock": {"product": "lait", "reponse": {"products": []}},
-    "HomeStockQueryMeals": {"reponse": {"meals": []}},
-    "HomeStockQueryShoppingList": {"reponse": {"count": 0, "items": {}}},
-    "HomeStockAddToShoppingList": {"product": "beurre",
-                                   "reponse": {"item_id": 4, "created": False}},
+    "HomeStockQueryStock": {"product": "lait",
+                            "action_response": {"products": []}},
+    "HomeStockQueryMeals": {"action_response": {"meals": []}},
+    "HomeStockQueryShoppingList": {"action_response": {"count": 0, "items": {}}},
+    "HomeStockAddToShoppingList": {
+        "product": "beurre",
+        "action_response": {"item_id": 4, "created": False}},
     "HomeStockQueryExpirations": {},
-    # Aucun repas planifié : la condition arrête le script avant l'appel, donc
-    # `apercu` n'est jamais posé. C'est exactement ce que la mise en phrase
-    # doit savoir dire.
+    # Aucun repas planifié : la condition arrête le script AVANT le `stop:`,
+    # donc `action_response` n'est jamais posé. C'est exactement ce que la mise
+    # en phrase doit savoir dire — et c'est la seule branche que l'ancienne
+    # rédaction savait encore atteindre, d'où le faux négatif silencieux.
     "HomeStockValidateMeal": {},
     "HomeStockQueryToday": {},
 }
@@ -251,6 +266,59 @@ def test_every_speech_template_actually_renders(hass):
                                     parse_result=False).strip()
         assert plein, f"{nom} : rien à dire sur un cas plein"
         assert vide, f"{nom} : silence sur un cas vide — le silence est une panne"
+
+
+def test_every_speech_that_quotes_a_service_reads_action_response():
+    """LE GARDE-FOU DU DÉFAUT DU 2026-09-05 : `response_variable` ne traverse
+    pas jusqu'à `speech:`.
+
+    Cinq des sept intents ont répondu « Une erreur est intervenue » en
+    production parce qu'ils lisaient dans le gabarit le nom posé par
+    `response_variable:` sur leur pas `- action:`. Ce nom est LOCAL AU SCRIPT.
+    `intent_script` n'offre au gabarit qu'un seul nom, fixe :
+
+        action_res = await action.async_run(slots, intent_obj.context)
+        if action_res and action_res.service_response is not None:
+            slots["action_response"] = action_res.service_response
+
+    et `service_response` ne vient que de la branche `except _StopScript` de
+    `helpers/script.py` — donc uniquement d'un pas `stop:` PORTEUR du
+    `response_variable`.
+
+    Les deux moitiés sont tenues ici, parce qu'écrire l'une sans l'autre
+    laisse `action_response` indéfini et fait échouer la mise en phrase AU
+    RENDU, au moment précis où quelqu'un parle. Le rendu seul ne suffit pas à
+    l'attraper : il se fait sur des variables fabriquées par le test, qui
+    peuvent inventer n'importe quel nom. Ce contrôle-ci porte sur la STRUCTURE
+    du paquet, pas sur ce qu'on veut bien lui donner à lire.
+    """
+    for nom, corps in _load(PAQUET)["intent_script"].items():
+        etapes = corps.get("action") or []
+        locaux = {e["response_variable"] for e in etapes
+                  if isinstance(e, dict) and "action" in e
+                  and "response_variable" in e}
+        # Les commentaires Jinja parlent de ces noms pour expliquer le piège :
+        # c'est de la prose, pas de la lecture de variable.
+        texte = re.sub(r"\{#.*?#\}", "", corps["speech"]["text"], flags=re.S)
+
+        for local in locaux:
+            assert not re.search(rf"\b{re.escape(local)}\b", texte), (
+                f"{nom} : la mise en phrase lit « {local} », un nom local au "
+                f"script que Home Assistant ne lui fournit jamais — "
+                f"employer « action_response »")
+
+        if "action_response" not in texte:
+            continue
+
+        assert etapes, f"{nom} : lit action_response sans aucune action"
+        final = etapes[-1]
+        assert isinstance(final, dict) and "stop" in final, (
+            f"{nom} : lit action_response mais son script ne finit pas par un "
+            f"pas « stop: » — action_response restera indéfini")
+        assert final.get("response_variable") in locaux, (
+            f"{nom} : le « stop: » final ne renvoie pas une réponse de service "
+            f"(response_variable={final.get('response_variable')!r}, "
+            f"posés par le script : {sorted(locaux)})")
 
 
 def test_every_service_payload_actually_renders(hass):

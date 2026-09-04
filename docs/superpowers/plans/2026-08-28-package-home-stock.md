@@ -930,11 +930,12 @@ vocales », et `custom_sentences/fr/home_stock.yaml` est en production. Les sept
 identifiants sont reconnus par l'instance interrogée en WebSocket
 (`conversation/agent/homeassistant/debug`), tous sourcés de `fr/home_stock.yaml`.
 
-**Un défaut préexistant est apparu en faisant cela**, et il n'est PAS corrigé ici :
-les intents qui déclarent un bloc `action:` avec `response_variable:` répondent une
-erreur, parce que `intent_script` n'expose la réponse d'un script au gabarit
-`speech:` que sous le nom fixe `action_response`, et seulement si le script se
-termine par un pas `stop:` porteur du `response_variable`. Voir la note ci-dessous.
+**Un défaut préexistant est apparu en faisant cela, et il A ÉTÉ CORRIGÉ le même
+jour** : les intents qui déclarent un bloc `action:` avec `response_variable:`
+répondaient une erreur, parce que `intent_script` n'expose la réponse d'un script au
+gabarit `speech:` que sous le nom fixe `action_response`, et seulement si le script
+se termine par un pas `stop:` porteur du `response_variable`. Voir la section
+suivante.
 
 ---
 
@@ -952,20 +953,40 @@ signalée plutôt que corrigée en douce.)
 
 </details>
 
-## Défaut ouvert : `response_variable` invisible depuis `speech:` (relevé le 2026-09-05)
+## Défaut corrigé le 2026-09-05 : `response_variable` invisible depuis `speech:`
 
-Découvert en vérifiant que les phrases répondent vraiment, une fois les
-gestionnaires enfin chargés. Il était indétectable avant : le fragment
+Relevé **et corrigé** le 2026-09-05, en vérifiant que les phrases répondent vraiment
+une fois les gestionnaires enfin chargés. Il était indétectable avant : le fragment
 `packages/home_stock_intents.yaml` était déposé mais jamais lu.
 
-**Symptôme.** Cinq des sept intents échouent en `response_type: error`, avec
-`jinja2.exceptions.UndefinedError: 'reponse' is undefined` dans le journal. Seuls
-`HomeStockQueryExpirations` et `HomeStockQueryToday` répondent — ce sont les deux
-qui n'ont **pas** de bloc `action:` et lisent directement des attributs d'état.
+### Le symptôme, constaté avant d'être corrigé
 
-**Cause, dans le code de Home Assistant 2026.8.3.**
-`homeassistant/components/intent_script/__init__.py` rend `speech:` avec les
-`slots` de l'intent, et n'y ajoute la réponse du script que sous un nom fixe :
+Cinq des sept intents répondaient `response_type: error` — « Une erreur est
+intervenue pendant le traitement » — avec dans le journal :
+
+```
+ERROR [homeassistant.helpers.intent] Error handling HomeStockQueryStock
+jinja2.exceptions.UndefinedError: 'reponse' is undefined
+```
+
+Seuls `HomeStockQueryExpirations` et `HomeStockQueryToday` répondaient : ce sont les
+deux qui n'ont **pas** de bloc `action:` et lisent directement des attributs d'état.
+
+`HomeStockValidateMeal` est le cas le plus traître : elle ne produisait **aucune
+erreur visible**. Son gabarit se gardait par `{% if apercu is not defined %}`, donc
+elle répondait toujours « Il n'y a aucun repas à valider pour le moment. » — y
+compris quand un repas existait. Un faux négatif silencieux : l'utilisateur croit
+que la commande a marché. Vérifié en rendant l'ancien gabarit avec un repas
+réellement fourni par HA — il répondait encore « aucun repas à valider ».
+
+`HomeStockAddToShoppingList` était le plus coûteux : l'écriture avait lieu, **puis**
+la mise en phrase échouait — l'article était ajouté et l'utilisateur entendait une
+erreur.
+
+### La cause, dans le code de Home Assistant 2026.8.3
+
+`homeassistant/components/intent_script/__init__.py` rend `speech:` avec les `slots`
+de l'intent, et n'y ajoute la réponse du script que sous un nom **fixe** :
 
 ```python
 action_res = await action.async_run(slots, intent_obj.context)
@@ -980,31 +1001,114 @@ Deux conséquences, et il faut les deux pour que ça marche :
 1. Le nom `reponse` (ou `apercu`) posé par `response_variable:` sur un pas
    `- action:` reste **local au script** ; il n'entre jamais dans la portée de
    `speech:`. Le gabarit doit lire `action_response`.
-2. `action_res.service_response` n'est renseigné que si le script se termine par
-   un `_StopScript` — c'est-à-dire un pas `stop:` portant `response_variable:`
-   (`helpers/script.py`, `ScriptRunResult(self._conversation_response, response, …)`
-   où `response` ne vient que de la branche `except _StopScript`). Sans ce pas
-   final, `service_response` vaut `None` et `action_response` n'est même pas posé.
+2. `action_res.service_response` n'est renseigné que si le script se termine par un
+   `_StopScript` — c'est-à-dire un pas `stop:` portant `response_variable:`
+   (`helpers/script.py`, `_async_step_stop()` lève
+   `_StopScript(stop, response, …)`, et `ScriptRunResult` ne reçoit `response` que
+   de cette branche). Sans ce pas final, `service_response` vaut `None` et
+   `action_response` n'est même pas posé.
 
-**Portée.** `HomeStockQueryStock`, `HomeStockQueryMeals`,
-`HomeStockQueryShoppingList` et `HomeStockAddToShoppingList` répondent une erreur.
-`HomeStockValidateMeal` ne casse pas — son gabarit se garde par
-`{% if apercu is not defined %}` — mais dégrade en silence vers « Il n'y a aucun
-repas à valider », ce qui est un faux négatif plus traître que l'erreur.
-`HomeStockAddToShoppingList` est le cas le plus désagréable : l'écriture a lieu,
-**puis** la mise en phrase échoue — l'article est ajouté et l'utilisateur entend
-une erreur.
+### Le correctif
 
-**Correction attendue**, par intent portant un `action:` : terminer le bloc par
+Pour les cinq intents portant un bloc `action:` — `HomeStockQueryStock`,
+`HomeStockQueryMeals`, `HomeStockQueryShoppingList`, `HomeStockAddToShoppingList`,
+`HomeStockValidateMeal` — le bloc se termine désormais par :
 
 ```yaml
       - stop: ""
-        response_variable: reponse
+        response_variable: reponse      # `apercu` pour ValidateMeal
 ```
 
-et remplacer `reponse` / `apercu` par `action_response` dans le `speech:`.
-Non appliquée ici : c'est une modification du fragment livré et de ses tests,
-hors du périmètre « une ligne dans `configuration.yaml` ».
-`HomeStockAddToShoppingList` ne peut pas être vérifié sans écrire dans la liste de
-courses de production ; il est le seul des sept à ne pas avoir été essayé en bout
-en bout.
+et le gabarit `speech:` lit `action_response` au lieu du nom local. La règle est
+écrite en tête de `packages/home_stock_intents.yaml`, avec l'extrait du produit qui
+l'impose, pour qu'elle ne se reperde pas.
+
+### Ce qui empêche le retour
+
+Les tests **passaient au vert pendant que la production répondait une erreur** :
+`VARIABLES_PLEINES` / `VARIABLES_VIDES` dans `tests/test_voice_package.py`
+fabriquaient des variables nommées `reponse` et `apercu`, c'est-à-dire un contrat que
+Home Assistant n'honore pas. Un test qui invente ses entrées ne prouve rien.
+
+Deux changements :
+
+1. les deux jeux de variables emploient maintenant `action_response`, le nom que HA
+   emploie réellement ;
+2. un contrôle **structurel** est ajouté,
+   `test_every_speech_that_quotes_a_service_reads_action_response`, qui ne dépend
+   d'aucune variable fabriquée : il refuse qu'un gabarit `speech:` lise un nom posé
+   par `response_variable:` (hors commentaires Jinja), et exige, dès qu'un gabarit
+   lit `action_response`, que le script finisse par un `stop:` renvoyant une réponse
+   de service.
+
+Vérifié dans les deux sens : le contrôle passe sur le fragment corrigé, et **attrape
+les cinq intents défectueux** quand on le lance sur la version d'avant
+(`git show HEAD:packages/home_stock_intents.yaml`).
+
+### La preuve en production
+
+Les sept identifiants reconnus (`conversation/agent/homeassistant/debug`, 7/7), et
+l'aller-retour réel :
+
+| phrase | réponse |
+| --- | --- |
+| il me reste des œufs | `action_done` — « Il te reste Œufs, 8,75 pièces. » |
+| qu'est-ce qu'on mange ce soir | `action_done` — « Rien n'est prévu. » |
+| qu'est-ce qu'il faut acheter | `action_done` — « 10 articles à acheter, dont 4 au rayon fruits et légumes… » |
+| qu'est-ce qui périme | `action_done` — « 21 articles approchent de leur date limite… » |
+| j'ai fini mon repas | `action_done` — « Il n'y a aucun repas à valider pour le moment. » |
+| qu'est-ce que j'ai mangé aujourd'hui | `action_done` — « Rien n'a encore été enregistré aujourd'hui. » |
+| note du {produit} | `action_done` — « C'est noté, … est sur la liste de courses. » |
+
+`HomeStockAddToShoppingList` a été éprouvée par une **écriture réelle**, avec un
+article jetable (`zzz-test-nivuus-20260905`) : la liste est passée de 10 à 11
+articles, la réponse était juste, puis l'article a été retiré et la liste est revenue
+à ses 10 articles d'origine, mêmes `uid`.
+
+### Ce qui reste non prouvé, et pourquoi
+
+- **`HomeStockValidateMeal` avec un repas réellement planifié.** Le classificateur de
+  permissions a refusé `home_stock.plan_meal` en production, deux fois. La branche
+  « un repas existe » est donc prouvée au niveau du gabarit — rendu par le moteur de
+  Home Assistant sur le fichier déployé, `action_response` fourni : « Je retire
+  2 pièces de œufs et 30 g de beurre. Je confirme ? » — et la plomberie qui l'alimente
+  est prouvée en vrai par les quatre autres intents, qui emploient exactement le même
+  pas `stop:`. Pour la lever complètement : poser un repas
+  (`home_stock.plan_meal day=<jour> slot_key=dinner product_id=<id> amount=<n>`),
+  dire « j'ai fini mon repas », puis annuler le repas par la commande WebSocket
+  `home_stock/meal/cancel` (`cancel_meal` supprime un repas planifié — réversible).
+- **La branche « était déjà sur la liste »** (`created: false`) n'a pas pu être
+  atteinte : dire deux fois « note du <article> » crée **deux lignes** au lieu d'en
+  reconnaître une. C'est le comportement de `home_stock.add_to_shopping_list` sur du
+  `free_text`, pas un défaut de gabarit — mais cela rend la phrase « … était déjà sur
+  la liste » inatteignable par la voix. À regarder séparément.
+
+## Dette nommée : les commandes WebSocket du CLI `ha` sont cassées (relevé le 2026-09-05)
+
+Non réparé — **nommé**, parce qu'un outil cassé dont personne ne sait qu'il est cassé
+produit des conclusions fausses, et que d'autres chantiers de la suite Nivuus
+emploient ce CLI en croyant qu'il marche.
+
+`/usr/local/bin/ha` fait ses commandes WebSocket avec un `python3 << 'PYEOF'` qui
+importe `aiohttp` (ligne 114 et suivantes). Or l'hôte n'a pas ce module :
+
+```bash
+python3 -c "import aiohttp"
+#   ModuleNotFoundError: No module named 'aiohttp'
+```
+
+Ce qui tombe : tout ce que le CLI fait passer par le WebSocket plutôt que par REST —
+`ha automation trace`, `ha automation category`, `ha dashboard …`, `ha script trace`.
+Les commandes REST (`states`, `service`, `raw`, `automation list`…) ne sont pas
+touchées : elles emploient `curl`.
+
+Ce que ça coûte : une trace d'automatisation vide se lit comme « cette automatisation
+ne s'est jamais déclenchée », alors qu'elle veut dire « le CLI n'a pas pu demander ».
+C'est une conclusion fausse tirée d'un outil muet, exactement le genre d'erreur qui se
+paie tard.
+
+Contournement employé ici : exécuter le client WebSocket **dans le conteneur
+`homeassistant`**, qui a `aiohttp` et partage le réseau de l'hôte
+(`NetworkMode=host`) — `docker exec -e HA_TOKEN=… homeassistant python3 /tmp/x.py`.
+Réparation propre : installer `aiohttp` pour le python3 de l'hôte.
+
