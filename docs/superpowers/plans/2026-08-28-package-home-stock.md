@@ -845,8 +845,166 @@ git commit -m "fix(stack): home_stock vient du package satellite, plus d'un bind
 
 ## Ce qui reste à l'opérateur
 
-Deux gestes que ce plan prépare sans les faire :
+**État au 2026-09-05 : les trois gestes sont faits. Il ne reste rien à l'opérateur
+sur ce plan.** Le texte du 28 août est conservé plus bas, parce qu'il était exact
+ce jour-là — ce qui l'a périmé, ce sont deux évènements postérieurs, et les effacer
+aurait fait passer un plan tenu pour un plan mal écrit.
 
-1. **Pousser vers `nivuus/home-stock`** — l'environnement n'a pas d'identifiants GitHub. Après la Task 1 le dépôt local porte les 300 commits ; la commande sera `git push origin corrections-ui-panneau` (ou vers `master`, selon le point 2).
-2. **Choisir quelle branche devient `master`** — la production vit sur `corrections-ui-panneau`, et `master` est 271 commits derrière.
-3. **Ajouter `packages: !include_dir_named packages`** au `configuration.yaml` de production, sous `homeassistant:`, pour activer les phrases vocales du garde-manger. Une ligne, dans un fichier que le package s'interdit de toucher.
+### 1. Pousser vers `nivuus/home-stock` — FAIT (avant le 2026-09-05)
+
+Le dépôt distant existe et la branche locale est à jour avec lui, sans écart
+dans aucun des deux sens :
+
+```bash
+git remote -v
+#   origin  https://github.com/nivuus/home-stock.git (fetch/push)
+git rev-parse --short HEAD master origin/main
+#   3da3240  3da3240  3da3240
+git rev-list --left-right --count master...origin/main
+#   0   0
+```
+
+Ce qui a périmé le texte du 28 août : le dépôt n'avait alors pas de `remote`, et
+la note tablait sur une absence d'identifiants GitHub qui n'a plus cours.
+
+Une nuance qui survit au geste : la branche **locale** s'appelle toujours
+`master`, alors qu'elle suit `origin/main` (`git status -sb` → `## master...origin/main`).
+Le renommage a été fait côté distant seulement. C'est sans conséquence
+fonctionnelle, mais toute commande écrite `git push origin master` pousserait vers
+une branche `master` distante inexistante plutôt que vers `main` — écrire
+`git push origin master:main`, ou renommer la locale.
+
+### 2. Choisir quelle branche devient `master` — SANS OBJET (depuis le 2026-08-29)
+
+L'arbitrage n'a plus de matière : `corrections-ui-panneau` est intégralement
+contenue dans `master`.
+
+```bash
+git rev-list --left-right --count master...corrections-ui-panneau
+#   7   0          <- 7 commits d'avance, 0 de retard
+git merge-base --is-ancestor corrections-ui-panneau master; echo $?
+#   0                <- corrections-ui-panneau est un ancêtre de master
+```
+
+`corrections-ui-panneau` est à `d540a7f`, `master` à `3da3240`.
+
+Ce qui a périmé le texte du 28 août : le merge du socle CI partagé du 29 août
+(`3da3240 merge: adoption du socle CI partage nivuus`) a résorbé l'écart de
+271 commits annoncé. Il n'y a plus de branche « en retard » à promouvoir — au
+plus un ménage de branches distantes, hors périmètre de ce plan.
+
+### 3. Ajouter `packages: !include_dir_named packages` — FAIT le 2026-09-05
+
+La ligne a été posée dans le `configuration.yaml` de production, sous
+`homeassistant:`, à l'indentation du bloc (2 espaces), après `auth_mfa_modules:` :
+
+```yaml
+homeassistant:
+  ...
+  auth_mfa_modules:
+    - type: totp
+      name: Authenticator app
+  packages: !include_dir_named packages
+```
+
+Sauvegarde préalable : `configuration.yaml.backup-packages-home-stock-20260905`
+(même taille et même md5 que l'original avant écriture). Le `diff` contre elle ne
+rend que cette ligne — aucune autre valeur n'a bougé.
+
+Validée **avant** tout rechargement, par le vérificateur de Home Assistant :
+
+```bash
+docker exec homeassistant python -m homeassistant --script check_config -c /config
+#   Testing configuration at /config          (sortie 0, aucune erreur)
+```
+
+`packages:` est une clé de premier niveau fusionnée au chargement de la
+configuration ; `intent_script` n'était pas dans `/api/services` et n'expose aucun
+service `reload` — un rechargement YAML ne pouvait donc pas suffire. Le cœur a
+été redémarré une fois (`ha service homeassistant restart`), et est revenu en 37 s
+(`state: RUNNING`, `home_stock` et `intent_script` chargés).
+
+Le hook a ensuite été rejoué (`echo '{}' | python3 hooks/install.py --phase install
+--root /`) : il est passé par la branche conditionnelle « Depose des phrases
+vocales », et `custom_sentences/fr/home_stock.yaml` est en production. Les sept
+identifiants sont reconnus par l'instance interrogée en WebSocket
+(`conversation/agent/homeassistant/debug`), tous sourcés de `fr/home_stock.yaml`.
+
+**Un défaut préexistant est apparu en faisant cela**, et il n'est PAS corrigé ici :
+les intents qui déclarent un bloc `action:` avec `response_variable:` répondent une
+erreur, parce que `intent_script` n'expose la réponse d'un script au gabarit
+`speech:` que sous le nom fixe `action_response`, et seulement si le script se
+termine par un pas `stop:` porteur du `response_variable`. Voir la note ci-dessous.
+
+---
+
+<details>
+<summary>Texte d'origine, exact au 2026-08-28 — conservé pour mémoire</summary>
+
+> Deux gestes que ce plan prépare sans les faire :
+>
+> 1. **Pousser vers `nivuus/home-stock`** — l'environnement n'a pas d'identifiants GitHub. Après la Task 1 le dépôt local porte les 300 commits ; la commande sera `git push origin corrections-ui-panneau` (ou vers `master`, selon le point 2).
+> 2. **Choisir quelle branche devient `master`** — la production vit sur `corrections-ui-panneau`, et `master` est 271 commits derrière.
+> 3. **Ajouter `packages: !include_dir_named packages`** au `configuration.yaml` de production, sous `homeassistant:`, pour activer les phrases vocales du garde-manger. Une ligne, dans un fichier que le package s'interdit de toucher.
+
+(L'intitulé annonçait « deux gestes » pour trois points — coquille d'origine,
+signalée plutôt que corrigée en douce.)
+
+</details>
+
+## Défaut ouvert : `response_variable` invisible depuis `speech:` (relevé le 2026-09-05)
+
+Découvert en vérifiant que les phrases répondent vraiment, une fois les
+gestionnaires enfin chargés. Il était indétectable avant : le fragment
+`packages/home_stock_intents.yaml` était déposé mais jamais lu.
+
+**Symptôme.** Cinq des sept intents échouent en `response_type: error`, avec
+`jinja2.exceptions.UndefinedError: 'reponse' is undefined` dans le journal. Seuls
+`HomeStockQueryExpirations` et `HomeStockQueryToday` répondent — ce sont les deux
+qui n'ont **pas** de bloc `action:` et lisent directement des attributs d'état.
+
+**Cause, dans le code de Home Assistant 2026.8.3.**
+`homeassistant/components/intent_script/__init__.py` rend `speech:` avec les
+`slots` de l'intent, et n'y ajoute la réponse du script que sous un nom fixe :
+
+```python
+action_res = await action.async_run(slots, intent_obj.context)
+# if the action returns a response, make it
+# available to the speech/reprompt templates below
+if action_res and action_res.service_response is not None:
+    slots["action_response"] = action_res.service_response
+```
+
+Deux conséquences, et il faut les deux pour que ça marche :
+
+1. Le nom `reponse` (ou `apercu`) posé par `response_variable:` sur un pas
+   `- action:` reste **local au script** ; il n'entre jamais dans la portée de
+   `speech:`. Le gabarit doit lire `action_response`.
+2. `action_res.service_response` n'est renseigné que si le script se termine par
+   un `_StopScript` — c'est-à-dire un pas `stop:` portant `response_variable:`
+   (`helpers/script.py`, `ScriptRunResult(self._conversation_response, response, …)`
+   où `response` ne vient que de la branche `except _StopScript`). Sans ce pas
+   final, `service_response` vaut `None` et `action_response` n'est même pas posé.
+
+**Portée.** `HomeStockQueryStock`, `HomeStockQueryMeals`,
+`HomeStockQueryShoppingList` et `HomeStockAddToShoppingList` répondent une erreur.
+`HomeStockValidateMeal` ne casse pas — son gabarit se garde par
+`{% if apercu is not defined %}` — mais dégrade en silence vers « Il n'y a aucun
+repas à valider », ce qui est un faux négatif plus traître que l'erreur.
+`HomeStockAddToShoppingList` est le cas le plus désagréable : l'écriture a lieu,
+**puis** la mise en phrase échoue — l'article est ajouté et l'utilisateur entend
+une erreur.
+
+**Correction attendue**, par intent portant un `action:` : terminer le bloc par
+
+```yaml
+      - stop: ""
+        response_variable: reponse
+```
+
+et remplacer `reponse` / `apercu` par `action_response` dans le `speech:`.
+Non appliquée ici : c'est une modification du fragment livré et de ses tests,
+hors du périmètre « une ligne dans `configuration.yaml` ».
+`HomeStockAddToShoppingList` ne peut pas être vérifié sans écrire dans la liste de
+courses de production ; il est le seul des sept à ne pas avoir été essayé en bout
+en bout.
