@@ -1043,7 +1043,9 @@ Deux changements :
 
 Vérifié dans les deux sens : le contrôle passe sur le fragment corrigé, et **attrape
 les cinq intents défectueux** quand on le lance sur la version d'avant
-(`git show HEAD:packages/home_stock_intents.yaml`).
+(`git show 3da3240:packages/home_stock_intents.yaml` — le SHA d'avant le
+correctif, écrit en dur : `HEAD` porte désormais la version corrigée, et laisser
+`HEAD` ici ferait dire à la vérification qu'elle n'attrape plus rien).
 
 ### La preuve en production
 
@@ -1065,23 +1067,66 @@ article jetable (`zzz-test-nivuus-20260905`) : la liste est passée de 10 à 11
 articles, la réponse était juste, puis l'article a été retiré et la liste est revenue
 à ses 10 articles d'origine, mêmes `uid`.
 
-### Ce qui reste non prouvé, et pourquoi
+### Une observation en attente — pas une dette, aucune action à programmer
 
-- **`HomeStockValidateMeal` avec un repas réellement planifié.** Le classificateur de
-  permissions a refusé `home_stock.plan_meal` en production, deux fois. La branche
-  « un repas existe » est donc prouvée au niveau du gabarit — rendu par le moteur de
-  Home Assistant sur le fichier déployé, `action_response` fourni : « Je retire
-  2 pièces de œufs et 30 g de beurre. Je confirme ? » — et la plomberie qui l'alimente
-  est prouvée en vrai par les quatre autres intents, qui emploient exactement le même
-  pas `stop:`. Pour la lever complètement : poser un repas
-  (`home_stock.plan_meal day=<jour> slot_key=dinner product_id=<id> amount=<n>`),
-  dire « j'ai fini mon repas », puis annuler le repas par la commande WebSocket
-  `home_stock/meal/cancel` (`cancel_meal` supprime un repas planifié — réversible).
-- **La branche « était déjà sur la liste »** (`created: false`) n'a pas pu être
-  atteinte : dire deux fois « note du <article> » crée **deux lignes** au lieu d'en
-  reconnaître une. C'est le comportement de `home_stock.add_to_shopping_list` sur du
-  `free_text`, pas un défaut de gabarit — mais cela rend la phrase « … était déjà sur
-  la liste » inatteignable par la voix. À regarder séparément.
+**`HomeStockValidateMeal` avec un repas réellement planifié se clôt au premier usage
+réel.** Le jour où quelqu'un pose un repas depuis le panneau et dit « j'ai fini mon
+repas », la preuve se fait sans que personne l'organise. Rien à inscrire dans une
+liste de tâches.
+
+Ce qui est déjà prouvé, séparément et solidement :
+
+- la **plomberie** qui alimente `action_response` tourne en vrai sur les quatre
+  autres intents, par exactement le même pas `stop:` ;
+- le **gabarit** est rendu par le moteur de Home Assistant sur le fichier déployé,
+  `action_response` fourni, dans ses quatre branches — dont « Je retire 2 pièces de
+  œufs et 30 g de beurre. Je confirme ? ».
+
+Ce qui reste est leur composition sur cette seule intention. `home_stock.plan_meal` a
+été refusé deux fois par le classificateur de permissions : un refus de permission est
+une décision du propriétaire, pas un obstacle à contourner par un autre chemin — on
+s'est arrêté là, délibérément.
+
+C'est aussi sur cette intention que le défaut a été le plus dur à établir, parce
+qu'elle ne produisait **aucune erreur**. Un défaut silencieux ne se prouve que d'une
+façon : rendre l'**ancien** gabarit contre un repas réellement fourni par HA, et le
+voir répondre « Il n'y a aucun repas à valider pour le moment. » C'est fait, et c'est
+ce qui a transformé un soupçon en constat.
+
+### La branche « était déjà sur la liste » est gardée — elle est vraie, mais pas par la voix
+
+Vérifié avant de conclure, parce que la question « inatteignable **en général**, ou
+seulement **par la voix** ? » change la réponse.
+
+`add_to_shopping_list` ne rend `created: false` que par deux chemins
+(`application.py`) : un `product_id` dont la ligne est déjà ouverte
+(`open_item_for_product`), ou un `idempotency_key` déjà employé. L'intent vocal
+n'envoie que du `free_text`, donc `product_id` vaut `None`, donc `created` vaut
+**toujours** vrai — dire deux fois « note du lait » crée deux lignes.
+
+Mais les autres appelants — le panneau, un appel de service, la commande WebSocket qui
+porte un `idempotency_key` — l'atteignent parfaitement. Mesuré, deux appels au même
+service :
+
+```
+POST /api/services/home_stock/add_to_shopping_list  {"product_id": 298}
+  1er -> {"item_id": 15, "created": true}
+  2e  -> {"item_id": 15, "created": false}      et la liste ne gagne PAS de 2e ligne
+```
+
+(l'article de test a ensuite été retiré ; la liste est revenue à ses 10 articles,
+`uid` 1 à 10.)
+
+La branche décrit donc un comportement **réel** du service, pas une promesse morte :
+elle reste juste, et elle servira le jour où une phrase portera un produit du
+catalogue. Elle est conservée, avec la mesure écrite en commentaire dans
+`packages/home_stock_intents.yaml` pour que personne ne la retire en croyant nettoyer
+du code mort — ni ne la « répare » en croyant combler un oubli.
+
+**Aucun chantier de déduplication n'est engagé.** Dédupliquer du texte libre — « lait »
+contre « du lait » contre « le lait » — est un terrier sans fond propre, et le
+comportement non dédupliquant appartient à l'appel de service, pas au paquet vocal. Si
+le propriétaire en veut un un jour, il partira de cette note.
 
 ## Dette nommée : les commandes WebSocket du CLI `ha` sont cassées (relevé le 2026-09-05)
 

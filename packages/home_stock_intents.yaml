@@ -133,7 +133,25 @@ intent_script:
       text: >-
         {#- `default(true)` sans le drapeau booléen : `created` vaut FAUX
             quand la ligne existait déjà, et `default(x, true)` prendrait
-            ce faux pour une absence. #}
+            ce faux pour une absence.
+
+            LA SECONDE BRANCHE EST INATTEIGNABLE PAR LA VOIX, ET ON LA GARDE.
+            Mesuré le 2026-09-05 : `add_to_shopping_list` ne rend
+            `created: false` que par deux chemins — un `product_id` dont la
+            ligne est déjà ouverte (`open_item_for_product`), ou un
+            `idempotency_key` déjà employé. Cet intent n'envoie que du
+            `free_text`, donc `product_id` vaut None, donc `created` vaut
+            TOUJOURS vrai ici : dire deux fois « note du lait » crée deux
+            lignes. Les autres appelants, eux, atteignent bien ce cas —
+            vérifié en appelant deux fois le service avec `product_id: 298` :
+            `{item_id: 15, created: true}` puis `{item_id: 15, created: false}`,
+            sans seconde ligne. La branche décrit donc un comportement RÉEL du
+            service, pas une promesse morte : elle reste juste, et elle servira
+            le jour où une phrase portera un produit du catalogue.
+
+            Dédupliquer le texte libre (« lait » contre « du lait » contre
+            « le lait ») n'est PAS la réponse et n'est pas engagé : c'est un
+            terrier sans fond propre. #}
         {% if action_response.created | default(true) %}
         C'est noté, {{ product }} est sur la liste de courses.
         {%- else %}

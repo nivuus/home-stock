@@ -287,10 +287,31 @@ def test_every_speech_that_quotes_a_service_reads_action_response():
 
     Les deux moitiés sont tenues ici, parce qu'écrire l'une sans l'autre
     laisse `action_response` indéfini et fait échouer la mise en phrase AU
-    RENDU, au moment précis où quelqu'un parle. Le rendu seul ne suffit pas à
-    l'attraper : il se fait sur des variables fabriquées par le test, qui
-    peuvent inventer n'importe quel nom. Ce contrôle-ci porte sur la STRUCTURE
-    du paquet, pas sur ce qu'on veut bien lui donner à lire.
+    RENDU, au moment précis où quelqu'un parle.
+
+    POURQUOI CE CONTRÔLE N'A PAS DE FIXTURE, ET NE DOIT JAMAIS EN RECEVOIR.
+    Il ne prend pas `hass`, ne rend aucun gabarit, et ne fabrique aucune
+    variable — c'est sa raison d'être, pas une paresse à corriger. Le défaut
+    du 2026-09-05 a survécu à une batterie de tests de RENDU parce que ces
+    tests fournissaient eux-mêmes les variables : ils nommaient `reponse` et
+    `apercu`, donc ils rendaient parfaitement, donc ils passaient au vert
+    pendant que la production répondait une erreur. Un test qui fournit son
+    propre contexte ne peut prouver que la cohérence du test avec lui-même ;
+    il ne peut pas contredire une croyance fausse sur le produit, parce que
+    c'est cette croyance qui a écrit le contexte.
+
+    D'où un contrôle qui ne lit QUE le fichier livré : les noms posés par
+    `response_variable:`, le dernier pas du script, et le texte du gabarit.
+    Rien d'inventé, donc rien qui puisse mentir de concert avec le paquet.
+    Si quelqu'un « simplifie » un jour ce test en lui passant `hass` et un jeu
+    de variables, il lui aura repris exactement ce qui le rend capable
+    d'échouer.
+
+    Éprouvé dans les deux sens, et c'est ce qui le rend crédible : il passe sur
+    le paquet corrigé, et il attrape nommément les cinq intents défectueux
+    quand on le lance sur `git show 3da3240:packages/home_stock_intents.yaml`
+    — le SHA d'avant le correctif, en dur : `HEAD` porte maintenant la version
+    corrigée, donc s'y référer ferait croire que le contrôle n'attrape rien.
     """
     for nom, corps in _load(PAQUET)["intent_script"].items():
         etapes = corps.get("action") or []
