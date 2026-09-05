@@ -11,6 +11,29 @@
 #      avec l'accord de nombre en Jinja ;
 #   2. une phrase quand il n'y a rien — « il ne reste plus d'œufs » est une
 #      réponse, le silence est une panne.
+#
+# LA REGLE QUI RELIE `action:` A `speech:` — corrigée le 2026-09-05, après que
+# cinq des sept intents ont répondu « Une erreur est intervenue » en production.
+# `response_variable:` posé sur un pas `- action:` range la réponse dans une
+# variable LOCALE AU SCRIPT ; elle n'entre jamais dans la portée du gabarit
+# `speech:`. `intent_script` ne lui offre qu'un seul nom, FIXE :
+#
+#     action_res = await action.async_run(slots, intent_obj.context)
+#     if action_res and action_res.service_response is not None:
+#         slots["action_response"] = action_res.service_response
+#                                        (components/intent_script/__init__.py)
+#
+# et `service_response` n'est renseigné que si le script se termine par un pas
+# `stop:` PORTEUR du `response_variable` — seule la branche `except _StopScript`
+# de `helpers/script.py` alimente ce champ. Donc, pour tout intent qui parle de
+# ce qu'un service lui a répondu, IL FAUT LES DEUX :
+#
+#     1. un `- stop: ""` final avec `response_variable:` ;
+#     2. `action_response` dans le `speech:`, jamais le nom local.
+#
+# Écrire l'un sans l'autre rend `action_response` indéfini, et la mise en phrase
+# échoue AU RENDU — au moment précis où quelqu'un parle. `tests/test_voice_package.py`
+# tient désormais les deux moitiés de cette règle.
 intent_script:
 
   # 1 — « Il me reste des œufs ? »
@@ -20,9 +43,11 @@ intent_script:
         data:
           name: "{{ product }}"
         response_variable: reponse
+      - stop: ""
+        response_variable: reponse
     speech:
       text: >-
-        {% set lignes = reponse.products | default([], true) %}
+        {% set lignes = action_response.products | default([], true) %}
         {%- if lignes %}
         {#- Pas d'accumulateur : le bac à sable Jinja de Home Assistant refuse
             `list.append`, et l'erreur ne sort qu'au RENDU — donc au moment
@@ -40,7 +65,7 @@ intent_script:
   # Le créneau est FACULTATIF : sans lui, la journée entière. D'où le
   # dictionnaire de charge construit en gabarit plutôt que deux appels dans un
   # `choose` — un `response_variable` posé dans une branche de `choose` serait
-  # hors de portée de la mise en phrase, et l'intent parlerait dans le vide.
+  # hors de portée du `stop:` final, et l'intent parlerait dans le vide.
   HomeStockQueryMeals:
     action:
       - variables:
@@ -51,9 +76,11 @@ intent_script:
           {{ {'start': jour, 'end': jour}
              | combine({'slot_key': creneau} if creneau else {}) }}
         response_variable: reponse
+      - stop: ""
+        response_variable: reponse
     speech:
       text: >-
-        {% set repas = reponse.meals | default([], true) %}
+        {% set repas = action_response.meals | default([], true) %}
         {%- if repas %}
         {{ 'Au menu' if repas | count > 1 else 'Il y a' }} :
         {% for r in repas %}{{ r.recipe_name or r.product_name or r.note }}
@@ -68,13 +95,16 @@ intent_script:
     action:
       - action: home_stock.query_shopping_list
         response_variable: reponse
+      - stop: ""
+        response_variable: reponse
     speech:
       text: >-
-        {#- `reponse['items']` et NON `reponse.items` : sur un dictionnaire,
-            le point trouve d'abord la méthode `items()` de Python, et la mise
-            en phrase échoue au rendu — au moment où quelqu'un parle. #}
-        {% set rayons = reponse['items'] | default({}, true) %}
-        {%- set total = reponse['count'] | default(0, true) %}
+        {#- `action_response['items']` et NON `action_response.items` : sur un
+            dictionnaire, le point trouve d'abord la méthode `items()` de
+            Python, et la mise en phrase échoue au rendu — au moment où
+            quelqu'un parle. #}
+        {% set rayons = action_response['items'] | default({}, true) %}
+        {%- set total = action_response['count'] | default(0, true) %}
         {%- if total %}
         {{ total }} article{{ 's' if total > 1 else '' }} à acheter
         {%- for rayon, lignes in rayons.items() %}
@@ -97,12 +127,32 @@ intent_script:
           free_text: >-
             {{ ((quantity ~ ' ') if quantity is defined and quantity else '') ~ product }}
         response_variable: reponse
+      - stop: ""
+        response_variable: reponse
     speech:
       text: >-
         {#- `default(true)` sans le drapeau booléen : `created` vaut FAUX
             quand la ligne existait déjà, et `default(x, true)` prendrait
-            ce faux pour une absence. #}
-        {% if reponse.created | default(true) %}
+            ce faux pour une absence.
+
+            LA SECONDE BRANCHE EST INATTEIGNABLE PAR LA VOIX, ET ON LA GARDE.
+            Mesuré le 2026-09-05 : `add_to_shopping_list` ne rend
+            `created: false` que par deux chemins — un `product_id` dont la
+            ligne est déjà ouverte (`open_item_for_product`), ou un
+            `idempotency_key` déjà employé. Cet intent n'envoie que du
+            `free_text`, donc `product_id` vaut None, donc `created` vaut
+            TOUJOURS vrai ici : dire deux fois « note du lait » crée deux
+            lignes. Les autres appelants, eux, atteignent bien ce cas —
+            vérifié en appelant deux fois le service avec `product_id: 298` :
+            `{item_id: 15, created: true}` puis `{item_id: 15, created: false}`,
+            sans seconde ligne. La branche décrit donc un comportement RÉEL du
+            service, pas une promesse morte : elle reste juste, et elle servira
+            le jour où une phrase portera un produit du catalogue.
+
+            Dédupliquer le texte libre (« lait » contre « du lait » contre
+            « le lait ») n'est PAS la réponse et n'est pas engagé : c'est un
+            terrier sans fond propre. #}
+        {% if action_response.created | default(true) %}
         C'est noté, {{ product }} est sur la liste de courses.
         {%- else %}
         {{ product }} était déjà sur la liste.
@@ -148,14 +198,22 @@ intent_script:
           portions_eaten: 1
           dry_run: "{{ confirm | default('', true) != 'yes' }}"
         response_variable: apercu
+      - stop: ""
+        response_variable: apercu
     speech:
       text: >-
-        {% if apercu is not defined or apercu is none %}
+        {#- Le `condition:` plus haut arrête le script SANS passer par le
+            `stop:` : `action_response` reste alors indéfini, et cette première
+            branche est la seule à répondre. C'est voulu — mais avant le
+            2026-09-05 elle répondait TOUJOURS, y compris quand un repas
+            existait, parce que le nom local `apercu` n'atteignait jamais le
+            gabarit. Un faux négatif silencieux, pire qu'une erreur. #}
+        {% if action_response is not defined or action_response is none %}
         Il n'y a aucun repas à valider pour le moment.
         {%- elif confirm | default('', true) == 'yes' %}
         C'est enregistré, le repas est validé.
         {%- else %}
-        {%- set lignes = apercu.lines | default([], true) %}
+        {%- set lignes = action_response.lines | default([], true) %}
         {%- if lignes %}
         Je retire {% for l in lignes %}{{ l.label }} de {{ l.product_name | lower }}
         {%- if not loop.last %}{{ ' et ' if loop.revindex == 2 else ', ' }}{% endif %}
