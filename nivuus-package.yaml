@@ -1,6 +1,6 @@
 apiVersion: nivuus.dev/v1
 name: home-stock
-version: 1.0.0
+version: 0.0.0
 label: "Garde-manger (stocks, dates limites, courses)"
 tier: userspace
 
