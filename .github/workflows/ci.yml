@@ -21,3 +21,5 @@ jobs:
       # pytest-homeassistant-custom-component pins Home Assistant, which uses
       # Python 3.14 syntax. The socle's 3.12 default cannot run this suite.
       python-version: "3.14"
+  package:
+    uses: nivuus/.github/.github/workflows/ci-package.yml@main
