@@ -138,15 +138,14 @@ def replace_tree(source, dest):
     _discard(old_aside)
 
     try:
-        # Le bytecode de la source n'est pas de la source. Un __pycache__ pose
-        # par l'interpreteur qui a lu ce depot (pytest en collecte un pour
-        # chaque module qu'il importe) serait recopie tel quel dans le config
-        # de Home Assistant, qui tourne sur un AUTRE interpreteur : au mieux
-        # inutile, au pire un .pyc perime a cote du .py qui vient d'arriver.
-        # Mesure : sans ce filtre, la suite autonome tombe sur
-        # "le bytecode perime a disparu: got True, want False" des que la
-        # source porte un __pycache__ - ce qui est exactement ce qui arrive
-        # quand pytest passe avant.
+        # The source tree's bytecode is not part of the source. A __pycache__
+        # left in the checkout by whatever interpreter read it - pytest writes
+        # one per module it imports - would be copied straight into Home
+        # Assistant's config, next to the .py files that just arrived, for an
+        # interpreter that is not the one that wrote it. Measured: without
+        # this filter the standalone suite fails with "le bytecode perime a
+        # disparu: got True, want False" as soon as the source carries a
+        # __pycache__, which is exactly what happens when pytest ran first.
         shutil.copytree(source, tmp, symlinks=True,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     except Exception:
