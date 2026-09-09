@@ -341,7 +341,7 @@ async def test_the_consume_service_refuses_a_negative_quantity_on_a_batch(
 async def test_the_consume_service_can_target_one_batch(hass, setup_entry):
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager
-    old = await hass.async_add_executor_job(
+    _older_batch = await hass.async_add_executor_job(
         lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))
     recent = await hass.async_add_executor_job(
         lambda: manager.add_stock(article_id=1, quantity=100.0, location_id=1))

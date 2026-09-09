@@ -9,7 +9,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
 from homeassistant.helpers import template as template_helper
 
 RACINE = Path(__file__).resolve().parent.parent

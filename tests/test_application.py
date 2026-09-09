@@ -2,34 +2,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from custom_components.home_stock.application import PartsError, StockManager
+from custom_components.home_stock.application import PartsError
 from custom_components.home_stock.domain.stock import InsufficientStock
 from custom_components.home_stock.storage import repositories as repo
-from custom_components.home_stock.storage.database import Database
-from custom_components.home_stock.storage.migrations import apply_migrations
-
-
-@pytest.fixture
-def manager(tmp_path):
-    db = Database(str(tmp_path / "t.db"))
-    db.connect()
-    with db.write() as conn:
-        apply_migrations(conn)
-    yield StockManager(db)
-    db.close()
-
-
-@pytest.fixture
-def pasta(manager):
-    """A 'Pâtes' product in grams, one article at 3.5 kcal/g, and a pantry."""
-    with manager.db.write() as conn:
-        location_id = repo.insert_location(conn, name="Placard", kind="pantry")
-        product_id = repo.insert_product(conn, name="Pâtes", base_unit="g",
-                                         min_quantity=200)
-        article_id = repo.insert_article(conn, product_id=product_id,
-                                         label="Panzani 500 g", net_quantity=500,
-                                         kcal_per_base_unit=3.5)
-    return {"location_id": location_id, "product_id": product_id, "article_id": article_id}
 
 
 def _seed_article(manager, *, base_unit: str = "g",

@@ -6,7 +6,6 @@ journal reste en ajout seul, et les quatre requêtes d'agrégat absorbent la
 correction sans qu'une ligne de SQL bouge.
 """
 import sqlite3
-from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,8 +13,6 @@ import pytest
 from custom_components.home_stock.domain.correction import CorrectionError
 from custom_components.home_stock.messages import french_message
 from custom_components.home_stock.storage import repositories as repo
-
-from test_application import manager, pasta  # noqa: F401
 
 PARIS = ZoneInfo("Europe/Paris")
 

@@ -552,7 +552,6 @@ def test_checking_needs_no_open_session(service):
 # --- § 11 : apprendre le parcours à la clôture ------------------------------
 
 def _walk(service, *, store="Leclerc", articles=(10,), close=True):
-    from custom_components.home_stock.storage import repositories as repo
     session = service.start(store=store)
     for article_id in articles:
         service.add_line(article_id=article_id, quantity=1, unit_price=None,
@@ -568,8 +567,8 @@ def _second_product(service):
     with service.manager.db.write() as conn:
         product_id = repo.insert_product(
             conn, name="Yaourt", base_unit="piece",
-            aisle_id=(select := conn.execute(
-                "SELECT id FROM aisle WHERE name = 'Crémerie'").fetchone())["id"])
+            aisle_id=conn.execute(
+                "SELECT id FROM aisle WHERE name = 'Crémerie'").fetchone()["id"])
         return repo.insert_article(conn, product_id=product_id, label="Nature x4")
 
 

@@ -176,7 +176,7 @@ def test_keep_has_no_duplicates():
 
 # --- tâche 3 : la fusion du plan, toujours pure -----------------------------
 
-from custom_components.home_stock.domain.maintenance import merge_plan
+from custom_components.home_stock.domain.maintenance import merge_plan  # noqa: E402  (section import, see ruff.toml)
 
 MACRO = {
     "items": [

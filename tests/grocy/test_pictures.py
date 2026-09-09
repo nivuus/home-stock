@@ -19,8 +19,8 @@ def test_the_three_families_on_the_real_data(grocy_reel):
 def test_the_forty_six_distinct_unsplash_photos(grocy_reel):
     """112 emplacements, 46 images distinctes. Dette assumée et inscrite : le
     jour où elles tomberont, elles tomberont toutes ensemble."""
-    vues = {ref.src for l in grocy_reel["recipes"]
-            for ref in gp.references(l["description"]) if ref.family == "external"}
+    vues = {ref.src for ligne in grocy_reel["recipes"]
+            for ref in gp.references(ligne["description"]) if ref.family == "external"}
     assert len(vues) == 46
 
 
@@ -95,7 +95,7 @@ def test_an_inline_payload_is_written_as_a_real_file(tmp_path, grocy_reel):
     """La recette 69 garde ses data-URI intacts dans les fixtures, et c'est
     elle qui prouve qu'on écrit un VRAI JPEG. (La spec disait 41 ; la 41 n'en
     porte aucun — amendement A1 du § 22.)"""
-    r69 = next(l for l in grocy_reel["recipes"] if l["id"] == 69)
+    r69 = next(ligne for ligne in grocy_reel["recipes"] if ligne["id"] == 69)
     ref = next(r for r in gp.references(r69["description"]) if r.family == "inline")
     chemin = tmp_path / "recette-69-inline-0.jpg"
     octets = gp.ecrire_inline(ref.src, str(chemin))
@@ -108,9 +108,9 @@ def test_even_the_stubbed_payloads_decode_to_a_real_jpeg(tmp_path, grocy_reel):
     """Le stub des 60 autres est un JPEG 1×1 valide, pas un caractère de
     remplissage : un test qui écrirait du texte et vérifierait « ça pèse plus
     de zéro » ne prouverait rien du décodage."""
-    recette = next(l for l in grocy_reel["recipes"]
-                   if l["id"] != 69
-                   and "data:image" in (l["description"] or ""))
+    recette = next(ligne for ligne in grocy_reel["recipes"]
+                   if ligne["id"] != 69
+                   and "data:image" in (ligne["description"] or ""))
     ref = next(r for r in gp.references(recette["description"])
                if r.family == "inline")
     chemin = tmp_path / "stub.jpg"

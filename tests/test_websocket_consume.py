@@ -1,5 +1,4 @@
 """Consumption and the journal, as seen from the panel."""
-import pytest
 
 
 async def test_consume_takes_from_the_fifo_batch(hass, hass_ws_client, setup_entry):

@@ -47,7 +47,7 @@ from .const import (
     RECIPE_SOURCES,
 )
 from .domain.conversion import ConversionError, plan_conversion
-from .domain.route import RouteEntry, learn_route
+from .domain.route import learn_route
 from .domain.shoppinglist import (
     Claim,
     WantedItem,
@@ -58,7 +58,6 @@ from .domain.shoppinglist import (
 from .domain.correction import (
     CorrectionError,
     check_correctable,
-    correction_key,
     reprice,
     reversal,
 )

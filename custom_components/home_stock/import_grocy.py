@@ -19,10 +19,7 @@ from typing import Any
 
 from .grocy.refs import grocy_product_id
 from .grocy.units import (
-    CONTAINER_UNITS,
     DOSAGE_UNITS,
-    MASS_UNITS,
-    VOLUME_UNITS,
     base_unit,
 )
 from .storage import repositories as repo

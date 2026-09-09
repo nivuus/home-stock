@@ -343,7 +343,7 @@ async def test_an_off_no_grade_sentinel_reports_nothing_dropped(
     """"unknown" is OFF's own way of saying "no grade" — 14 of 51 real
     catalogue records carry it. article/create must not tell the user a
     value was rejected when the record simply never had one."""
-    entry = await setup_entry()
+    await setup_entry()
     client = await hass_ws_client(hass)
 
     off_payload = {**MUESLI.product, "nutriscore_grade": "unknown"}
@@ -434,7 +434,7 @@ async def test_getting_a_product_refuses_a_boolean_as_an_id(
     """A bare `int` schema entry accepts JSON `true`, which Python's int()
     resolves to 1 — the bounded validator must refuse it outright instead
     of silently resolving to a real product."""
-    entry = await setup_entry(with_article=True)
+    await setup_entry(with_article=True)
     client = await hass_ws_client(hass)
 
     await client.send_json({"id": 1, "type": "home_stock/product/get",

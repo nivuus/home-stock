@@ -143,12 +143,12 @@ def test_resolve_kcal_rate_falls_back_to_the_product_reference(conn):
 def test_barcodes_to_resync_everything_lists_every_barcoded_article(conn):
     product_id = repo.insert_product(conn, name="Muesli", base_unit="g")
     with_code = repo.insert_article(conn, product_id=product_id)
-    without_code = repo.insert_article(conn, product_id=product_id)
+    _without_code = repo.insert_article(conn, product_id=product_id)
     repo.link_barcode(conn, "111", with_code)
 
     found = repo.barcodes_to_resync(conn, article_id=None, product_id=None, everything=True)
 
-    # without_code never scanned, so it has nothing to resync from: silently
+    # _without_code never scanned, so it has nothing to resync from: silently
     # left out rather than reported as an error.
     assert found == [("111", with_code)]
 

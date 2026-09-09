@@ -175,7 +175,7 @@ async def test_every_queued_command_accepts_the_offline_queue_s_idempotency_key(
     def _id() -> int:
         return next(ids)
 
-    entry = await setup_entry(with_article=True)
+    await setup_entry(with_article=True)
     client = await hass_ws_client(hass)
 
     # --- independent of any session -----------------------------------

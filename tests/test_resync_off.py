@@ -1,5 +1,4 @@
 """home_stock.resync_off: a background catalogue refresh from Open Food Facts."""
-import asyncio
 import json
 import threading
 

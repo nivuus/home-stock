@@ -158,7 +158,7 @@ def test_an_unmatched_line_lands_in_by_hand_and_blocks_nothing(manager):
                {"product": "Courgette", "amount": 100.0}],
         stock_of=[("Courgette", 900.0, {})])
     preview = manager.preview_meal(_meal(manager, recipe_id, servings=1.0))
-    assert [l["raw_text"] for l in preview["by_hand"]] == ["une gousse d'ail"]
+    assert [ligne["raw_text"] for ligne in preview["by_hand"]] == ["une gousse d'ail"]
     assert preview["blocking"] == []
 
 
@@ -167,7 +167,7 @@ def test_an_unquantified_line_lands_in_by_hand_and_blocks_nothing(manager):
         manager, recipe_servings=1,
         lines=[{"product": "Huile", "unit": "ml", "raw_text": "un filet d'huile"}])
     preview = manager.preview_meal(_meal(manager, recipe_id, servings=1.0))
-    assert [l["status"] for l in preview["by_hand"]] == ["unquantified"]
+    assert [ligne["status"] for ligne in preview["by_hand"]] == ["unquantified"]
     assert preview["blocking"] == []
 
 
@@ -180,7 +180,7 @@ def test_an_ignored_line_is_silent_and_appears_nowhere(manager):
                {"product": "Courgette", "amount": 100.0}],
         stock_of=[("Courgette", 900.0, {})])
     preview = manager.preview_meal(_meal(manager, recipe_id, servings=1.0))
-    assert [l["raw_text"] for l in preview["lines"]] == ["Courgette"]
+    assert [ligne["raw_text"] for ligne in preview["lines"]] == ["Courgette"]
     assert preview["by_hand"] == []
     assert preview["blocking"] == []
 
@@ -206,7 +206,7 @@ def test_two_lines_of_the_same_product_share_the_stock(manager):
                {"product": "Oignon", "amount": 300.0}],
         stock_of=[("Oignon", 500.0, {})])
     preview = manager.preview_meal(_meal(manager, recipe_id, servings=1.0))
-    assert [l["status"] for l in preview["lines"]] == ["ok", "short"]
+    assert [ligne["status"] for ligne in preview["lines"]] == ["ok", "short"]
 
 
 # --- le plat ----------------------------------------------------------------

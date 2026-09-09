@@ -6,9 +6,12 @@ from pathlib import Path
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.home_stock.application import StockManager
 from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.off.client import OffLookup
 from custom_components.home_stock.storage import repositories as repo
+from custom_components.home_stock.storage.database import Database
+from custom_components.home_stock.storage.migrations import apply_migrations
 
 
 @pytest.fixture(autouse=True)
@@ -158,7 +161,7 @@ def setup_entry(hass):
             piece_article_id = piece_location_id = None
             with manager.db.write() as conn:
                 if with_article:
-                    location_id = repo.insert_location(conn, name="Placard", kind="pantry")
+                    repo.insert_location(conn, name="Placard", kind="pantry")
                     product_id = repo.insert_product(
                         conn, name="Article prêt à ranger", base_unit="g")
                     repo.insert_article(conn, product_id=product_id)
@@ -243,7 +246,7 @@ def _build_grocy_db(path, tables: dict[str, list[dict]]) -> None:
             if not colonnes:
                 continue
             declaration = ", ".join(
-                f'"{col}" {_affinity(l[col] for l in lignes)}' for col in colonnes)
+                f'"{col}" {_affinity(ligne[col] for ligne in lignes)}' for col in colonnes)
             conn.execute(f'CREATE TABLE "{nom}" ({declaration})')
             conn.executemany(
                 f'INSERT INTO "{nom}" VALUES ({", ".join("?" * len(colonnes))})',
@@ -282,3 +285,37 @@ def grocy_reel_db(tmp_path, grocy_reel) -> str:
     conn.commit()
     conn.close()
     return str(chemin)
+
+
+# --- the application-layer fixtures ------------------------------------------
+#
+# These two used to live in tests/test_application.py, and four sibling modules
+# reached them with a plain `from test_application import manager, pasta`,
+# silenced by a noqa. That import is exactly what pytest fixtures exist to
+# avoid: the name lands in the module namespace, every test function taking
+# `manager` as a parameter then shadows it, and ruff reported 114 F811
+# "redefinition of unused" across those four files - a permanent 114-finding
+# floor, thick enough to hide a genuine duplicate definition inside it.
+# Declared here, pytest injects them by name and no module imports anything.
+
+@pytest.fixture
+def manager(tmp_path):
+    db = Database(str(tmp_path / "t.db"))
+    db.connect()
+    with db.write() as conn:
+        apply_migrations(conn)
+    yield StockManager(db)
+    db.close()
+
+
+@pytest.fixture
+def pasta(manager):
+    """A 'Pâtes' product in grams, one article at 3.5 kcal/g, and a pantry."""
+    with manager.db.write() as conn:
+        location_id = repo.insert_location(conn, name="Placard", kind="pantry")
+        product_id = repo.insert_product(conn, name="Pâtes", base_unit="g",
+                                         min_quantity=200)
+        article_id = repo.insert_article(conn, product_id=product_id,
+                                         label="Panzani 500 g", net_quantity=500,
+                                         kcal_per_base_unit=3.5)
+    return {"location_id": location_id, "product_id": product_id, "article_id": article_id}

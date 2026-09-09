@@ -3,8 +3,6 @@ import pytest
 
 from custom_components.home_stock.storage import repositories as repo
 
-from test_application import manager  # noqa: F401
-
 
 @pytest.fixture
 def trip(manager):

@@ -172,7 +172,7 @@ async def test_meal_preview_writes_nothing(hass, hass_ws_client, setup_entry):
                                  "meal_id": posted["result"]["meal_id"]})
     assert answer["success"]
     assert answer["result"]["factor"] == 3.0
-    assert [l["status"] for l in answer["result"]["lines"]] == ["ok"]
+    assert [ligne["status"] for ligne in answer["result"]["lines"]] == ["ok"]
 
     movements = await hass.async_add_executor_job(
         lambda: manager.db.read().execute(

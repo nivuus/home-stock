@@ -25,7 +25,6 @@ from homeassistant.core import HomeAssistant
 
 from .const import MATCH_STATES, MEAL_SLOT_KEYS
 from .domain.stock import InsufficientStock
-from .storage import repositories as repo
 from .validators import (
     bounded_int,
     bounded_text,

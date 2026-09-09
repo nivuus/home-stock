@@ -11,7 +11,6 @@ would then have to mean something, and it does not.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from functools import partial
 from typing import Any
 
 from homeassistant.components.calendar import (

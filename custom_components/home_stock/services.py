@@ -34,11 +34,10 @@ from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
-from .storage import repositories as repo
 from .validators import (
-    acknowledgement_list, bounded_int, bounded_text, every_days, finite_float,
+    acknowledgement_list, bounded_int, bounded_text, finite_float,
     grocy_database_path, iso_date, list_quantity, non_negative_float,
-    parts_count, picture_dir, preview, price_source, store_name,
+    parts_count, picture_dir, preview,
 )
 
 _LOGGER = logging.getLogger(__name__)

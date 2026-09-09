@@ -164,8 +164,8 @@ def test_today_one_batch_of_the_hundred_and_eight_stops_the_import(
     le catalogue s'arrête là, en le nommant — c'est ce qui rend le geste 6
     obligatoire au lieu de recommandé.
     """
-    resolus = [l for l in lignes_reelles
-               if l["product_id"] in catalogue_avant_rejeu]
+    resolus = [ligne for ligne in lignes_reelles
+               if ligne["product_id"] in catalogue_avant_rejeu]
     assert len(resolus) == 107
     with pytest.raises(StockImportError) as err:
         plan_batches(lignes_reelles, catalogue_avant_rejeu, locations_reelles,
@@ -241,8 +241,8 @@ def test_the_eighteen_fractional_piece_batches_on_real_data(
         lignes_reelles, catalogue_reel, locations_reelles):
     lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
                            today=AUJOURD_HUI)
-    fractionnaires = [l for l in lots
-                      if l.base_unit == "piece" and l.quantity != int(l.quantity)]
+    fractionnaires = [ligne for ligne in lots
+                      if ligne.base_unit == "piece" and ligne.quantity != int(ligne.quantity)]
     assert len(fractionnaires) == 18
 
 
@@ -256,8 +256,8 @@ def test_the_ten_sentinels_and_the_ninety_eight_real_dates(
         lignes_reelles, catalogue_reel, locations_reelles):
     lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
                            today=AUJOURD_HUI)
-    assert len([l for l in lots if l.best_before is None]) == 10
-    assert len([l for l in lots if l.best_before is not None]) == 98
+    assert len([ligne for ligne in lots if ligne.best_before is None]) == 10
+    assert len([ligne for ligne in lots if ligne.best_before is not None]) == 98
 
 
 def test_the_six_already_expired_batches_come_in_as_they_are(
@@ -267,7 +267,7 @@ def test_the_six_already_expired_batches_come_in_as_they_are(
     jour. Les masquer serait mentir au propriétaire sur son frigo."""
     lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
                            today=AUJOURD_HUI)
-    perimes = [l for l in lots if l.best_before and l.best_before < AUJOURD_HUI]
+    perimes = [ligne for ligne in lots if ligne.best_before and ligne.best_before < AUJOURD_HUI]
     assert len(perimes) == 6
 
 
@@ -312,10 +312,10 @@ def test_the_seven_dropped_prices_and_the_sixteen_kept(
     """
     lots, anomalies = plan_batches(lignes_reelles, catalogue_reel,
                                    locations_reelles, today=AUJOURD_HUI)
-    values = [l for l in lots if l.price_per_base_unit is not None]
+    values = [ligne for ligne in lots if ligne.price_per_base_unit is not None]
     assert len(values) == 16
     assert len([a for a in anomalies if "prix" in a.lower()]) == 7
-    total = sum(l.quantity * l.price_per_base_unit for l in values)
+    total = sum(ligne.quantity * ligne.price_per_base_unit for ligne in values)
     assert 45 <= total <= 60          # ~51 EUR, et surtout pas 8 140
 
 
@@ -325,7 +325,7 @@ def test_the_ninety_two_batches_without_a_usable_price(
     contrôlera, et il est nommé ici pour qu'un seul chiffre gouverne."""
     lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
                            today=AUJOURD_HUI)
-    assert len([l for l in lots if l.price_per_base_unit is None]) == 92
+    assert len([ligne for ligne in lots if ligne.price_per_base_unit is None]) == 92
 
 
 def test_the_boundary_is_a_ditch_not_a_line(catalogue_reel, locations_reelles):
@@ -361,7 +361,7 @@ def test_the_location_cascade_in_its_three_cases(lignes_reelles, catalogue_reel,
     debloquer_unites.py a dû réparer en août)."""
     lots, anomalies = plan_batches(lignes_reelles, catalogue_reel,
                                    locations_reelles, today=AUJOURD_HUI)
-    assert all(l.location_id is not None for l in lots)
+    assert all(ligne.location_id is not None for ligne in lots)
     replis = [a for a in anomalies if "Autre" in a]
     assert len(replis) == 2
     assert any("Moutarde Burger Complet" in a for a in replis)
@@ -411,7 +411,7 @@ def test_every_batch_carries_a_grocy_reference(lignes_reelles, catalogue_reel,
                                                locations_reelles):
     lots, _ = plan_batches(lignes_reelles, catalogue_reel, locations_reelles,
                            today=AUJOURD_HUI)
-    refs = {l.external_ref for l in lots}
+    refs = {ligne.external_ref for ligne in lots}
     assert len(refs) == 108
     assert all(r.startswith("grocy:stock:") for r in refs)
 

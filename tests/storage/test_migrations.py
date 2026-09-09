@@ -454,7 +454,8 @@ def test_m004_seeds_the_leftover_category(tmp_path):
 def test_m004_apply_is_replayable(tmp_path):
     """Même discipline que les rayons de m002 et les portions de m003."""
     conn = _migrated(tmp_path)
-    m004.apply(conn); m004.apply(conn)
+    m004.apply(conn)
+    m004.apply(conn)
     assert conn.execute("SELECT COUNT(*) c FROM meal_slot").fetchone()["c"] == 4
     assert conn.execute("SELECT COUNT(*) c FROM culinary_measure").fetchone()["c"] == 4
     assert conn.execute("SELECT COUNT(*) c FROM category WHERE name = ?",

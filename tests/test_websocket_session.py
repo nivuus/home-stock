@@ -178,7 +178,7 @@ async def test_the_offline_queue_s_idempotency_key_is_accepted_on_every_line_wri
     the whole trip down. The three commands must accept the key (and may
     ignore it) exactly like add_line and stock/add already do.
     """
-    entry = await setup_entry(with_article=True)
+    await setup_entry(with_article=True)
     client = await hass_ws_client(hass)
 
     await _send(client, 1, "home_stock/session/start", store="Leclerc")

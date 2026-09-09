@@ -318,8 +318,8 @@ def test_the_twenty_three_diverging_units_lose_their_quantity(db_catalogue,
         "SELECT amount, product_id FROM recipe_ingredient"
         " WHERE match_state = 'unmatched' AND product_id IS NOT NULL").fetchall()
     assert len(lignes) == 23
-    assert all(l["amount"] is None for l in lignes)
-    assert all(l["product_id"] is not None for l in lignes)   # le produit est certain
+    assert all(ligne["amount"] is None for ligne in lignes)
+    assert all(ligne["product_id"] is not None for ligne in lignes)   # le produit est certain
 
 
 def test_the_two_inactive_product_rows_have_no_product(db_catalogue,
