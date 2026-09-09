@@ -14,6 +14,11 @@ pytest-homeassistant-custom-component==0.13.356
 #   hassil                   conversation imports it at module level.
 #   home-assistant-intents   same, beside hassil.
 #   PyTurboJPEG              camera's img_util imports turbojpeg.
+#   mutagen                  tts imports it at module level, and the
+#                            services.yaml tests call
+#                            async_get_all_descriptions, which loads
+#                            every integration's services - tts with
+#                            them.
 #
 # The last three come in through custom_components/home_stock/receipt/task.py,
 # which imports homeassistant.components.ai_task: ai_task -> entity -> task ->
@@ -31,6 +36,7 @@ home-assistant-frontend==20260729.7
 hassil==3.11.0
 home-assistant-intents==2026.7.30
 PyTurboJPEG==1.8.3
+mutagen==1.48.1
 
 # ruff is pinned HERE, and this is the only place that can pin it. The shared
 # workflow (nivuus/.github ci-python.yml) ends its dependency step with a bare
