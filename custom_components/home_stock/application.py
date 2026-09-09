@@ -2,6 +2,16 @@
 
 Everything here is synchronous. Home Assistant calls it from the executor.
 """
+
+# policy: allow-long-file
+#
+# 2937 lines, and that IS too long: StockManager holds the whole application
+# layer. Splitting it is a refactor of its own, not a side effect of deleting a
+# dead import - which is the only reason this file appears in the change that
+# added the marker. The marker records the debt so the size check stops
+# reporting it on every unrelated touch; it does not settle it.
+# Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import json
