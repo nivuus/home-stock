@@ -54,7 +54,7 @@ async def test_batches_list_returns_one_row_per_batch(client):
 async def test_locations_list(client):
     await client.send_json_auto_id({"type": "home_stock/locations/list"})
     message = await client.receive_json()
-    assert [l["name"] for l in message["result"]["locations"]] == ["Placard"]
+    assert [ligne["name"] for ligne in message["result"]["locations"]] == ["Placard"]
 
 
 async def test_aisles_list_is_seeded_in_walking_order(client):

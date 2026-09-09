@@ -10,21 +10,21 @@ from custom_components.home_stock.grocy import html as gh
 
 
 def _description(grocy_reel, recipe_id):
-    return next(l["description"] for l in grocy_reel["recipes"] if l["id"] == recipe_id)
+    return next(ligne["description"] for ligne in grocy_reel["recipes"] if ligne["id"] == recipe_id)
 
 
 def _normales(grocy_reel):
-    return [l for l in grocy_reel["recipes"] if str(l["type"]) == "normal"]
+    return [ligne for ligne in grocy_reel["recipes"] if str(ligne["type"]) == "normal"]
 
 
 def _type_un(grocy_reel):
-    return [l for l in grocy_reel["recipes"] if str(l["type"]) == "1"]
+    return [ligne for ligne in grocy_reel["recipes"] if str(ligne["type"]) == "1"]
 
 
 def test_the_three_hundred_and_twenty_three_pages(grocy_reel):
     """La somme exacte, sur les 87 recettes `normal`. Un découpeur qui rend
     322 ou 324 a mangé ou inventé une page, et c'est invisible autrement."""
-    total = sum(len(gh.decouper(l["description"])) for l in _normales(grocy_reel))
+    total = sum(len(gh.decouper(ligne["description"])) for ligne in _normales(grocy_reel))
     assert total == 323
 
 
@@ -73,8 +73,8 @@ def test_strong_is_stripped_but_its_words_stay():
 
 
 def test_the_instruction_bullets_of_the_step_pages(grocy_reel):
-    total = sum(len(p.bullets) for l in _normales(grocy_reel)
-                for p in gh.decouper(l["description"]) if p.kind == "step")
+    total = sum(len(p.bullets) for ligne in _normales(grocy_reel)
+                for p in gh.decouper(ligne["description"]) if p.kind == "step")
     assert total == 468
 
 
@@ -82,14 +82,14 @@ def test_the_ingredients_page_bullets_are_not_counted_as_instructions(grocy_reel
     """415 <li> dans les <ul> d'ingrédients, pour 414 lignes de recipes_pos :
     la page est un miroir, et le découpeur ne doit surtout pas la confondre
     avec une étape."""
-    total = sum(len(p.bullets) for l in _normales(grocy_reel)
-                for p in gh.decouper(l["description"]) if p.kind == "ingredients")
+    total = sum(len(p.bullets) for ligne in _normales(grocy_reel)
+                for p in gh.decouper(ligne["description"]) if p.kind == "ingredients")
     assert total == 415
 
 
 def test_the_two_hundred_and_twenty_nine_images(grocy_reel):
-    total = sum(len(p.images) for l in grocy_reel["recipes"]
-                for p in gh.decouper(l["description"]))
+    total = sum(len(p.images) for ligne in grocy_reel["recipes"]
+                for p in gh.decouper(ligne["description"]))
     assert total == 229
 
 
@@ -103,8 +103,8 @@ def test_the_meta_line_gives_minutes_and_utensils(grocy_reel):
 def test_every_normal_recipe_has_a_meta_line(grocy_reel):
     """87 lignes méta pour 87 recettes. Une seule absente et le compteur
     total_minutes serait NULL sans que personne s'en aperçoive."""
-    avec = [l for l in _normales(grocy_reel)
-            if gh.meta(l["description"]).total_minutes is not None]
+    avec = [ligne for ligne in _normales(grocy_reel)
+            if gh.meta(ligne["description"]).total_minutes is not None]
     assert len(avec) == 87
 
 
@@ -129,10 +129,10 @@ def test_every_normal_recipe_names_its_utensils(grocy_reel):
     """87 sur 87. Les ustensiles sont le TROISIÈME span, toujours — pas
     « ce qui suit un 🍳 » : une recette porte un 🌀 à la place, et la chercher
     par son emoji la perdrait sans bruit."""
-    avec = [l for l in _normales(grocy_reel)
-            if gh.meta(l["description"]).utensils]
+    avec = [ligne for ligne in _normales(grocy_reel)
+            if gh.meta(ligne["description"]).utensils]
     assert len(avec) == 87
-    mayo = next(l for l in _normales(grocy_reel) if l["id"] == 67)
+    mayo = next(ligne for ligne in _normales(grocy_reel) if ligne["id"] == 67)
     assert gh.meta(mayo["description"]).utensils == "Mixeur plongeur"
 
 
@@ -206,8 +206,8 @@ def test_every_timer_lives_in_a_normal_recipe(grocy_reel):
 
 
 def test_durations_stay_inside_the_measured_range(grocy_reel):
-    durees = [s for l in grocy_reel["recipes"]
-              for p in gh.decouper(l["description"]) for b in p.bullets
+    durees = [s for ligne in grocy_reel["recipes"]
+              for p in gh.decouper(ligne["description"]) for b in p.bullets
               for _, s in gh.minuteurs(b)]
     assert min(durees) == 25
     assert max(durees) == 3600
@@ -226,8 +226,8 @@ def test_a_bullet_with_two_timers_becomes_two_instructions():
 
 
 def test_the_eight_double_bullets_and_no_more(grocy_reel):
-    doubles = [b for l in grocy_reel["recipes"]
-               for p in gh.decouper(l["description"]) for b in p.bullets
+    doubles = [b for ligne in grocy_reel["recipes"]
+               for p in gh.decouper(ligne["description"]) for b in p.bullets
                if len(gh.minuteurs(b)) == 2]
     assert len(doubles) == 8
 
@@ -250,8 +250,8 @@ def test_the_marker_never_stays_in_the_text():
 
 def test_five_hundred_and_sixty_one_instructions_in_all(grocy_reel):
     """553 puces + les 8 dédoublements. C'est le chiffre que C8 contrôlera."""
-    total = sum(len(gh.instructions(b)) for l in grocy_reel["recipes"]
-                for p in gh.decouper(l["description"])
+    total = sum(len(gh.instructions(b)) for ligne in grocy_reel["recipes"]
+                for p in gh.decouper(ligne["description"])
                 if p.kind != "ingredients" for b in p.bullets)
     assert total == 561
 

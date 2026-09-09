@@ -399,7 +399,7 @@ def test_map_article_survives_a_malformed_categories_tags():
     assert mapped.label == "Emmental râpé"
 
 
-from custom_components.home_stock.off.mapping import plausible_serving, serving_from_raw
+from custom_components.home_stock.off.mapping import plausible_serving, serving_from_raw  # noqa: E402  (section import, see ruff.toml)
 
 
 def test_plausible_serving_accepts_a_number_and_a_numeric_string():

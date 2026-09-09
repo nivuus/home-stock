@@ -174,7 +174,7 @@ def test_list_ingredients_is_ordered_by_position(conn):
     for position in (3, 1, 2):
         repo.insert_ingredient(conn, recipe_id=recipe_id, position=position,
                                raw_text=f"ligne {position}")
-    assert [l["position"] for l in repo.list_ingredients(conn, recipe_id)] == [1, 2, 3]
+    assert [ligne["position"] for ligne in repo.list_ingredients(conn, recipe_id)] == [1, 2, 3]
 
 
 def test_update_ingredient_match_writes_the_three_columns(conn):

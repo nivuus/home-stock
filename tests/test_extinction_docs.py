@@ -13,11 +13,11 @@ RETOUR = (RACINE / "docs/extinction/retour-arriere.md").read_text("utf-8")
 
 def test_the_procedure_is_a_numbered_list_of_eighteen_gestures():
     import re
-    numeros = [l for l in PROCEDURE.splitlines() if re.match(r"^\d+\. ", l)]
+    numeros = [ligne for ligne in PROCEDURE.splitlines() if re.match(r"^\d+\. ", ligne)]
     assert len(numeros) >= 18
     # Numérotés de 1 à 18, sans trou : un geste sauté est un incident dans
     # six semaines.
-    assert [int(l.split(".", 1)[0]) for l in numeros] == list(range(1, 19))
+    assert [int(ligne.split(".", 1)[0]) for ligne in numeros] == list(range(1, 19))
 
 
 def test_every_thing_that_breaks_has_its_gesture():

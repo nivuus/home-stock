@@ -77,7 +77,7 @@ def test_importing_the_same_source_ref_twice_updates_and_does_not_duplicate(mana
     read = manager.db.read()
     assert read.execute("SELECT COUNT(*) c FROM recipe").fetchone()["c"] == 1
     assert repo.get_recipe(read, first)["name"] == "Teriyaki Chicken Casserole"
-    assert [l["raw_text"] for l in repo.list_ingredients(read, first)] == [
+    assert [ligne["raw_text"] for ligne in repo.list_ingredients(read, first)] == [
         "1 cup soy sauce"]
 
 

@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.home_stock.const import MACRO_COLUMNS
-from test_application import _seed_article, manager  # noqa: F401
+from test_application import _seed_article
 
 PARIS = ZoneInfo("Europe/Paris")
 NOON = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)

@@ -1,4 +1,13 @@
 """Home Assistant services. Every write refreshes the coordinator on success."""
+
+# policy: allow-long-file
+#
+# 977 lines, and that IS too long: one registration block per service, and they
+# only read as a whole. Splitting them is a refactor of its own, not a side
+# effect of deleting an import written twice in a row - which is the only
+# reason this file appears in the change that added the marker. The marker
+# records the debt; it does not settle it. Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import json
@@ -34,11 +43,10 @@ from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
 from .storage import repositories as repo
-from .storage import repositories as repo
 from .validators import (
-    acknowledgement_list, bounded_int, bounded_text, every_days, finite_float,
+    acknowledgement_list, bounded_int, bounded_text, finite_float,
     grocy_database_path, iso_date, list_quantity, non_negative_float,
-    parts_count, picture_dir, preview, price_source, store_name,
+    parts_count, picture_dir, preview,
 )
 
 _LOGGER = logging.getLogger(__name__)

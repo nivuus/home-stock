@@ -227,7 +227,7 @@ async def test_the_four_daily_nutrients_are_on_by_default(hass, setup_entry):
 async def test_the_five_rarer_nutrients_are_created_but_disabled(hass, setup_entry):
     """They exist in the registry and turn on with one click — but they do not
     fill the sidebar with columns that are often empty."""
-    entry = await setup_entry()
+    await setup_entry()
     registry = er.async_get(hass)
     for key in ("carbohydrates_today", "added_sugars_today", "fat_today",
                 "saturated_fat_today", "fiber_today"):
@@ -278,11 +278,10 @@ async def test_the_daily_sensors_declare_a_last_reset(hass, setup_entry):
 
 # --- lot 5 : piles faibles, piles à déclarer, prochaine fin de garantie ------
 
-from homeassistant.helpers import device_registry as lot5_dr
-from homeassistant.helpers import entity_registry as lot5_er
+from homeassistant.helpers import entity_registry as lot5_er  # noqa: E402  (section import, see ruff.toml)
 
-import custom_components.home_stock as home_stock
-from custom_components.home_stock.storage import repositories as lot5_repo
+import custom_components.home_stock as home_stock  # noqa: E402  (section import, see ruff.toml)
+from custom_components.home_stock.storage import repositories as lot5_repo  # noqa: E402  (section import, see ruff.toml)
 
 
 def _lot5_sensor(hass, entity_id: str, *, unique_id: str, state: str,
@@ -591,7 +590,7 @@ def _seed_salty_meal(manager, *, salt_per_base_unit: float, grams: float) -> Non
 
 
 async def test_the_goals_sensor_is_off_when_no_goal_is_set(hass, _with_goals):
-    entry = await _with_goals({})
+    await _with_goals({})
     state = hass.states.get("binary_sensor.home_stock_nutrition_goals")
     assert state.state == "off"
     assert state.attributes["count"] == 0

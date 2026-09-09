@@ -31,7 +31,7 @@ def test_parts_count_refuses_out_of_range():
 
 # --- lot 5 : les invariants de pile, écrits une fois pour les deux surfaces ---
 
-from custom_components.home_stock.validators import (
+from custom_components.home_stock.validators import (  # noqa: E402  (section import, see ruff.toml)
     cell_count, check_battery_event, check_battery_fields, percent_threshold,
     tracked_flag,
 )

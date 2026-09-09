@@ -1,1 +1,55 @@
 pytest-homeassistant-custom-component==0.13.356
+
+# THE EIGHT BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
+# repository chose. pytest-homeassistant-custom-component installs Home
+# Assistant WITHOUT any per-integration requirement (those normally arrive at
+# setup time, per component, in a real install), so every component this suite
+# reaches must have its own requirements listed here by hand or it fails to
+# import - as a collection error, a setup failure, or a test failure, depending
+# on where it is reached from.
+#
+# Nothing had ever noticed: `python / Python checks` failed at the ruff step on
+# every run since 2026-08-27, so pytest was NEVER reached in CI and this whole
+# suite has never run there. Bringing ruff to green surfaced it in one go:
+# 471 failed, 53 errors, then 22, then 21, one missing module at a time.
+#
+# WHERE THEY COME FROM, and why the list is closed rather than guessed:
+#
+#   1. manifest.json declares dependencies http, websocket_api, panel_custom.
+#      panel_custom needs frontend, and frontend imports hass_frontend at
+#      setup: without home-assistant-frontend, frontend fails, panel_custom
+#      fails with it and home_stock never sets up.
+#   2. custom_components/home_stock/receipt/task.py imports
+#      homeassistant.components.ai_task, which reaches, at module level:
+#      ai_task -> entity -> task -> camera, conversation, image, media_source.
+#      Note that ai_task/task.py imports camera and image WITHOUT declaring
+#      them in its own manifest.
+#   3. async_get_all_descriptions() - which tests/test_services.py and
+#      tests/test_surface_parity.py call - goes through
+#      homeassistant.helpers.service._base_components(), and that function
+#      imports NINETEEN components unconditionally, assist_satellite and
+#      media_player among them. That is where tts, ffmpeg and the voice
+#      libraries come in, for an integration that has nothing to do with any
+#      of them.
+#
+# The list is the transitive closure of the manifests of those three roots in
+# Home Assistant 2026.8.2 - the release the pin above resolves to. Bumping
+# pytest-homeassistant-custom-component moves that release, and these with it:
+# recompute the closure against the new one rather than editing a line.
+ha-ffmpeg==3.2.2
+hassil==3.11.0
+home-assistant-frontend==20260729.7
+home-assistant-intents==2026.7.30
+mutagen==1.48.1
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2
+PyTurboJPEG==1.8.3
+
+# ruff is pinned HERE, and this is the only place that can pin it. The shared
+# workflow (nivuus/.github ci-python.yml) ends its dependency step with a bare
+# `pip install ruff pytest`, which resolves to whatever was published that
+# morning; but it installs THIS file first, so a version already satisfied is
+# the version the control runs with. Unpinned, the rule set moves under the
+# repository between releases - see ruff.toml for the measurement and for the
+# selection this code is written against.
+ruff==0.16.6

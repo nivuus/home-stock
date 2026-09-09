@@ -5,7 +5,6 @@ zéro, rien n'est dépassé, et il n'y a donc rien à protéger contre une alert
 à 4 h 01. Aucune garde « la journée n'est pas vide » ne doit apparaître ici —
 elle prouverait qu'un plancher s'est glissé dans le lot.
 """
-import pytest
 
 from custom_components.home_stock.domain.goals import exceeded
 

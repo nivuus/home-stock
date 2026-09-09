@@ -653,13 +653,13 @@ def test_the_archive_holds_all_eleven_hundred_and_twenty_three_rows(
 def test_the_six_undone_rows_keep_their_flag(db_migre, grocy_reel_db, tmp_path):
     """Une annulation fait partie de l'histoire."""
     contenu = _archive(db_migre, grocy_reel_db, tmp_path)
-    assert len([l for l in contenu["stock_log"] if l["undone"]]) == 6
+    assert len([ligne for ligne in contenu["stock_log"] if ligne["undone"]]) == 6
 
 
 def test_each_row_carries_its_product_name(db_migre, grocy_reel_db, tmp_path):
     """Dans dix ans, un product_id de Grocy ne voudra plus rien dire."""
     contenu = _archive(db_migre, grocy_reel_db, tmp_path)
-    assert all(l.get("product_name") for l in contenu["stock_log"])
+    assert all(ligne.get("product_name") for ligne in contenu["stock_log"])
 
 
 def test_the_archive_also_holds_the_notes_the_chores_and_the_past_plan(
@@ -676,7 +676,7 @@ def test_the_six_chores_are_named_even_though_they_are_abandoned(
     archivés, et le chemin de repli est dans docs/exploitation.md, pas dans le
     code."""
     contenu = _archive(db_migre, grocy_reel_db, tmp_path)
-    noms = {l["chore_name"] for l in contenu["chores_log"]}
+    noms = {ligne["chore_name"] for ligne in contenu["chores_log"]}
     assert "Nettoyer la litière" in noms
     assert len(noms) == 6
 

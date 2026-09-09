@@ -1,7 +1,7 @@
 import pytest
 
 from custom_components.home_stock.const import MACRO_COLUMNS
-from custom_components.home_stock.domain.nutrition import MovementValues, movement_values
+from custom_components.home_stock.domain.nutrition import movement_values
 
 
 def test_values_are_the_quantity_times_the_rates():

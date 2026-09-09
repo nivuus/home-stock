@@ -179,7 +179,7 @@ def test_the_real_catalogue_matches_a_real_card():
 # --- lot 4 : rapprocher une ligne de caisse d'une ligne de panier -----------
 
 from custom_components.home_stock.domain.matching import (  # noqa: E402
-    PRESELECT_MARGIN, PRESELECT_SCORE, LineMatch, receipt_candidates,
+    LineMatch, receipt_candidates,
 )
 
 CART = [

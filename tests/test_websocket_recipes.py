@@ -1,5 +1,4 @@
 """Les commandes recettes, vues du panneau."""
-import pytest
 
 from custom_components.home_stock.recipes.source import SourceHit
 from custom_components.home_stock.storage import repositories as repo

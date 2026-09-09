@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .grocy.refs import grocy_product_id
-from .grocy.units import (
+from .grocy.units import (  # noqa: F401  (see the re-export note below)
     CONTAINER_UNITS,
     DOSAGE_UNITS,
     MASS_UNITS,
@@ -27,6 +27,15 @@ from .grocy.units import (
 )
 from .storage import repositories as repo
 from .storage.database import Database
+
+# CONTAINER_UNITS, MASS_UNITS and VOLUME_UNITS are imported here and used
+# nowhere in this module - deliberately. tests/grocy/test_units.py asserts
+# `import_grocy.MASS_UNITS is units.MASS_UNITS`, on IDENTITY rather than
+# equality, so that a second table saying the same thing today cannot be
+# introduced quietly and start saying something else the day someone adds an
+# entry on one side only. Deleting them as dead imports (which is exactly what
+# ruff calls them) removes the attribute the test reads, and with it the
+# guarantee. base_unit and DOSAGE_UNITS are the two this module actually uses.
 
 MAX_KCAL_PER_GRAM = 9.5   # pure fat is 9; above that the value is wrong
 MAX_KCAL_PER_ML = 8.1     # olive oil, the densest common liquid, tops out there —

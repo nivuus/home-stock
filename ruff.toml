@@ -1,0 +1,47 @@
+# Ruff's rule set for this repository, stated rather than inherited.
+#
+# WHY THIS FILE EXISTS. `ci-python.yml` (the shared socle workflow) runs
+# `ruff check` with whatever `pip install ruff` resolved that morning, and
+# until now this repository carried NO ruff configuration at all. A zero-config
+# ruff applies its OWN default selection, and that default is not a stable
+# contract: it widens between releases. The measurable consequence is that
+# `python / Python checks` has been red on `main` since the socle was adopted
+# on 2026-08-27, while every pull request over the same period stayed green -
+# the workflow lints only the changed files on a pull request, and the whole
+# tree on a push, so nothing in the review loop could show it.
+#
+# Measured on 2026-09-09, zero-config ruff raised 374 findings here. The
+# largest blocks were opinions: 98 I001 import ordering, 35 RUF059, 14 UP035
+# modernisation, 11 ISC004, 9 B017. Under the selection below, 210 remained -
+# and those were worth reading. They are now zero, none of them by suppression:
+#
+#   114 F811  four test modules imported the `manager`/`pasta` fixtures from
+#             test_application.py, so every test taking `manager` as a
+#             parameter shadowed the imported name. The fixtures moved to
+#             tests/conftest.py, which is what pytest injection is for, and
+#             the imports are gone. A 114-finding floor is thick enough to
+#             hide a genuine duplicate definition inside it - that is the
+#             reason for fixing it rather than ignoring F811 in tests/.
+#    56 E741  a comprehension variable named `l`, renamed to `ligne` by token
+#             position (never by regex - `l` also occurs inside strings).
+#    25 F401  dead imports, including a line duplicated verbatim in
+#             services.py. Checked first that nothing re-exported them.
+#    10 F841  bindings nothing read. The CALL is kept in every case; only the
+#             name goes, or gains a leading underscore where it documents a
+#             row the test deliberately creates and deliberately ignores.
+#     7 E402  imports opening a "--- lot N ---" section mid-file. This layout
+#             is deliberate and already carried a noqa in test_matching.py;
+#             the remaining sites now carry the same one, pointing here.
+#     1 E702  `m004.apply(conn); m004.apply(conn)` - the whole point of the
+#             line is that apply runs twice, which reads better on two lines.
+#
+# THE SELECTION IS THE ONE THIS CODE WAS WRITTEN AGAINST: pycodestyle errors
+# (E4 imports, E7 statements, E9 syntax) and pyflakes (F) - real defects,
+# never style. Widening it is a deliberate act with a diff to match, not a
+# side effect of a dependency bump. The version is pinned in requirements.txt,
+# because the workflow installs that file BEFORE its own `pip install ruff` -
+# so the pin there is what actually holds.
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
