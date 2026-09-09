@@ -1,5 +1,19 @@
 pytest-homeassistant-custom-component==0.13.356
 
+# hassil is NOT a test tool: custom_components/home_stock/receipt/task.py
+# imports homeassistant.components.ai_task, whose entity module imports
+# homeassistant.components.conversation, which imports hassil at module level.
+# A real Home Assistant install has it; the wheel above does not pull the
+# per-integration requirements, so without this line two test modules fail at
+# COLLECTION with ModuleNotFoundError - which nothing had ever noticed, because
+# ruff failed before pytest was ever reached on this repository.
+#
+# The version is the one Home Assistant 2026.8.2 constrains (the release the
+# pin above resolves to). Bumping pytest-homeassistant-custom-component can
+# move that constraint: check package_constraints.txt of the Home Assistant
+# release it brings in.
+hassil==3.11.0
+
 # ruff is pinned HERE, and this is the only place that can pin it. The shared
 # workflow (nivuus/.github ci-python.yml) ends its dependency step with a bare
 # `pip install ruff pytest`, which resolves to whatever was published that
