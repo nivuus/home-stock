@@ -1,20 +1,26 @@
 pytest-homeassistant-custom-component==0.13.356
 
-# These two are NOT test tools. custom_components/home_stock/receipt/task.py
-# imports homeassistant.components.ai_task, whose entity module imports
-# homeassistant.components.conversation, which imports both at module level.
-# A real Home Assistant install has them, because conversation declares them
-# as its own requirements; the wheel above installs Home Assistant WITHOUT the
-# per-integration requirements, so two test modules fail at COLLECTION with
-# ModuleNotFoundError - which nothing had ever noticed, because ruff failed
-# before pytest was ever reached on this repository.
+# These three are NOT test tools. custom_components/home_stock/receipt/task.py
+# imports homeassistant.components.ai_task, and importing that module alone
+# reaches, at module level: ai_task -> entity -> task -> camera, conversation,
+# image, media_source. conversation brings hassil and home-assistant-intents;
+# camera's img_util imports turbojpeg. A real Home Assistant install has all
+# three, because those components declare them as their own requirements; the
+# wheel above installs Home Assistant WITHOUT any per-integration requirement,
+# so two test modules fail at COLLECTION with ModuleNotFoundError.
 #
-# The versions are the ones homeassistant/components/conversation/manifest.json
-# declares in 2026.8.2, the release the pin above resolves to. Bumping
-# pytest-homeassistant-custom-component can move them: read that manifest in
-# the Home Assistant release it brings in.
+# Nothing had ever noticed: ruff failed before pytest was ever reached on this
+# repository, so tests/receipt/test_task.py and tests/test_websocket_receipts.py
+# have never run in CI.
+#
+# The versions come from the manifests of the Home Assistant release the pin
+# above resolves to (2026.8.2). Bumping pytest-homeassistant-custom-component
+# can move them: read those manifests in the release it brings in. Note that
+# ai_task/task.py imports camera and image WITHOUT declaring them in its own
+# manifest, so the closure is wider than `dependencies` alone suggests.
 hassil==3.11.0
 home-assistant-intents==2026.7.30
+PyTurboJPEG==1.8.3
 
 # ruff is pinned HERE, and this is the only place that can pin it. The shared
 # workflow (nivuus/.github ci-python.yml) ends its dependency step with a bare
