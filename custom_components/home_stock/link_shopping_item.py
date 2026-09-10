@@ -12,6 +12,7 @@ make it longer.
 """
 from __future__ import annotations
 
+import sqlite3
 from functools import partial
 from typing import Final
 
@@ -35,12 +36,19 @@ LINK_SHOPPING_ITEM_SCHEMA: Final = vol.Schema({
 
 def _find_item(conn, item: str) -> dict | None:
     """`item` is either a numeric line id or the exact free text of a still
-    open, unremoved line -- whichever the caller has at hand."""
+    open, unremoved line -- whichever the caller has at hand.
+
+    Two open lines sharing the very same free text are not a case this
+    service disambiguates: it takes the oldest one (`repo.list_items`
+    orders by aisle position then `sl.id`, so the first match here is
+    always the lowest id). `services.yaml`'s field description says so.
+    """
     if item.isdigit():
         row = repo.get_list_item(conn, int(item))
         if row is not None:
             return row
-    for row in repo.list_items(conn, include_checked=True, include_removed=False):
+    for row in sorted(repo.list_items(conn, include_checked=True, include_removed=False),
+                      key=lambda r: r["id"]):
         if row.get("free_text") == item:
             return row
     return None
@@ -58,8 +66,15 @@ def _link(conn, call: ServiceCall) -> None:
     if product is None:
         raise ServiceValidationError(f"Produit introuvable : {product_id}")
 
-    repo.update_list_item(conn, int(item["id"]),
-                          {"product_id": row_id, "free_text": None})
+    try:
+        repo.update_list_item(conn, int(item["id"]),
+                              {"product_id": row_id, "free_text": None})
+    except sqlite3.IntegrityError as exc:
+        # `idx_list_open_product` (m006_shopping.py): at most one open line
+        # per product. Rattaching a second free-text line to a product that
+        # already has one open would otherwise raise a raw sqlite error.
+        raise ServiceValidationError(
+            f"Une ligne ouverte existe déjà pour ce produit : {product['name']}") from exc
 
 
 async def async_handle_link_shopping_item(hass: HomeAssistant, call: ServiceCall) -> None:

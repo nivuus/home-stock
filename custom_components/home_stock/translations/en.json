@@ -178,7 +178,7 @@
       "fields": {
         "item": {
           "name": "Item",
-          "description": "The line's id or its exact text."
+          "description": "The line's id, or its exact text; if several open lines share the same text, the oldest one is picked."
         },
         "product_id": {
           "name": "Product",

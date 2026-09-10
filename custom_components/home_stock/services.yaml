@@ -678,7 +678,7 @@ link_shopping_item:
   fields:
     item:
       name: Ligne
-      description: L'identifiant de la ligne ou son texte exact.
+      description: L'identifiant de la ligne, ou son texte exact ; si plusieurs lignes ouvertes partagent le même texte, la plus ancienne est retenue.
       required: true
       selector: { text: {} }
     product_id:
