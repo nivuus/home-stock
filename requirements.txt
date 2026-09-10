@@ -43,7 +43,7 @@ home-assistant-intents==2026.7.30
 mutagen==1.48.1
 pymicro-vad==1.0.1
 pyspeex-noise==1.0.2
-PyTurboJPEG==1.8.3
+PyTurboJPEG==2.5.0
 
 # ruff is pinned HERE, and this is the only place that can pin it. The shared
 # workflow (nivuus/.github ci-python.yml) ends its dependency step with a bare
