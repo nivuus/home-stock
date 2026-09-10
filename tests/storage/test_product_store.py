@@ -144,7 +144,6 @@ def test_legacy_product_without_articles_is_still_readable(conn):
     """A product inserted the old way (before this lot, no article at all)
     still gets a product_id and a barcode of None: no migration step is
     needed because `product.id` was already independent of any barcode."""
-    rayon = _an_aisle(conn)
     aisle_id = repo.list_aisles(conn)[0]["id"]
     legacy_id = repo.insert_product(conn, name="Legacy", base_unit="g", aisle_id=aisle_id)
 

@@ -15,9 +15,9 @@ websocket surface, `home_stock/products/list` (`websocket_api.py:300-308`),
 the read Maxime's UI actually calls, rather than through `query_stock`.
 """
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-import voluptuous as vol
 
 from custom_components.home_stock.aisles import AISLES
 from custom_components.home_stock.storage import products as store
@@ -52,7 +52,7 @@ async def test_creates_a_product_without_a_barcode(hass: HomeAssistant, setup_en
 async def test_created_product_is_visible_right_away(
         hass: HomeAssistant, setup_entry, hass_ws_client):
     entry = await setup_entry()
-    answer = await _create(hass, {"name": "Piment antillais", "rayon": RAYON})
+    await _create(hass, {"name": "Piment antillais", "rayon": RAYON})
 
     def _rayon_id() -> int:
         aisle = next(a for a in repo.list_aisles(entry.runtime_data.manager.db.read())
@@ -140,3 +140,22 @@ async def test_blank_barcode_is_treated_as_absent(hass: HomeAssistant, setup_ent
     answer = await _create(hass, {"name": "A", "rayon": RAYON, "barcode": ""})
 
     assert answer["barcode"] is None
+
+
+async def test_rejects_a_duplicate_name(hass: HomeAssistant, setup_entry):
+    """Non-goal (spec.md): two calls with the same name create two products
+    upstream (`product.name UNIQUE`, see `docs/delivery.md`), so the second
+    call here must fail explicitly rather than silently create nothing."""
+    entry = await setup_entry()
+    await _create(hass, {"name": "Avocat", "rayon": RAYON})
+
+    with pytest.raises(ServiceValidationError) as excinfo:
+        await _create(hass, {"name": "Avocat", "rayon": RAYON})
+
+    assert "Avocat" in str(excinfo.value)
+
+    def _read():
+        return store.list_products(entry.runtime_data.manager.db.read())
+
+    assert len(await hass.async_add_executor_job(_read)) == 1
+

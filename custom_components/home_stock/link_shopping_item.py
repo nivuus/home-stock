@@ -59,6 +59,10 @@ def _link(conn, call: ServiceCall) -> None:
     item = _find_item(conn, item_text)
     if item is None:
         raise ServiceValidationError(f"Ligne de courses introuvable : {item_text}")
+    if item.get("product_id") is not None:
+        raise ServiceValidationError(
+            f"La ligne {item['id']} est déjà rattachée à un produit ; "
+            "ce service ne rattache qu'une ligne libre")
 
     product_id = call.data["product_id"]
     row_id = store.parse_product_id(product_id)

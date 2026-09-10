@@ -155,3 +155,36 @@ async def test_picks_the_oldest_line_when_several_share_the_same_text(
 
     linked = await hass.async_add_executor_job(_linked_row)
     assert linked["product_id"] == int(product_id.removeprefix("hs_"))
+
+async def test_rejects_relinking_a_line_already_attached_to_a_product(
+        hass: HomeAssistant, setup_entry):
+    """A line already attached to a product is not a free line any more:
+    `link_shopping_item` must refuse to silently re-point it and wipe its
+    existing association (`services.yaml` describes `item` as a free
+    line)."""
+    entry = await setup_entry()
+    first_product = await _create_product(hass, "Papaye")
+    second_product = await _create_product(hass, "Corossol")
+    await _add_free_text_line(hass, "papaye")
+
+    def _line_id() -> int:
+        return _find_line(entry.runtime_data.manager.db.read(), "papaye")["id"]
+
+    line_id = await hass.async_add_executor_job(_line_id)
+    await hass.services.async_call(
+        "home_stock", "link_shopping_item",
+        {"item": str(line_id), "product_id": first_product}, blocking=True)
+
+    with pytest.raises(ServiceValidationError) as excinfo:
+        await hass.services.async_call(
+            "home_stock", "link_shopping_item",
+            {"item": str(line_id), "product_id": second_product}, blocking=True)
+
+    assert str(line_id) in str(excinfo.value)
+
+    def _after():
+        return repo.get_list_item(entry.runtime_data.manager.db.read(), line_id)
+
+    unchanged = await hass.async_add_executor_job(_after)
+    assert unchanged["product_id"] == int(first_product.removeprefix("hs_"))
+

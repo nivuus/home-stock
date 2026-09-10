@@ -17,7 +17,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Final
 
-from ..aisles import AISLES
 from ..const import BASE_UNITS
 from . import repositories as repo
 
@@ -147,7 +146,9 @@ def create_product(conn, *, name: str, rayon: str, unit: str | None = None,
         article_id = repo.insert_article(conn, product_id=row_id)
         repo.link_barcode(conn, clean_barcode, article_id)
 
-    return get_product(conn, format_product_id(row_id))
+    product = get_product(conn, format_product_id(row_id))
+    assert product is not None  # just inserted, cannot be missing
+    return product
 
 
 def get_product(conn, product_id: str) -> dict[str, Any] | None:
