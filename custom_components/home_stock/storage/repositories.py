@@ -244,6 +244,18 @@ def link_barcode(conn, code: str, article_id: int) -> None:
     conn.execute("INSERT INTO barcode (code, article_id) VALUES (?, ?)", (code, article_id))
 
 
+def first_barcode_for_product(conn, product_id: int) -> str | None:
+    """The lowest barcode linked to any article of one product, or
+    `None` if it has none -- a product without a barcode is a normal
+    state (lot 2, R10), not a lookup error."""
+    row = conn.execute(
+        "SELECT b.code FROM barcode b JOIN article a ON a.id = b.article_id"
+        " WHERE a.product_id = ? ORDER BY b.code LIMIT 1",
+        (product_id,),
+    ).fetchone()
+    return row["code"] if row else None
+
+
 def barcodes_to_resync(conn, *, article_id: int | None, product_id: int | None,
                        everything: bool) -> list[tuple[str, int]]:
     """One (code, article_id) pair per article that has a barcode, for the

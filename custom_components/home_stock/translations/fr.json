@@ -1,152 +1,190 @@
 {
- "config": {
-  "step": {
-   "user": {
-    "title": "Garde-manger",
-    "description": "Rien à configurer : la base est créée dans le dossier de configuration."
-   }
-  },
-  "abort": {
-   "single_instance_allowed": "Le garde-manger est déjà configuré."
-  }
- },
- "options": {
-  "step": {
-   "init": {
-    "title": "Options du garde-manger",
-    "data": {
-     "expiration_alert_days": "Alerter combien de jours avant la date limite",
-     "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
-     "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)",
-     "shopping_list_horizon_days": "Nombre de jours de repas pris en compte pour la liste de courses",
-     "receipt_agent": "Entité ai_task qui lit les photos de tickets de caisse (facultatif)",
-     "goal_kcal": "Objectif maximal d'énergie par jour (kcal)",
-     "goal_proteins": "Objectif maximal de protéines par jour (g)",
-     "goal_carbohydrates": "Objectif maximal de glucides par jour (g)",
-     "goal_sugars": "Objectif maximal de sucres par jour (g)",
-     "goal_added_sugars": "Objectif maximal de sucres ajoutés par jour (g)",
-     "goal_fat": "Objectif maximal de matières grasses par jour (g)",
-     "goal_saturated_fat": "Objectif maximal de graisses saturées par jour (g)",
-     "goal_fiber": "Objectif maximal de fibres par jour (g)",
-     "goal_salt": "Objectif maximal de sel par jour (g)"
+  "config": {
+    "step": {
+      "user": {
+        "title": "Garde-manger",
+        "description": "Rien à configurer : la base est créée dans le dossier de configuration."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Le garde-manger est déjà configuré."
     }
-   }
   },
-  "error": {
-   "no_attachments": "Cette entité n'accepte pas de pièce jointe : elle ne peut pas lire une photo de ticket. Choisissez-en une autre, ou laissez le champ vide.",
-   "text_too_long": "Cette clé est trop longue : 200 caractères au maximum.",
-   "goal_out_of_bounds": "Un objectif doit être un nombre supérieur à 0 et d'au plus 20000. Laissez le champ vide pour ne pas vous fixer d'objectif."
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options du garde-manger",
+        "data": {
+          "expiration_alert_days": "Alerter combien de jours avant la date limite",
+          "recipe_agent": "Agent conversationnel qui traduit et adapte les recettes importées (facultatif)",
+          "recipe_source_key": "Clé d'API TheMealDB (« 1 » est la clé de test publique)",
+          "shopping_list_horizon_days": "Nombre de jours de repas pris en compte pour la liste de courses",
+          "receipt_agent": "Entité ai_task qui lit les photos de tickets de caisse (facultatif)",
+          "goal_kcal": "Objectif maximal d'énergie par jour (kcal)",
+          "goal_proteins": "Objectif maximal de protéines par jour (g)",
+          "goal_carbohydrates": "Objectif maximal de glucides par jour (g)",
+          "goal_sugars": "Objectif maximal de sucres par jour (g)",
+          "goal_added_sugars": "Objectif maximal de sucres ajoutés par jour (g)",
+          "goal_fat": "Objectif maximal de matières grasses par jour (g)",
+          "goal_saturated_fat": "Objectif maximal de graisses saturées par jour (g)",
+          "goal_fiber": "Objectif maximal de fibres par jour (g)",
+          "goal_salt": "Objectif maximal de sel par jour (g)"
+        }
+      }
+    },
+    "error": {
+      "no_attachments": "Cette entité n'accepte pas de pièce jointe : elle ne peut pas lire une photo de ticket. Choisissez-en une autre, ou laissez le champ vide.",
+      "text_too_long": "Cette clé est trop longue : 200 caractères au maximum.",
+      "goal_out_of_bounds": "Un objectif doit être un nombre supérieur à 0 et d'au plus 20000. Laissez le champ vide pour ne pas vous fixer d'objectif."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stock_value": {
+        "name": "Valeur du stock"
+      },
+      "batches": {
+        "name": "Lots en stock"
+      },
+      "kcal_total": {
+        "name": "Kilocalories sorties du stock"
+      },
+      "cost_total": {
+        "name": "Coût des sorties de stock"
+      },
+      "cart_total": {
+        "name": "Panier en cours"
+      },
+      "to_store": {
+        "name": "À ranger"
+      },
+      "kcal_today": {
+        "name": "Kilocalories du jour"
+      },
+      "proteins_today": {
+        "name": "Protéines du jour"
+      },
+      "carbohydrates_today": {
+        "name": "Glucides du jour"
+      },
+      "sugars_today": {
+        "name": "Sucres du jour"
+      },
+      "added_sugars_today": {
+        "name": "Sucres ajoutés du jour"
+      },
+      "fat_today": {
+        "name": "Matières grasses du jour"
+      },
+      "saturated_fat_today": {
+        "name": "Graisses saturées du jour"
+      },
+      "fiber_today": {
+        "name": "Fibres du jour"
+      },
+      "salt_today": {
+        "name": "Sel du jour"
+      },
+      "cost_today": {
+        "name": "Dépense alimentaire du jour"
+      },
+      "cost_waste_total": {
+        "name": "Coût du gaspillage"
+      },
+      "next_meal": {
+        "name": "Prochain repas"
+      },
+      "recipes": {
+        "name": "Recettes"
+      },
+      "missing_ingredients": {
+        "name": "Ingrédients manquants"
+      },
+      "batteries_low": {
+        "name": "Piles faibles"
+      },
+      "batteries_undeclared": {
+        "name": "Piles à déclarer"
+      },
+      "warranty_next": {
+        "name": "Prochaine fin de garantie"
+      },
+      "shopping_list": {
+        "name": "Liste de courses"
+      },
+      "list_estimate": {
+        "name": "Estimation du panier"
+      },
+      "receipts_pending": {
+        "name": "Tickets à traiter"
+      }
+    },
+    "binary_sensor": {
+      "expirations": {
+        "name": "Péremptions proches"
+      },
+      "shortages": {
+        "name": "Ruptures"
+      },
+      "nutrition_goals": {
+        "name": "Objectifs nutritionnels"
+      }
+    },
+    "event": {
+      "expiration": {
+        "name": "Péremption"
+      }
+    },
+    "todo": {
+      "expirations": {
+        "name": "À consommer"
+      },
+      "shopping": {
+        "name": "Liste de courses"
+      }
+    },
+    "calendar": {
+      "meals": {
+        "name": "Repas"
+      }
+    }
+  },
+  "services": {
+    "create_product": {
+      "name": "Créer un produit",
+      "description": "Crée un produit sans exiger de code-barres. Retourne son identifiant.",
+      "fields": {
+        "name": {
+          "name": "Nom",
+          "description": "Le nom du produit."
+        },
+        "rayon": {
+          "name": "Rayon",
+          "description": "Le rayon du produit."
+        },
+        "unit": {
+          "name": "Unité",
+          "description": "L'unité de base. Par défaut, piece."
+        },
+        "barcode": {
+          "name": "Code-barres",
+          "description": "Le code-barres du produit, s'il en a un."
+        }
+      }
+    },
+    "link_shopping_item": {
+      "name": "Rattacher une ligne de courses",
+      "description": "Rattache une ligne libre de la liste de courses à un produit existant ; la ligne prend le rayon du produit.",
+      "fields": {
+        "item": {
+          "name": "Ligne",
+          "description": "L'identifiant de la ligne ou son texte exact."
+        },
+        "product_id": {
+          "name": "Produit",
+          "description": "L'identifiant du produit (product_id) auquel rattacher la ligne."
+        }
+      }
+    }
   }
- },
- "entity": {
-  "sensor": {
-   "stock_value": {
-    "name": "Valeur du stock"
-   },
-   "batches": {
-    "name": "Lots en stock"
-   },
-   "kcal_total": {
-    "name": "Kilocalories sorties du stock"
-   },
-   "cost_total": {
-    "name": "Coût des sorties de stock"
-   },
-   "cart_total": {
-    "name": "Panier en cours"
-   },
-   "to_store": {
-    "name": "À ranger"
-   },
-   "kcal_today": {
-    "name": "Kilocalories du jour"
-   },
-   "proteins_today": {
-    "name": "Protéines du jour"
-   },
-   "carbohydrates_today": {
-    "name": "Glucides du jour"
-   },
-   "sugars_today": {
-    "name": "Sucres du jour"
-   },
-   "added_sugars_today": {
-    "name": "Sucres ajoutés du jour"
-   },
-   "fat_today": {
-    "name": "Matières grasses du jour"
-   },
-   "saturated_fat_today": {
-    "name": "Graisses saturées du jour"
-   },
-   "fiber_today": {
-    "name": "Fibres du jour"
-   },
-   "salt_today": {
-    "name": "Sel du jour"
-   },
-   "cost_today": {
-    "name": "Dépense alimentaire du jour"
-   },
-   "cost_waste_total": {
-    "name": "Coût du gaspillage"
-   },
-   "next_meal": {
-    "name": "Prochain repas"
-   },
-   "recipes": {
-    "name": "Recettes"
-   },
-   "missing_ingredients": {
-    "name": "Ingrédients manquants"
-   },
-   "batteries_low": {
-    "name": "Piles faibles"
-   },
-   "batteries_undeclared": {
-    "name": "Piles à déclarer"
-   },
-   "warranty_next": {
-    "name": "Prochaine fin de garantie"
-   },
-   "shopping_list": {
-    "name": "Liste de courses"
-   },
-   "list_estimate": {
-    "name": "Estimation du panier"
-   },
-   "receipts_pending": {
-    "name": "Tickets à traiter"
-   }
-  },
-  "binary_sensor": {
-   "expirations": {
-    "name": "Péremptions proches"
-   },
-   "shortages": {
-    "name": "Ruptures"
-   },
-   "nutrition_goals": {
-    "name": "Objectifs nutritionnels"
-   }
-  },
-  "event": {
-   "expiration": {
-    "name": "Péremption"
-   }
-  },
-  "todo": {
-   "expirations": {
-    "name": "À consommer"
-   },
-   "shopping": {
-    "name": "Liste de courses"
-   }
-  },
-  "calendar": {
-   "meals": {
-    "name": "Repas"
-   }
-  }
- }
 }

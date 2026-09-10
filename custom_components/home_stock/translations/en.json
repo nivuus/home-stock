@@ -1,152 +1,190 @@
 {
- "config": {
-  "step": {
-   "user": {
-    "title": "Pantry",
-    "description": "Nothing to configure: the database is created in the configuration folder."
-   }
-  },
-  "abort": {
-   "single_instance_allowed": "The pantry is already set up."
-  }
- },
- "options": {
-  "step": {
-   "init": {
-    "title": "Pantry options",
-    "data": {
-     "expiration_alert_days": "How many days before the best-before date to alert",
-     "recipe_agent": "Conversation agent that translates and adapts imported recipes (optional)",
-     "recipe_source_key": "TheMealDB API key (\"1\" is the public test key)",
-     "shopping_list_horizon_days": "How many days of planned meals the shopping list looks ahead",
-     "receipt_agent": "ai_task entity that reads receipt photos (optional)",
-     "goal_kcal": "Maximum energy per day (kcal)",
-     "goal_proteins": "Maximum protein per day (g)",
-     "goal_carbohydrates": "Maximum carbohydrates per day (g)",
-     "goal_sugars": "Maximum sugars per day (g)",
-     "goal_added_sugars": "Maximum added sugars per day (g)",
-     "goal_fat": "Maximum fat per day (g)",
-     "goal_saturated_fat": "Maximum saturated fat per day (g)",
-     "goal_fiber": "Maximum fibre per day (g)",
-     "goal_salt": "Maximum salt per day (g)"
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pantry",
+        "description": "Nothing to configure: the database is created in the configuration folder."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "The pantry is already set up."
     }
-   }
   },
-  "error": {
-   "no_attachments": "This entity does not accept attachments, so it cannot read a receipt photo. Pick another one, or leave the field empty.",
-   "text_too_long": "This key is too long: 200 characters at most.",
-   "goal_out_of_bounds": "A goal must be a number above 0 and at most 20000. Leave the field empty for no goal at all."
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pantry options",
+        "data": {
+          "expiration_alert_days": "How many days before the best-before date to alert",
+          "recipe_agent": "Conversation agent that translates and adapts imported recipes (optional)",
+          "recipe_source_key": "TheMealDB API key (\"1\" is the public test key)",
+          "shopping_list_horizon_days": "How many days of planned meals the shopping list looks ahead",
+          "receipt_agent": "ai_task entity that reads receipt photos (optional)",
+          "goal_kcal": "Maximum energy per day (kcal)",
+          "goal_proteins": "Maximum protein per day (g)",
+          "goal_carbohydrates": "Maximum carbohydrates per day (g)",
+          "goal_sugars": "Maximum sugars per day (g)",
+          "goal_added_sugars": "Maximum added sugars per day (g)",
+          "goal_fat": "Maximum fat per day (g)",
+          "goal_saturated_fat": "Maximum saturated fat per day (g)",
+          "goal_fiber": "Maximum fibre per day (g)",
+          "goal_salt": "Maximum salt per day (g)"
+        }
+      }
+    },
+    "error": {
+      "no_attachments": "This entity does not accept attachments, so it cannot read a receipt photo. Pick another one, or leave the field empty.",
+      "text_too_long": "This key is too long: 200 characters at most.",
+      "goal_out_of_bounds": "A goal must be a number above 0 and at most 20000. Leave the field empty for no goal at all."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "stock_value": {
+        "name": "Stock value"
+      },
+      "batches": {
+        "name": "Batches in stock"
+      },
+      "kcal_total": {
+        "name": "Kilocalories out of stock"
+      },
+      "cost_total": {
+        "name": "Cost of stock consumed"
+      },
+      "cart_total": {
+        "name": "Current cart"
+      },
+      "to_store": {
+        "name": "To put away"
+      },
+      "kcal_today": {
+        "name": "Today's kilocalories"
+      },
+      "proteins_today": {
+        "name": "Today's protein"
+      },
+      "carbohydrates_today": {
+        "name": "Today's carbohydrates"
+      },
+      "sugars_today": {
+        "name": "Today's sugars"
+      },
+      "added_sugars_today": {
+        "name": "Today's added sugars"
+      },
+      "fat_today": {
+        "name": "Today's fat"
+      },
+      "saturated_fat_today": {
+        "name": "Today's saturated fat"
+      },
+      "fiber_today": {
+        "name": "Today's fiber"
+      },
+      "salt_today": {
+        "name": "Today's salt"
+      },
+      "cost_today": {
+        "name": "Today's food spending"
+      },
+      "cost_waste_total": {
+        "name": "Cost of waste"
+      },
+      "next_meal": {
+        "name": "Next meal"
+      },
+      "recipes": {
+        "name": "Recipes"
+      },
+      "missing_ingredients": {
+        "name": "Missing ingredients"
+      },
+      "batteries_low": {
+        "name": "Low batteries"
+      },
+      "batteries_undeclared": {
+        "name": "Batteries to declare"
+      },
+      "warranty_next": {
+        "name": "Next warranty expiry"
+      },
+      "shopping_list": {
+        "name": "Shopping list"
+      },
+      "list_estimate": {
+        "name": "Basket estimate"
+      },
+      "receipts_pending": {
+        "name": "Receipts to handle"
+      }
+    },
+    "binary_sensor": {
+      "expirations": {
+        "name": "Expiring soon"
+      },
+      "shortages": {
+        "name": "Shortages"
+      },
+      "nutrition_goals": {
+        "name": "Nutrition goals"
+      }
+    },
+    "event": {
+      "expiration": {
+        "name": "Expiration"
+      }
+    },
+    "todo": {
+      "expirations": {
+        "name": "To eat"
+      },
+      "shopping": {
+        "name": "Shopping list"
+      }
+    },
+    "calendar": {
+      "meals": {
+        "name": "Meals"
+      }
+    }
+  },
+  "services": {
+    "create_product": {
+      "name": "Create a product",
+      "description": "Creates a product without requiring a barcode. Returns its identifier.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "The product's name."
+        },
+        "rayon": {
+          "name": "Aisle",
+          "description": "The product's aisle."
+        },
+        "unit": {
+          "name": "Unit",
+          "description": "The base unit. Defaults to piece."
+        },
+        "barcode": {
+          "name": "Barcode",
+          "description": "The product's barcode, if it has one."
+        }
+      }
+    },
+    "link_shopping_item": {
+      "name": "Link a shopping list item",
+      "description": "Attach an existing free-text shopping list line to a product; the line then carries the product's aisle.",
+      "fields": {
+        "item": {
+          "name": "Item",
+          "description": "The line's id or its exact text."
+        },
+        "product_id": {
+          "name": "Product",
+          "description": "The product_id to attach the line to."
+        }
+      }
+    }
   }
- },
- "entity": {
-  "sensor": {
-   "stock_value": {
-    "name": "Stock value"
-   },
-   "batches": {
-    "name": "Batches in stock"
-   },
-   "kcal_total": {
-    "name": "Kilocalories out of stock"
-   },
-   "cost_total": {
-    "name": "Cost of stock consumed"
-   },
-   "cart_total": {
-    "name": "Current cart"
-   },
-   "to_store": {
-    "name": "To put away"
-   },
-   "kcal_today": {
-    "name": "Today's kilocalories"
-   },
-   "proteins_today": {
-    "name": "Today's protein"
-   },
-   "carbohydrates_today": {
-    "name": "Today's carbohydrates"
-   },
-   "sugars_today": {
-    "name": "Today's sugars"
-   },
-   "added_sugars_today": {
-    "name": "Today's added sugars"
-   },
-   "fat_today": {
-    "name": "Today's fat"
-   },
-   "saturated_fat_today": {
-    "name": "Today's saturated fat"
-   },
-   "fiber_today": {
-    "name": "Today's fiber"
-   },
-   "salt_today": {
-    "name": "Today's salt"
-   },
-   "cost_today": {
-    "name": "Today's food spending"
-   },
-   "cost_waste_total": {
-    "name": "Cost of waste"
-   },
-   "next_meal": {
-    "name": "Next meal"
-   },
-   "recipes": {
-    "name": "Recipes"
-   },
-   "missing_ingredients": {
-    "name": "Missing ingredients"
-   },
-   "batteries_low": {
-    "name": "Low batteries"
-   },
-   "batteries_undeclared": {
-    "name": "Batteries to declare"
-   },
-   "warranty_next": {
-    "name": "Next warranty expiry"
-   },
-   "shopping_list": {
-    "name": "Shopping list"
-   },
-   "list_estimate": {
-    "name": "Basket estimate"
-   },
-   "receipts_pending": {
-    "name": "Receipts to handle"
-   }
-  },
-  "binary_sensor": {
-   "expirations": {
-    "name": "Expiring soon"
-   },
-   "shortages": {
-    "name": "Shortages"
-   },
-   "nutrition_goals": {
-    "name": "Nutrition goals"
-   }
-  },
-  "event": {
-   "expiration": {
-    "name": "Expiration"
-   }
-  },
-  "todo": {
-   "expirations": {
-    "name": "To eat"
-   },
-   "shopping": {
-    "name": "Shopping list"
-   }
-  },
-  "calendar": {
-   "meals": {
-    "name": "Meals"
-   }
-  }
- }
 }
