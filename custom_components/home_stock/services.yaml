@@ -1,3 +1,31 @@
+create_product:
+  name: Créer un produit
+  description: Crée un produit sans exiger de code-barres. Retourne son identifiant.
+  fields:
+    name:
+      name: Nom
+      description: Le nom du produit.
+      required: true
+      selector: { text: {} }
+    rayon:
+      name: Rayon
+      description: Le rayon du produit.
+      required: true
+      selector:
+        select:
+          options: [Fruits et légumes, Boucherie, Poissonnerie, Charcuterie et traiteur, Crémerie, Fromages, Boulangerie, Épicerie salée, Épicerie sucrée, Petit-déjeuner, Boissons, Surgelés, Hygiène et beauté, Entretien et maison, Animalerie, Autre]
+    unit:
+      name: Unité
+      description: "L'unité de base. Par défaut, piece."
+      required: false
+      selector:
+        select:
+          options: [g, ml, piece]
+    barcode:
+      name: Code-barres
+      description: "Le code-barres du produit, s'il en a un."
+      required: false
+      selector: { text: {} }
 add_stock:
   name: Ajouter au stock
   description: Crée un lot et son mouvement d'achat.
@@ -644,3 +672,17 @@ check_grocy_migration:
         refusés : un acquittement désigne un lot ou une ligne, jamais un ensemble.
       selector:
         object:
+link_shopping_item:
+  name: Rattacher une ligne de courses
+  description: Rattache une ligne libre de la liste de courses à un produit existant ; la ligne prend le rayon du produit.
+  fields:
+    item:
+      name: Ligne
+      description: L'identifiant de la ligne, ou son texte exact ; si plusieurs lignes ouvertes partagent le même texte, la plus ancienne est retenue.
+      required: true
+      selector: { text: {} }
+    product_id:
+      name: Produit
+      description: L'identifiant du produit (product_id) auquel rattacher la ligne.
+      required: true
+      selector: { text: {} }

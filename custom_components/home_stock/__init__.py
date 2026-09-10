@@ -20,6 +20,8 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import HomeStockCoordinator
+from .create_product import async_register_create_product_service
+from .link_shopping_item import async_register_link_shopping_item_service
 from .off.client import AiohttpTransport, OffClient
 from .panel import async_register_panel, async_remove_panel
 from .recipes.source import MealDbClient
@@ -118,6 +120,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     async_register_services(hass)
+    async_register_create_product_service(hass)
+    async_register_link_shopping_item_service(hass)
     async_register_websocket(hass)
     await async_register_panel(hass)
     return True
