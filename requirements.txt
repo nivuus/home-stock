@@ -1,4 +1,4 @@
-pytest-homeassistant-custom-component==0.13.356
+pytest-homeassistant-custom-component==0.13.364
 
 # THE EIGHT BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
 # repository chose. pytest-homeassistant-custom-component installs Home
