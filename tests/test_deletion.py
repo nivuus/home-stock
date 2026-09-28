@@ -131,6 +131,17 @@ def _leftover(conn, t):
     _recipe(conn, "Riz cantonais", leftover=t["riz"])
 
 
+def _in_the_cart(conn, t):
+    """In the cart right now: hiding it would store a purchase on a hidden
+    product the moment the session is put away."""
+    session = conn.execute(
+        "INSERT INTO shopping_session (started_at, state) VALUES (?, 'to_store')",
+        (NOW,)).lastrowid
+    conn.execute(
+        "INSERT INTO shopping_line (session_id, article_id, quantity, scanned_at)"
+        " VALUES (?, ?, 1000, ?)", (session, t["riz_article"], NOW))
+
+
 PRODUCT_BLOCKERS = [
     (_open_batch, "Encore 2 lots en stock (Frigo)"),
     (_active_recipes, "Utilisé dans 4 recettes : Curry, Paella, Risotto, …"),
@@ -140,6 +151,7 @@ PRODUCT_BLOCKERS = [
     (_equipment, "Consommable de 1 équipement : Cuiseur à riz"),
     (_battery, "Rechange de 1 pile : Télécommande"),
     (_leftover, "Reste de 1 recette : Riz cantonais"),
+    (_in_the_cart, "Dans 1 ligne de la session de courses en cours"),
 ]
 
 

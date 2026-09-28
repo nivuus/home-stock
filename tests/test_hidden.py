@@ -240,3 +240,38 @@ async def test_article_update_refuses_a_bad_active_value(
     answer = await client.receive_json()
     assert answer["success"] is False
     assert answer["error"]["code"] == "invalid_field"
+
+
+# --- re-creating a hidden product by name -------------------------------------
+
+async def test_creating_a_product_named_like_a_hidden_one_says_it_is_hidden(
+        hass: HomeAssistant, setup_entry):
+    from homeassistant.exceptions import ServiceValidationError
+
+    from custom_components.home_stock.aisles import AISLES
+
+    await _entry_with(hass, setup_entry)
+    with pytest.raises(ServiceValidationError, match="masqué"):
+        await hass.services.async_call(
+            "home_stock", "create_product", {"name": "Riz", "rayon": AISLES[0]},
+            blocking=True, return_response=True)
+    # A visible namesake keeps the plain message.
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            "home_stock", "create_product", {"name": "Lait", "rayon": AISLES[0]},
+            blocking=True, return_response=True)
+    assert "masqué" not in str(err.value)
+
+
+async def test_scanning_into_a_new_product_named_like_a_hidden_one_says_so(
+        hass: HomeAssistant, setup_entry, hass_ws_client):
+    await _entry_with(hass, setup_entry)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": "home_stock/article/create",
+                            "code": "999",
+                            "new_product": {"name": "Riz", "base_unit": "g"}})
+    answer = await client.receive_json()
+
+    assert answer["error"]["code"] == "already_exists"
+    assert "masqué" in answer["error"]["message"]

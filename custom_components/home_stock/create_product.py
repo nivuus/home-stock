@@ -21,6 +21,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .aisles import AISLES
 from .const import BASE_UNITS, DOMAIN
+from .messages import hidden_namesake_message
 from .services import _entry
 from .storage import products as store
 
@@ -77,6 +78,8 @@ async def async_handle_create_product(hass: HomeAssistant,
             f"Unité inconnue « {exc.value} » ; unités acceptées : "
             f"{', '.join(exc.allowed)}") from exc
     except store.DuplicateName as exc:
+        if exc.hidden:
+            raise ServiceValidationError(hidden_namesake_message(exc.name)) from exc
         raise ServiceValidationError(
             f"Un produit s'appelle déjà « {exc.name} »") from exc
 

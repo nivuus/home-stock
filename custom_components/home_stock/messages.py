@@ -232,6 +232,12 @@ _BLOCKER_PHRASES: Final[dict[str, Callable[[int, tuple[str, ...]], str]]] = {
 }
 
 
+def hidden_namesake_message(name: str) -> str:
+    """Creating a product whose name a hidden product already holds."""
+    return (f"Un produit masqué s'appelle déjà « {name} » : restaurez-le "
+            "(product/update, active = 1) plutôt que d'en créer un autre.")
+
+
 def slot_label(slot_key: str) -> str:
     """The French name of a meal slot."""
     return _SLOT_LABELS.get(slot_key, slot_key)

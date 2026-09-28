@@ -1,6 +1,17 @@
 """Read and write commands for the panel. The panel reuses the Home Assistant
 connection, so there is no separate authentication and it can subscribe to
 changes."""
+
+# policy: allow-long-file
+#
+# Over 1800 lines, and that IS too long: the catalogue, stock, session, list,
+# shop and correction commands share one module, and its lot section headers
+# are the seams to split it along. Splitting it is a refactor of its own, not
+# a side effect of the delete feature - which only touched products/list,
+# lookup, article/create and article/update here and put its own commands in
+# delete_surfaces.py. The marker records the debt; it does not settle it.
+# Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import json
@@ -36,7 +47,8 @@ from .domain.pricing import suggest_price
 from .domain.route import is_reliable
 from .domain.stock import InsufficientStock, sort_batches
 from .domain.units import UnitError
-from .messages import french_error
+from .messages import french_error, hidden_namesake_message
+from .storage.deletion import hidden_product_named
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
 from .off.mapping import map_article
 from .off.packaging import bins_from_raw
@@ -653,6 +665,12 @@ async def article_create(hass, connection, msg) -> None:
         result = await hass.async_add_executor_job(work)
     except sqlite3.IntegrityError as err:
         name = (msg.get("new_product") or {}).get("name")
+        if name and "UNIQUE constraint failed: product.name" in str(err) \
+                and await _read(hass, partial(hidden_product_named,
+                                              runtime.manager.db.read(), name)):
+            connection.send_error(msg["id"], "already_exists",
+                                  hidden_namesake_message(name.strip()))
+            return
         _send_integrity_error(connection, msg["id"], err, name=name)
         return
     except (LookupError, UnitError, ValueError, TypeError, OverflowError) as err:

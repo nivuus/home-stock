@@ -41,6 +41,12 @@ _PRODUCT_BLOCKERS: tuple[tuple[str, str], ...] = (
     ("leftover", """
         SELECT name FROM recipe WHERE leftover_product_id = :id AND active = 1
         ORDER BY name, id"""),
+    # Same rule as for one article: in the cart now, stock on it tomorrow.
+    ("shopping_session", """
+        SELECT NULL AS name FROM shopping_line sl
+        JOIN article a ON a.id = sl.article_id
+        JOIN shopping_session s ON s.id = sl.session_id
+        WHERE a.product_id = :id AND s.state <> 'done'"""),
 )
 
 _ARTICLE_BLOCKERS: tuple[tuple[str, str], ...] = (
@@ -138,6 +144,14 @@ def erase_product(conn, product_id: int) -> None:
     conn.execute("DELETE FROM packaging WHERE scope = 'product' AND target_id = ?",
                  (product_id,))
     conn.execute("DELETE FROM product WHERE id = ?", (product_id,))
+
+
+def hidden_product_named(conn, name: str) -> bool:
+    """Whether the product holding this name is a hidden one: creating a
+    namesake then collides with a product no list shows."""
+    row = conn.execute("SELECT active FROM product WHERE name = ?",
+                       (name.strip(),)).fetchone()
+    return row is not None and not row["active"]
 
 
 def set_product_active(conn, product_id: int, active: bool) -> None:
