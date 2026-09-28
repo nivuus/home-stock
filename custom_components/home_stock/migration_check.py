@@ -15,6 +15,14 @@ This module stops nothing and starts nothing. The component never shuts Grocy
 down — stopping one of the household's containers is a human gesture — and a
 test scans this source to make sure it could not.
 """
+
+# policy: allow-long-file
+#
+# 830 lines: the twelve switchover checks, their measures and their report.
+# Splitting measures from verdicts is a refactor of its own, not a side effect
+# of tying C0 to CURRENT_VERSION - the only reason this file appears in the
+# change that added the marker. Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import json
