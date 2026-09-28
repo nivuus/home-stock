@@ -85,6 +85,9 @@ Rien d'autre, et chaque absence est un choix :
 > for `nivuus update`, which lays a new release on a machine where Home
 > Assistant is already running: nothing would load the new code. The package
 > now has an `activate` hook that restarts the container only when it runs.
+>
+> The rest of this section is kept as the 2026-08-28 reasoning, for the
+> record; it no longer describes the package.
 
 À l'installation, le tri topologique garantit `install(home-manager)` avant
 `install(home-stock)` : les fichiers sont en place **avant** que le socle ne
