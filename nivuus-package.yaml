@@ -12,7 +12,8 @@ tier: userspace
 requires:
   packages: [home-manager]
 
-# Ni `apt:`, ni `wizard:`, ni hook `activate` — les trois deliberement.
+# Neither `apt:` nor `wizard:`, both deliberately; and an `activate` hook
+# since releases are laid on running machines (2026-09-28).
 #
 # `apt:` : manifest.json ne declare aucun `requirements` Python. Les trois
 # `dependencies` de l'integration (http, websocket_api, panel_custom) sont des
@@ -22,10 +23,16 @@ requires:
 # seule au premier demarrage. Il n'y a rien a demander, et une question sans
 # effet est une promesse qu'on ne tient pas.
 #
-# `activate` : le tri topologique garantit que ce package s'installe avant que
-# le socle ne demarre Home Assistant, donc l'integration est chargee des le
-# premier demarrage. Un activate serait au mieux inutile, au pire une course :
-# les unites nivuus-package-activate@<nom>.service vivent toutes dans
-# multi-user.target.wants, et systemd ne les ordonne pas entre elles.
+# `activate` restarts the `homeassistant` container when it is running
+# (hooks/activate.py). Home Assistant imports a custom integration only at
+# startup: without it, an update laid by `nivuus update` would leave the
+# previous version running until something else restarted it. At first boot
+# it runs next to home-manager's own activate - the container is then absent
+# (nothing to do) or just started (one harmless extra restart).
 hooks:
   install: hooks/install.py
+  activate: hooks/activate.py
+
+# Where `nivuus update` finds this package's releases.
+source:
+  github: nivuus/home-stock

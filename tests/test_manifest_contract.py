@@ -49,11 +49,11 @@ check("aucun wizard", "wizard" in data, False)
 check("hook install", (data.get("hooks") or {}).get("install"),
       "hooks/install.py")
 
-# Pas de hook activate : le tri topologique place install(home-stock) avant
-# que le socle ne demarre Home Assistant. Un activate serait au mieux inutile,
-# au pire une course — les unites systemd d'activation ne sont pas ordonnees
-# entre elles.
-check("pas de hook activate", "activate" in (data.get("hooks") or {}), False)
+# An activate hook restarts a running Home Assistant so that an update laid
+# by `nivuus update` actually takes effect (see hooks/activate.py).
+check("activate hook", (data.get("hooks") or {}).get("activate"),
+      "hooks/activate.py")
+check("release source", data.get("source"), {"github": "nivuus/home-stock"})
 check("pas de hook resolve", "resolve" in (data.get("hooks") or {}), False)
 
 installer = os.environ.get("NIVUUS_INSTALLER_DIR")
@@ -67,8 +67,11 @@ if installer:
           ("home-manager",))
     check("parseur du moteur: hook install resolu",
           manifest.hook_path("install").endswith("hooks/install.py"), True)
-    check("parseur du moteur: aucun activate",
-          manifest.hook_path("activate"), "")
+    check("engine parser: activate hook resolved",
+          manifest.hook_path("activate").endswith("hooks/activate.py"), True)
+    check("engine parser: release source",
+          manifest.source.github if manifest.source else None,
+          "nivuus/home-stock")
 else:
     print("NIVUUS_INSTALLER_DIR absent : verification locale seule")
 
