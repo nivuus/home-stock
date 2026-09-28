@@ -329,6 +329,9 @@ async def meal_plan(hass, connection, msg) -> None:
         servings=msg["servings"]))
     if posted is not _FAILED:
         connection.send_result(msg["id"], posted)
+        # The next-meal sensor reads the planning: without this, a screen
+        # would keep announcing the old next meal for up to 15 minutes.
+        await runtime.coordinator.async_request_refresh()
 
 
 @websocket_api.websocket_command({
@@ -350,6 +353,7 @@ async def meal_move(hass, connection, msg) -> None:
         slot_key=msg["slot_key"], position=msg.get("position")))
     if result is not _FAILED:
         connection.send_result(msg["id"], {})
+        await runtime.coordinator.async_request_refresh()
 
 
 @websocket_api.websocket_command({
@@ -367,6 +371,7 @@ async def meal_cancel(hass, connection, msg) -> None:
         runtime.manager.cancel_meal, msg["meal_id"]))
     if outcome is not _FAILED:
         connection.send_result(msg["id"], {"outcome": outcome})
+        await runtime.coordinator.async_request_refresh()
 
 
 @websocket_api.websocket_command({
