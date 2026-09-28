@@ -185,6 +185,26 @@
           "description": "The product_id to attach the line to."
         }
       }
+    },
+    "delete_product": {
+      "name": "Delete a product",
+      "description": "Administrators only. Erases a product that never served; hides one with history (reversible). Refused while stock or an upcoming use remains (active recipe, planned meal, shopping list…).",
+      "fields": {
+        "product_id": {
+          "name": "Product",
+          "description": "The product's identifier."
+        }
+      }
+    },
+    "delete_article": {
+      "name": "Delete an article",
+      "description": "Administrators only. Erases an article that never served; hides one with history (reversible). Refused while a batch is in stock or a line sits in a running shopping session.",
+      "fields": {
+        "article_id": {
+          "name": "Article",
+          "description": "The article's identifier."
+        }
+      }
     }
   }
 }
