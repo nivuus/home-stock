@@ -35,8 +35,13 @@ from .const import (
     REASON_PURCHASE,
 )
 from .grocy.units import base_unit
+from .storage.migrations import CURRENT_VERSION
 
-SCHEMA_VERSION_EXPECTED = 8
+# C0 asks whether Home Assistant restarted on the code it runs: the schema must
+# be the one this code migrates to, whatever migrations came after the switch.
+SCHEMA_VERSION_EXPECTED = CURRENT_VERSION
+# batch.external_ref appears in m008: the stock and movement checks read it.
+_STOCK_REF_SCHEMA_VERSION = 8
 
 # Les contrôles dont un verdict vert exige un acquittement NOMINATIF. Un
 # bouton « tout va bien » finit toujours par être pressé sans regarder.
@@ -209,7 +214,7 @@ def _measure(db, grocy_path: str, *, now: datetime) -> Measures:
         _measure_equipment(conn, grocy, measures)
         _measure_recipes(conn, measures)
         _measure_plan(conn, measures)
-        if measures.schema_version >= SCHEMA_VERSION_EXPECTED:
+        if measures.schema_version >= _STOCK_REF_SCHEMA_VERSION:
             # Avant m008 il n'y a pas de batch.external_ref : les dix autres
             # contrôles n'ont rien à lire, et leur plancher les rendra `empty`
             # de lui-même. C0 dit pourquoi, et le dit en premier.

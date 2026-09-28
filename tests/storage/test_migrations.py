@@ -1006,9 +1006,5 @@ def test_m008_index_is_declared_partial(tmp_path):
 def test_m008_is_replayable(tmp_path):
     """Deux passages d'apply_migrations ne doivent ni lever ni dupliquer."""
     conn = _migrated(tmp_path)
-    assert migrations.apply_migrations(conn) == 8
-    assert migrations.apply_migrations(conn) == 8
-
-
-def test_current_version_is_eight():
-    assert migrations.CURRENT_VERSION == 8
+    assert migrations.apply_migrations(conn) == CURRENT_VERSION
+    assert migrations.apply_migrations(conn) == CURRENT_VERSION
