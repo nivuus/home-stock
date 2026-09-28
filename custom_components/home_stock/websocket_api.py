@@ -1,6 +1,17 @@
 """Read and write commands for the panel. The panel reuses the Home Assistant
 connection, so there is no separate authentication and it can subscribe to
 changes."""
+
+# policy: allow-long-file
+#
+# Over 1800 lines, and that IS too long: the catalogue, stock, session, list,
+# shop and correction commands share one module, and its lot section headers
+# are the seams to split it along. Splitting it is a refactor of its own, not
+# a side effect of the delete feature - which only touched products/list,
+# lookup, article/create and article/update here and put its own commands in
+# delete_surfaces.py. The marker records the debt; it does not settle it.
+# Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import json
@@ -28,6 +39,7 @@ from .const import (
     ROUTE_MIN_SESSIONS,
 )
 from .coordinator import async_resolve_time_zone
+from .deletion import set_article_active_within
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
 from .domain.foodday import GRANULARITIES
 from .domain.matching import candidates, preselect, strip_brand
@@ -35,7 +47,8 @@ from .domain.pricing import suggest_price
 from .domain.route import is_reliable
 from .domain.stock import InsufficientStock, sort_batches
 from .domain.units import UnitError
-from .messages import french_error
+from .messages import french_error, hidden_namesake_message
+from .storage.deletion import hidden_product_named
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
 from .off.mapping import map_article
 from .off.packaging import bins_from_raw
@@ -188,6 +201,11 @@ NEW_PRODUCT_SCHEMA: Final[dict[str, Callable[[Any], Any]]] = {
     "base_unit": _BASE_UNIT,
 }
 NEW_PRODUCT_REQUIRED: Final = ("name", "base_unit")
+# Hiding or restoring an article through article/update. Restoring one whose
+# product is hidden restores the product too (deletion.set_article_active).
+ARTICLE_VISIBILITY: Final[dict[str, Callable[[Any], Any]]] = {
+    "active": _strict_boolean,
+}
 
 
 def _runtime(hass: HomeAssistant):
@@ -297,14 +315,20 @@ def _send_integrity_error(connection: websocket_api.ActiveConnection, msg_id: in
     connection.send_error(msg_id, "invalid_field", "Écriture refusée : donnée invalide.")
 
 
-@websocket_api.websocket_command({vol.Required("type"): "home_stock/products/list"})
+@websocket_api.websocket_command({
+    vol.Required("type"): "home_stock/products/list",
+    # Hidden (deleted with history) products stay out unless asked for.
+    vol.Optional("include_hidden", default=False): bool,
+})
 @websocket_api.async_response
 async def products_list(hass, connection, msg) -> None:
     runtime = _runtime(hass)
     if runtime is None:
         _send_not_loaded(connection, msg)
         return
-    products = await _read(hass, partial(repo.list_products, runtime.manager.db.read()))
+    products = await _read(hass, partial(
+        repo.list_products, runtime.manager.db.read(),
+        active_only=not msg["include_hidden"]))
     connection.send_result(msg["id"], {"products": products})
 
 
@@ -495,6 +519,11 @@ async def lookup(hass, connection, msg) -> None:
     if known is not None:
         product = await _read(hass, partial(
             repo.get_product, runtime.manager.db.read(), known["product_id"]))
+        # A hidden article is still FOUND, never "unknown": buying a hidden
+        # product again must not create a duplicate. The flags let the caller
+        # offer to restore it. An article is hidden with its product.
+        product = {**product, "active": bool(product["active"])}
+        known = {**known, "active": bool(known["active"]) and product["active"]}
         price = await _suggest_price(hass, runtime, known, product, code)
         connection.send_result(msg["id"], {
             "code": code, "known": True, "article": known, "product": product,
@@ -636,6 +665,12 @@ async def article_create(hass, connection, msg) -> None:
         result = await hass.async_add_executor_job(work)
     except sqlite3.IntegrityError as err:
         name = (msg.get("new_product") or {}).get("name")
+        if name and "UNIQUE constraint failed: product.name" in str(err) \
+                and await _read(hass, partial(hidden_product_named,
+                                              runtime.manager.db.read(), name)):
+            connection.send_error(msg["id"], "already_exists",
+                                  hidden_namesake_message(name.strip()))
+            return
         _send_integrity_error(connection, msg["id"], err, name=name)
         return
     except (LookupError, UnitError, ValueError, TypeError, OverflowError) as err:
@@ -671,7 +706,15 @@ async def article_update(hass, connection, msg) -> None:
         _send_not_loaded(connection, msg)
         return
 
-    fields = _validate_fields(ARTICLE_EDITABLE, msg["fields"], connection, msg["id"])
+    # `active` is visibility, not an Open Food Facts column: it is validated
+    # like product/update's, and never lands in manual_fields.
+    requested = dict(msg["fields"])
+    visibility = _validate_fields(ARTICLE_VISIBILITY, {
+        k: requested.pop(k) for k in list(requested) if k in ARTICLE_VISIBILITY
+    }, connection, msg["id"])
+    if visibility is None:
+        return
+    fields = _validate_fields(ARTICLE_EDITABLE, requested, connection, msg["id"])
     if fields is None:
         return
 
@@ -680,12 +723,16 @@ async def article_update(hass, connection, msg) -> None:
             article = repo.get_article(conn, msg["article_id"])
             if article is None:
                 raise LookupError(f"no article {msg['article_id']}")
-            protected = set(json.loads(article["manual_fields"] or "[]"))
-            protected.update(fields)
-            repo.update_article_fields(conn, msg["article_id"], {
-                **fields,
-                "manual_fields": json.dumps(sorted(protected)),
-            })
+            if fields:
+                protected = set(json.loads(article["manual_fields"] or "[]"))
+                protected.update(fields)
+                repo.update_article_fields(conn, msg["article_id"], {
+                    **fields,
+                    "manual_fields": json.dumps(sorted(protected)),
+                })
+            if "active" in visibility:
+                set_article_active_within(conn, msg["article_id"],
+                                          visibility["active"])
 
     try:
         await hass.async_add_executor_job(work)

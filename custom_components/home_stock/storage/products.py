@@ -19,6 +19,7 @@ from typing import Any, Final
 
 from ..const import BASE_UNITS
 from . import repositories as repo
+from .deletion import hidden_product_named
 
 PRODUCT_ID_PREFIX: Final = "hs_"
 DEFAULT_BASE_UNIT: Final = "piece"
@@ -34,8 +35,10 @@ class EmptyName(ProductError):
 
 
 class DuplicateName(ProductError):
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, hidden: bool = False) -> None:
         self.name = name
+        # The namesake is a hidden (deleted with history) product.
+        self.hidden = hidden
         super().__init__(f"product name already used: {name}")
 
 
@@ -140,7 +143,8 @@ def create_product(conn, *, name: str, rayon: str, unit: str | None = None,
         row_id = repo.insert_product(conn, name=clean_name, base_unit=clean_unit,
                                      aisle_id=aisle_id)
     except sqlite3.IntegrityError as exc:
-        raise DuplicateName(clean_name) from exc
+        raise DuplicateName(
+            clean_name, hidden=hidden_product_named(conn, clean_name)) from exc
 
     if clean_barcode is not None:
         article_id = repo.insert_article(conn, product_id=row_id)

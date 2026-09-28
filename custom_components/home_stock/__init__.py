@@ -21,6 +21,7 @@ from .const import (
 )
 from .coordinator import HomeStockCoordinator
 from .create_product import async_register_create_product_service
+from .delete_surfaces import async_register_delete_surfaces
 from .link_shopping_item import async_register_link_shopping_item_service
 from .off.client import AiohttpTransport, OffClient
 from .panel import async_register_panel, async_remove_panel
@@ -123,6 +124,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     async_register_create_product_service(hass)
     async_register_link_shopping_item_service(hass)
     async_register_websocket(hass)
+    async_register_delete_surfaces(hass)
     await async_register_panel(hass)
     return True
 

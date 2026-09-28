@@ -194,3 +194,59 @@ def french_error(err: Exception) -> tuple[str, str]:
 def french_message(err: Exception) -> str:
     """Just the French sentence — what the services surface needs."""
     return french_error(err)[1]
+
+
+# --- deletion: why a product or an article cannot go -----------------------
+
+_MAX_NAMES: Final = 3
+_SLOT_LABELS: Final = {"breakfast": "petit-déjeuner", "lunch": "déjeuner",
+                       "dinner": "dîner", "snack": "en-cas"}
+
+
+def _plural(count: int, word: str) -> str:
+    return word if count == 1 else f"{word}s"
+
+
+def _names(names: tuple[str, ...]) -> str:
+    shown = ", ".join(names[:_MAX_NAMES])
+    return f"{shown}, …" if len(names) > _MAX_NAMES else shown
+
+
+# One sentence per blocker kind, from its count and its names. The kinds are
+# the ones deletion.Blocker carries.
+_BLOCKER_PHRASES: Final[dict[str, Callable[[int, tuple[str, ...]], str]]] = {
+    "open_batches": lambda n, names:
+        f"encore {n} {_plural(n, 'lot')} en stock ({_names(names)})",
+    "active_recipes": lambda n, names:
+        f"utilisé dans {n} {_plural(n, 'recette')} : {_names(names)}",
+    "planned_meals": lambda n, names: f"prévu dans {n} repas : {_names(names)}",
+    "shopping_items": lambda n, names: "sur la liste de courses",
+    "recurring": lambda n, names:
+        f"dans {n} {_plural(n, 'course')} {_plural(n, 'récurrente')}",
+    "equipment": lambda n, names:
+        f"consommable de {n} {_plural(n, 'équipement')} : {_names(names)}",
+    "battery": lambda n, names: f"rechange de {n} {_plural(n, 'pile')} : {_names(names)}",
+    "leftover": lambda n, names: f"reste de {n} {_plural(n, 'recette')} : {_names(names)}",
+    "shopping_session": lambda n, names:
+        f"dans {n} {_plural(n, 'ligne')} de la session de courses en cours",
+}
+
+
+def hidden_namesake_message(name: str) -> str:
+    """Creating a product whose name a hidden product already holds."""
+    return (f"Un produit masqué s'appelle déjà « {name} » : restaurez-le "
+            "(product/update, active = 1) plutôt que d'en créer un autre.")
+
+
+def slot_label(slot_key: str) -> str:
+    """The French name of a meal slot."""
+    return _SLOT_LABELS.get(slot_key, slot_key)
+
+
+def delete_blocked_message(blockers) -> str:
+    """The French refusal of a delete: every blocker, with its count and names.
+
+    `blockers` is a sequence of deletion.Blocker (kind, count, names).
+    """
+    text = " ; ".join(_BLOCKER_PHRASES[b.kind](b.count, b.names) for b in blockers)
+    return text[:1].upper() + text[1:]

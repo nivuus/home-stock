@@ -19,6 +19,7 @@ from custom_components.home_stock.migration_check import check_migration
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import (
+    CURRENT_VERSION,
     MIGRATIONS,
     apply_migrations,
 )
@@ -167,11 +168,11 @@ def test_a_check_that_compares_zero_to_zero_is_never_green(db, grocy_vide):
 
 # --- C0 ---------------------------------------------------------------------
 
-def test_c0_refuses_a_schema_below_eight(db_schema_seven, grocy_reel_db):
+def test_c0_refuses_a_schema_below_the_current_one(db_schema_seven, grocy_reel_db):
     rapport = check_migration(db_schema_seven, grocy_reel_db, archive=False)
     c0 = _check(rapport, "C0")
     assert c0.verdict != "ok"
-    assert "8" in " ".join(c0.details)
+    assert f"attendu {CURRENT_VERSION}" in " ".join(c0.details)
 
 
 def test_c0_refuses_a_copy_older_than_two_hours(db_migre, grocy_reel_db):

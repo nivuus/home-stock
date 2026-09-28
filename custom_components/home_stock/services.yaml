@@ -686,3 +686,29 @@ link_shopping_item:
       description: L'identifiant du produit (product_id) auquel rattacher la ligne.
       required: true
       selector: { text: {} }
+
+delete_product:
+  name: Supprimer un produit
+  description: >-
+    Réservé aux administrateurs. Efface un produit qui n'a jamais servi ; masque
+    celui qui a un historique (réversible). Refusé tant qu'il reste du stock ou
+    un usage à venir (recette active, repas prévu, liste de courses…).
+  fields:
+    product_id:
+      name: Produit
+      description: L'identifiant du produit.
+      required: true
+      selector: { number: { min: 1, mode: box } }
+
+delete_article:
+  name: Supprimer un article
+  description: >-
+    Réservé aux administrateurs. Efface un article qui n'a jamais servi ; masque
+    celui qui a un historique (réversible). Refusé tant qu'il reste un lot en
+    stock ou une ligne dans une session de courses en cours.
+  fields:
+    article_id:
+      name: Article
+      description: L'identifiant de l'article.
+      required: true
+      selector: { number: { min: 1, mode: box } }

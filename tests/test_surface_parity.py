@@ -43,6 +43,15 @@ CAS_LIMITES = [
      {"acknowledged": "grocy:stock:419"}, "refusé"),   # une chaîne, pas une liste
     ("home_stock/migration/check", "check_grocy_migration",
      {"archive": False}, "accepté"),
+    # Suppression : un identifiant inconnu, négatif ou booléen est refusé des
+    # deux côtés. Les cas bloqué/accepté dépendent de l'état : ils vivent dans
+    # tests/test_delete_surfaces.py, un état neuf par surface.
+    ("home_stock/product/delete", "delete_product", {"product_id": 4242}, "refusé"),
+    ("home_stock/product/delete", "delete_product", {"product_id": -3}, "refusé"),
+    ("home_stock/product/delete", "delete_product", {"product_id": True}, "refusé"),
+    ("home_stock/article/delete", "delete_article", {"article_id": 4242}, "refusé"),
+    ("home_stock/article/delete", "delete_article", {"article_id": 0}, "refusé"),
+    ("home_stock/article/delete", "delete_article", {}, "refusé"),
 ]
 
 
