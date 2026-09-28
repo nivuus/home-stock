@@ -113,6 +113,32 @@ def test_stock_rows_join_names(conn):
     assert row["remaining"] == 1000
 
 
+def test_stock_rows_carry_the_aisle_and_the_positions(conn):
+    """The kitchen tablet browses the stock by location, then aisle: each row
+    carries the aisle (NULL for a product without one, never dropped) and the
+    position of both, so the tablet orders them without a second request."""
+    fridge = repo.insert_location(conn, name="Frigo", kind="fridge", position=1)
+    pantry = repo.insert_location(conn, name="Placard", kind="pantry", position=3)
+    dairy = next(a for a in repo.list_aisles(conn) if a["name"] == "Crémerie")
+    yogurt = repo.insert_product(conn, name="Yaourt", base_unit="g", aisle_id=dairy["id"])
+    pasta = repo.insert_product(conn, name="Pâtes", base_unit="g")
+    for product_id, location_id in ((yogurt, fridge), (pasta, pantry)):
+        article_id = repo.insert_article(conn, product_id=product_id)
+        repo.insert_batch(conn, article_id=article_id, location_id=location_id,
+                          quantity=500, entered_at="2026-08-01T10:00:00")
+
+    rows = {r["product_name"]: r for r in repo.stock_rows(conn)}
+
+    assert rows["Yaourt"]["aisle_id"] == dairy["id"]
+    assert rows["Yaourt"]["aisle_name"] == "Crémerie"
+    assert rows["Yaourt"]["aisle_position"] == dairy["position"]
+    assert rows["Yaourt"]["location_position"] == 1
+    assert rows["Pâtes"]["aisle_id"] is None
+    assert rows["Pâtes"]["aisle_name"] is None
+    assert rows["Pâtes"]["aisle_position"] is None
+    assert rows["Pâtes"]["location_position"] == 3
+
+
 def test_stock_rows_kcal_falls_back_to_the_product_reference(conn):
     """home_stock/batches/list (the future panel) is served straight from this
     query: without the same COALESCE as list_batches_for_product (spec 7.4),

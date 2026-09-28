@@ -187,3 +187,46 @@ async def test_journal_day_carries_the_week_mean_the_goal_lines_need(
     assert result["week_mean"] == seeded.runtime_data.coordinator.data["week_mean"]
     assert set(result["week_mean"]) == set(result["totals"]) - {"kcal_rate"} | {
         "cost", "waste_cost", "unvalued"}
+
+
+# --- The kitchen tablet: batches carry their aisle ---------------------------
+
+@pytest.fixture
+async def two_products(entry, hass):
+    """Two batches in two locations: a yogurt shelved in "Crémerie" and pasta
+    with no aisle at all (6 such products in the real stock, 2026-09-28)."""
+    manager = entry.runtime_data.manager
+
+    def _seed() -> None:
+        with manager.db.write() as conn:
+            fridge = repo.insert_location(conn, name="Frigo", kind="fridge", position=1)
+            pantry = repo.insert_location(conn, name="Placard", kind="pantry", position=3)
+            dairy = next(a for a in repo.list_aisles(conn) if a["name"] == "Crémerie")
+            yogurt = repo.insert_product(conn, name="Yaourt", base_unit="g",
+                                         aisle_id=dairy["id"])
+            pasta = repo.insert_product(conn, name="Pâtes", base_unit="g")
+            yogurt_article = repo.insert_article(conn, product_id=yogurt)
+            pasta_article = repo.insert_article(conn, product_id=pasta)
+        manager.add_stock(article_id=yogurt_article, quantity=500, location_id=fridge,
+                          occurred_at="2026-08-18T10:00:00")
+        manager.add_stock(article_id=pasta_article, quantity=500, location_id=pantry,
+                          occurred_at="2026-08-18T10:00:00")
+
+    await hass.async_add_executor_job(_seed)
+    return entry
+
+
+async def test_batches_list_carries_the_aisle_and_positions(
+        hass, two_products, hass_ws_client, hass_read_only_access_token):
+    # The tablet is a standard user, not an administrator.
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    await client.send_json_auto_id({"type": "home_stock/batches/list"})
+    message = await client.receive_json()
+    assert message["success"] is True
+    rows = {r["product_name"]: r for r in message["result"]["batches"]}
+    assert rows["Yaourt"]["aisle_name"] == "Crémerie"
+    assert isinstance(rows["Yaourt"]["aisle_position"], int)
+    assert rows["Yaourt"]["location_position"] == 1
+    assert rows["Pâtes"]["aisle_id"] is None and rows["Pâtes"]["aisle_name"] is None
+    assert rows["Pâtes"]["aisle_position"] is None
+    assert rows["Pâtes"]["location_position"] == 3

@@ -3,6 +3,16 @@
 Every function takes an open connection: the caller owns the transaction, so a
 service can write a batch and its movement atomically.
 """
+
+# policy: allow-long-file
+#
+# 2203 lines, and that IS too long: one module holds the repositories of every
+# lot (stock, shopping, shops, recipes, meals, equipment), and its section
+# headers are the seams to split it along. Splitting it is a refactor of its
+# own, not a side effect of adding the aisle to stock_rows - which is the only
+# reason this file appears in the change that added the marker. The marker
+# records the debt; it does not settle it. Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import sqlite3
@@ -548,17 +558,25 @@ def stock_rows(conn) -> list[dict[str, Any]]:
     list_batches_for_product (spec 7.4): this is what home_stock/batches/list
     hands the future panel, and without the fallback it would show no calories
     for exactly the generic and fresh-produce articles the fallback exists for.
+
+    The aisle (aisle_id, aisle_name, aisle_position) and location_position let
+    the kitchen tablet browse the stock by location, then aisle, in walking
+    order. The aisle join is OUTER: a product without an aisle keeps its row,
+    with the three aisle fields NULL.
     """
     return _rows(conn.execute(
         "SELECT b.id, b.remaining, b.best_before, b.entered_at, b.opened_at,"
         "       b.price_per_base_unit, p.id AS product_id, p.name AS product_name,"
         "       p.base_unit, p.min_quantity, a.id AS article_id, a.label AS article_label,"
         f"       {KCAL_RATE_SQL} AS kcal_per_base_unit,"
-        "       l.id AS location_id, l.name AS location_name"
+        "       l.id AS location_id, l.name AS location_name,"
+        "       l.position AS location_position, p.aisle_id,"
+        "       s.name AS aisle_name, s.position AS aisle_position"
         " FROM batch b"
         " JOIN article a ON a.id = b.article_id"
         " JOIN product p ON p.id = a.product_id"
         " JOIN location l ON l.id = b.location_id"
+        " LEFT JOIN aisle s ON s.id = p.aisle_id"
         " WHERE b.closed_at IS NULL"
         " ORDER BY p.name, b.best_before"
     ))
