@@ -3,6 +3,16 @@
 Every function takes an open connection: the caller owns the transaction, so a
 service can write a batch and its movement atomically.
 """
+
+# policy: allow-long-file
+#
+# 2203 lines, and that IS too long: one module holds the repositories of every
+# lot (stock, shopping, shops, recipes, meals, equipment), and its section
+# headers are the seams to split it along. Splitting it is a refactor of its
+# own, not a side effect of adding the aisle to stock_rows - which is the only
+# reason this file appears in the change that added the marker. The marker
+# records the debt; it does not settle it. Tracked as nivuus/home-stock#9.
+
 from __future__ import annotations
 
 import sqlite3
