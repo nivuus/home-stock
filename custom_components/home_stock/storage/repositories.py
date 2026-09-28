@@ -1434,8 +1434,12 @@ def list_measures(conn) -> list[dict[str, Any]]:
 
 
 def find_alias(conn, normalised: str) -> dict[str, Any] | None:
+    """The alias a human taught, unless its product has since been hidden:
+    a hidden product is out of the matching, taught or not."""
     return _row(conn.execute(
-        "SELECT * FROM ingredient_alias WHERE normalised = ?",
+        "SELECT ia.* FROM ingredient_alias ia"
+        " JOIN product p ON p.id = ia.product_id"
+        " WHERE ia.normalised = ? AND p.active = 1",
         (normalised,)).fetchone())
 
 
@@ -1585,6 +1589,7 @@ def missing_products_between(conn, start: str, end: str) -> list[dict[str, Any]]
             LEFT JOIN culinary_measure cm ON cm.id = ri.measure_id
             WHERE m.day BETWEEN ? AND ?
               AND m.state = 'planned'
+              AND p.active = 1
               AND ri.match_state IN ('auto', 'confirmed')
               AND ri.amount IS NOT NULL
               AND {_INGREDIENT_FACTOR_SQL} IS NOT NULL
@@ -2014,6 +2019,7 @@ def due_recurring(conn, today: str) -> list[dict[str, Any]]:
         " FROM shopping_recurring sr"
         " LEFT JOIN product p ON p.id = sr.product_id"
         " WHERE sr.active = 1"
+        "   AND (sr.product_id IS NULL OR p.active = 1)"
         "   AND (sr.last_added_on IS NULL"
         "        OR DATE(sr.last_added_on, '+' || sr.every_days || ' days') <= DATE(?))"
         " ORDER BY sr.id", (today,)))
@@ -2056,7 +2062,7 @@ def _estimate_articles(conn, product_id: int) -> list[dict[str, Any]]:
         "SELECT a.id, a.net_quantity,"
         "       (SELECT MAX(bt.entered_at) FROM batch bt WHERE bt.article_id = a.id)"
         "         AS last_bought"
-        " FROM article a WHERE a.product_id = ?"
+        " FROM article a WHERE a.product_id = ? AND a.active = 1"
         " ORDER BY last_bought IS NULL, last_bought DESC, a.is_generic DESC, a.id",
         (product_id,)))
 
