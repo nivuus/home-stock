@@ -229,6 +229,12 @@ def per_part_values(frozen: Sequence[Mapping[str, float | None]],
     other eight alone. Throwing away eight known values to punish one missing
     one would be worse than useless — it would be wrong.
 
+    The kcal go one step further (owner's rule of 2026-10-03: what is eaten
+    counts): they are the sum of the KNOWN values, and None only when no
+    ingredient carried any. One unvalued tomato used to erase the whole
+    breakfast from the day's counter; it now counts zero on its own, and the
+    dish summary still reports it in `unvalued`.
+
     No rounding: rounding here would make the dish's total disagree with the
     sum of its portions.
     """
@@ -237,8 +243,11 @@ def per_part_values(frozen: Sequence[Mapping[str, float | None]],
     result: dict[str, float | None] = {}
     for key in PER_PART_KEYS:
         values = [row.get(key) for row in frozen]
-        if not values or any(value is None for value in values):
+        known = [value for value in values if value is not None]
+        if key == "kcal":
+            result[key] = sum(known) / parts if known else None
+        elif not values or len(known) < len(values):
             result[key] = None
         else:
-            result[key] = sum(values) / parts
+            result[key] = sum(known) / parts
     return result
