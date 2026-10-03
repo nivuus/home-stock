@@ -21,6 +21,7 @@ from .application import PartsError
 from .const import CONSUME_REASONS, REASON_CONSUMPTION
 from .domain.stock import InsufficientStock
 from .domain.units import UnitError
+from .occurred_at import past_moment
 from .websocket_api import (
     _NON_NEGATIVE_FLOAT,
     _NON_NEGATIVE_ID,
@@ -44,6 +45,8 @@ from .websocket_api import (
     vol.Optional("best_before"): _iso_date,
     vol.Optional("price_per_base_unit"): _NON_NEGATIVE_FLOAT,
     vol.Optional("idempotency_key"): _bounded_text,
+    # When it was really put away: offset ISO 8601, past, stored as naive UTC.
+    vol.Optional("occurred_at"): past_moment,
 })
 @websocket_api.async_response
 async def stock_add(hass, connection, msg) -> None:
@@ -59,6 +62,7 @@ async def stock_add(hass, connection, msg) -> None:
             quantity=msg["quantity"], location_id=msg["location_id"],
             best_before=msg.get("best_before"),
             price_per_base_unit=msg.get("price_per_base_unit"),
+            occurred_at=msg.get("occurred_at"),
             idempotency_key=msg.get("idempotency_key"),
         ))
     except (LookupError, UnitError, ValueError, OverflowError) as err:
@@ -89,6 +93,9 @@ async def stock_add(hass, connection, msg) -> None:
     vol.Optional("parts_total"): _PARTS,
     vol.Optional("parts_mine"): _PARTS,
     vol.Optional("idempotency_key"): _bounded_text,
+    # When it was really eaten or thrown away: offset ISO 8601, past, stored
+    # as naive UTC — the food day and its kcal follow this, not the call.
+    vol.Optional("occurred_at"): past_moment,
 })
 @websocket_api.async_response
 async def stock_consume(hass, connection, msg) -> None:
@@ -112,6 +119,7 @@ async def stock_consume(hass, connection, msg) -> None:
                 runtime.manager.consume_batch, msg["batch_id"],
                 product_id=msg["product_id"], quantity=msg["quantity"],
                 reason=msg["reason"], parts_total=parts[0], parts_mine=parts[1],
+                occurred_at=msg.get("occurred_at"),
                 idempotency_key=msg.get("idempotency_key")))
             movement_ids = [result]
         else:
@@ -119,6 +127,7 @@ async def stock_consume(hass, connection, msg) -> None:
                 runtime.manager.consume, product_id=msg["product_id"],
                 quantity=msg["quantity"], reason=msg["reason"],
                 parts_total=parts[0], parts_mine=parts[1],
+                occurred_at=msg.get("occurred_at"),
                 idempotency_key=msg.get("idempotency_key")))
     except (LookupError, PartsError, InsufficientStock, UnitError, ValueError,
             OverflowError) as err:
