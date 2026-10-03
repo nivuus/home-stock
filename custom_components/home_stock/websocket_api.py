@@ -27,15 +27,13 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .application import PartsError, as_batch_view
+from .application import as_batch_view
 from .const import (
     BASE_UNITS,
     CONF_GOALS,
     CONF_SHOPPING_LIST_HORIZON_DAYS,
-    CONSUME_REASONS,
     DEFAULT_SHOPPING_LIST_HORIZON_DAYS,
     DOMAIN,
-    REASON_CONSUMPTION,
     ROUTE_MIN_SESSIONS,
 )
 from .coordinator import async_resolve_time_zone
@@ -45,7 +43,7 @@ from .domain.foodday import GRANULARITIES
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
 from .domain.route import is_reliable
-from .domain.stock import InsufficientStock, sort_batches
+from .domain.stock import sort_batches
 from .domain.units import UnitError
 from .messages import french_error, hidden_namesake_message
 from .storage.deletion import hidden_product_named
@@ -867,102 +865,6 @@ async def product_convert_unit(hass, connection, msg) -> None:
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "home_stock/stock/add",
-    vol.Required("article_id"): _bounded_int,
-    vol.Required("quantity"): _finite_float,
-    vol.Required("location_id"): _bounded_int,
-    vol.Optional("best_before"): _iso_date,
-    vol.Optional("price_per_base_unit"): _NON_NEGATIVE_FLOAT,
-    vol.Optional("idempotency_key"): _bounded_text,
-})
-@websocket_api.async_response
-async def stock_add(hass, connection, msg) -> None:
-    """Put one thing away, outside any shopping session."""
-    runtime = _runtime(hass)
-    if runtime is None:
-        _send_not_loaded(connection, msg)
-        return
-
-    try:
-        result = await hass.async_add_executor_job(partial(
-            runtime.manager.add_stock, article_id=msg["article_id"],
-            quantity=msg["quantity"], location_id=msg["location_id"],
-            best_before=msg.get("best_before"),
-            price_per_base_unit=msg.get("price_per_base_unit"),
-            idempotency_key=msg.get("idempotency_key"),
-        ))
-    except (LookupError, UnitError, ValueError, OverflowError) as err:
-        # OverflowError is a backstop: _bounded_int/_finite_float already
-        # bound article_id/location_id/quantity/price_per_base_unit at the
-        # schema level, so this should be unreachable.
-        _send_domain_error(connection, msg["id"], err)
-        return
-    except sqlite3.IntegrityError as err:
-        _send_integrity_error(connection, msg["id"], err)
-        return
-
-    await runtime.coordinator.async_request_refresh()
-    connection.send_result(msg["id"], {"batch_id": result})
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): "home_stock/stock/consume",
-    # _NON_NEGATIVE_ID, not the bare _bounded_int used elsewhere in this
-    # file for an id that is range-checked further down (e.g. product/get's
-    # own product_id): no real row ever has a negative id, and the services
-    # surface (services.CONSUME_SCHEMA's own `_id`) already refused one.
-    # Neither surface may be the weaker one (correction round 1).
-    vol.Required("product_id"): _NON_NEGATIVE_ID,
-    vol.Required("quantity"): _finite_float,
-    vol.Optional("reason", default=REASON_CONSUMPTION): vol.In(CONSUME_REASONS),
-    vol.Optional("batch_id"): _NON_NEGATIVE_ID,
-    vol.Optional("parts_total"): _PARTS,
-    vol.Optional("parts_mine"): _PARTS,
-    vol.Optional("idempotency_key"): _bounded_text,
-})
-@websocket_api.async_response
-async def stock_consume(hass, connection, msg) -> None:
-    """Declare that something was eaten, thrown away, or found expired.
-
-    With a batch_id, that precise batch is taken from — the panel's "manger"
-    screen always targets the batch FIFO would pick, and says so. Without one,
-    the consumption walks the batches in FIFO order and may span several.
-    product_id stays required either way: the pair is checked rather than one
-    of the two being trusted.
-    """
-    runtime = _runtime(hass)
-    if runtime is None:
-        _send_not_loaded(connection, msg)
-        return
-
-    parts = (msg.get("parts_total"), msg.get("parts_mine"))
-    try:
-        if "batch_id" in msg:
-            result = await hass.async_add_executor_job(partial(
-                runtime.manager.consume_batch, msg["batch_id"],
-                product_id=msg["product_id"], quantity=msg["quantity"],
-                reason=msg["reason"], parts_total=parts[0], parts_mine=parts[1],
-                idempotency_key=msg.get("idempotency_key")))
-            movement_ids = [result]
-        else:
-            movement_ids = await hass.async_add_executor_job(partial(
-                runtime.manager.consume, product_id=msg["product_id"],
-                quantity=msg["quantity"], reason=msg["reason"],
-                parts_total=parts[0], parts_mine=parts[1],
-                idempotency_key=msg.get("idempotency_key")))
-    except (LookupError, PartsError, InsufficientStock, UnitError, ValueError,
-            OverflowError) as err:
-        _send_domain_error(connection, msg["id"], err)
-        return
-    except sqlite3.IntegrityError as err:
-        _send_integrity_error(connection, msg["id"], err)
-        return
-
-    await runtime.coordinator.async_request_refresh()
-    connection.send_result(msg["id"], {"movement_ids": movement_ids})
-
-
-@websocket_api.websocket_command({
     vol.Required("type"): "home_stock/journal/day",
     vol.Optional("date"): _iso_date,
 })
@@ -1387,6 +1289,9 @@ async def migration_check(hass, connection, msg) -> None:
 
 def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the read and write commands once."""
+    # Imported here, not at module level: websocket_stock imports this
+    # module's shared helpers, so a top-level import would be circular.
+    from .websocket_stock import stock_add, stock_consume
     for command in (products_list, product_get, locations_list, aisles_list,
                     stores_list, batches_list, movements_list, subscribe, lookup,
                     article_create, article_update, product_update,
