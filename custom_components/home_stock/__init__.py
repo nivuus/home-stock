@@ -28,6 +28,7 @@ from .panel import async_register_panel, async_remove_panel
 from .recipes.source import MealDbClient
 from .services import async_register_services
 from .shopping import ShoppingService
+from .skip_meal import async_register_skip_meal_service
 from .storage.database import Database
 from .storage.migrations import apply_migrations
 from .websocket_api import async_register_websocket
@@ -123,6 +124,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     async_register_services(hass)
     async_register_create_product_service(hass)
     async_register_link_shopping_item_service(hass)
+    async_register_skip_meal_service(hass)
     async_register_websocket(hass)
     async_register_delete_surfaces(hass)
     await async_register_panel(hass)

@@ -13,14 +13,33 @@ create_product:
       required: true
       selector:
         select:
-          options: [Fruits et légumes, Boucherie, Poissonnerie, Charcuterie et traiteur, Crémerie, Fromages, Boulangerie, Épicerie salée, Épicerie sucrée, Petit-déjeuner, Boissons, Surgelés, Hygiène et beauté, Entretien et maison, Animalerie, Autre]
+          options:
+            - Fruits et légumes
+            - Boucherie
+            - Poissonnerie
+            - Charcuterie et traiteur
+            - Crémerie
+            - Fromages
+            - Boulangerie
+            - Épicerie salée
+            - Épicerie sucrée
+            - Petit-déjeuner
+            - Boissons
+            - Surgelés
+            - Hygiène et beauté
+            - Entretien et maison
+            - Animalerie
+            - Autre
     unit:
       name: Unité
       description: "L'unité de base. Par défaut, piece."
       required: false
       selector:
         select:
-          options: [g, ml, piece]
+          options:
+            - g
+            - ml
+            - piece
     barcode:
       name: Code-barres
       description: "Le code-barres du produit, s'il en a un."
@@ -285,6 +304,26 @@ validate_meal:
         décrémente pas le garde-manger.
       default: true
       selector: { boolean: }
+
+skip_meal:
+  name: Ignorer un repas
+  description: >-
+    Marque un repas comme ignoré : il passe à l'état « ignoré », rien ne sort
+    du stock et il compte zéro kcal. Un repas déjà validé est traité comme
+    l'annulation du panneau. Sans repas indiqué, ignore le prochain repas
+    planifié de la journée en cours.
+  fields:
+    meal_id:
+      name: Repas
+      description: >-
+        Identifiant du repas à ignorer. Laissé vide, c'est le prochain repas
+        planifié de la journée alimentaire en cours.
+      required: false
+      example: 42
+      selector:
+        number:
+          min: 1
+          mode: box
 
 import_recipe:
   name: Importer une recette
