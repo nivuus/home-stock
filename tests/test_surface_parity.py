@@ -52,6 +52,21 @@ CAS_LIMITES = [
     ("home_stock/article/delete", "delete_article", {"article_id": 4242}, "refusé"),
     ("home_stock/article/delete", "delete_article", {"article_id": 0}, "refusé"),
     ("home_stock/article/delete", "delete_article", {}, "refusé"),
+    # Les deux gestes sur une ligne de recette : même validateur des deux côtés
+    # (`recipe_lines.ingredient_quantity`), mêmes refus.
+    ("home_stock/recipe/ingredient/update", "set_recipe_ingredient_quantity",
+     {"ingredient_id": 4242, "quantity": 50}, "refusé"),
+    ("home_stock/recipe/ingredient/update", "set_recipe_ingredient_quantity",
+     {"ingredient_id": 1, "quantity": 0}, "refusé"),
+    ("home_stock/recipe/ingredient/update", "set_recipe_ingredient_quantity",
+     {"ingredient_id": 1, "quantity": 100_001}, "refusé"),
+    ("home_stock/recipe/ingredient/update", "set_recipe_ingredient_quantity",
+     {"ingredient_id": 1}, "refusé"),
+    ("home_stock/recipe/ingredient/delete", "remove_recipe_ingredient",
+     {"ingredient_id": 4242}, "refusé"),
+    ("home_stock/recipe/ingredient/delete", "remove_recipe_ingredient",
+     {"ingredient_id": True}, "refusé"),
+    ("home_stock/recipe/ingredient/delete", "remove_recipe_ingredient", {}, "refusé"),
 ]
 
 

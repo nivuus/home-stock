@@ -170,10 +170,55 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
      "invalid_value",
      lambda m: "Ce plat a été entamé depuis : corrigez la consommation fautive, "
                "ou finissez le plat avant d'annuler le repas."),
+    (re.compile(r"^ingredient line (\d+) is not in recipe (\d+)$"), "invalid_value",
+     lambda m: f"La ligne d'ingrédient {m.group(1)} n'appartient pas "
+               f"à la recette {m.group(2)}."),
+    (re.compile(r"^quantity must not exceed (.+), got (.+)$"), "invalid_value",
+     lambda m: f"Quantité trop grande : {m.group(2)} (au plus {m.group(1)})."),
+    # Field checks of the recipe-line surfaces, raised by the validators.
+    (re.compile(r"^expected a (?:finite )?number, got (.+)$"), "invalid_format",
+     lambda m: f"Un nombre est attendu (reçu : {_received(m.group(1))})."),
+    (re.compile(r"^expected a whole number, got (.+)$"), "invalid_format",
+     lambda m: f"Un nombre entier est attendu (reçu : {_received(m.group(1))})."),
+    (re.compile(r"^expected a string, got (.+)$"), "invalid_format",
+     lambda m: f"Un texte est attendu (reçu : {_received(m.group(1))})."),
+    (re.compile(r"^text too long: (\d+) characters \(max (\d+)\)$"), "invalid_value",
+     lambda m: f"Texte trop long : {m.group(1)} caractères (au plus {m.group(2)})."),
+    (re.compile(r"^unknown field (\w+)$"), "invalid_format",
+     lambda m: f"Champ inconnu : {m.group(1)}."),
+    (re.compile(r"^line not designated$"), "invalid_format",
+     lambda m: "Indique la ligne : ingredient_id, ou recipe_id et product."),
+    (re.compile(r"^no line named <(.+)> in recipe (\d+)$"), "not_found",
+     lambda m: f"Aucune ligne « {m.group(1)} » dans la recette {m.group(2)}."),
+    (re.compile(r"^(\d+) lines named <(.+)> in recipe (\d+)$"), "invalid_value",
+     lambda m: (f"{m.group(1)} lignes « {m.group(2)} » dans la recette {m.group(3)} :"
+                " désigne la ligne par son ingredient_id.")),
+    (re.compile(r"^line not described$"), "invalid_format",
+     lambda m: "Indique le produit de la ligne, ou son texte (raw_text)."),
+    (re.compile(r"^quantity without product$"), "invalid_format",
+     lambda m: "Une quantité demande un produit : une ligne sans produit n'est qu'un texte."),
+    (re.compile(r"^unknown product <(.+)>$"), "not_found",
+     lambda m: f"Produit « {m.group(1)} » introuvable."),
+    (re.compile(r"^(\d+) products named <(.+)>$"), "invalid_value",
+     lambda m: f"{m.group(1)} produits s'appellent « {m.group(2)} »."),
+    (re.compile(r"^position (\d+) taken in recipe (\d+)$"), "invalid_value",
+     lambda m: f"La position {m.group(1)} est déjà prise dans la recette {m.group(2)}."),
+    (re.compile(r"^position must be at least 1$"), "invalid_format",
+     lambda m: "Une position commence à 1."),
+    (re.compile(r"^value must be at least 1$"), "invalid_format",
+     lambda m: "Un identifiant commence à 1."),
+    (re.compile(r"^missing field (\w+)$"), "invalid_format",
+     lambda m: f"Champ obligatoire manquant : {m.group(1)}."),
 )
 
 GENERIC_CODE: Final = "invalid_value"
 GENERIC_MESSAGE: Final = "Valeur invalide."
+
+
+def _received(shown: str) -> str:
+    """A refused value as `validators.preview` shows it, said in French:
+    the validators write a boolean as "bool True"."""
+    return {"bool True": "vrai", "bool False": "faux"}.get(shown, shown)
 
 
 def french_error(err: Exception) -> tuple[str, str]:

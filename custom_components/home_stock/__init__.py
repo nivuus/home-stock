@@ -25,6 +25,7 @@ from .delete_surfaces import async_register_delete_surfaces
 from .link_shopping_item import async_register_link_shopping_item_service
 from .off.client import AiohttpTransport, OffClient
 from .panel import async_register_panel, async_remove_panel
+from .recipe_line_surfaces import async_register_recipe_line_surfaces
 from .recipes.source import MealDbClient
 from .services import async_register_services
 from .shopping import ShoppingService
@@ -127,6 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     async_register_skip_meal_service(hass)
     async_register_websocket(hass)
     async_register_delete_surfaces(hass)
+    async_register_recipe_line_surfaces(hass)
     await async_register_panel(hass)
     return True
 

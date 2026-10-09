@@ -751,3 +751,158 @@ delete_article:
       description: L'identifiant de l'article.
       required: true
       selector: { number: { min: 1, mode: box } }
+
+set_recipe_ingredient_quantity:
+  name: Changer la quantité d'un ingrédient de recette
+  description: >-
+    Change la quantité d'une seule ligne d'ingrédient d'une recette existante,
+    sans recréer la recette : les autres lignes, les étapes et la recette
+    elle-même ne bougent pas. La ligne se désigne par son identifiant, ou par
+    la recette et le nom de son produit. La quantité est dans l'unité de base
+    du produit (g, ml ou pièce) ; le conditionnement ou la mesure de la ligne,
+    s'il y en avait un, est remplacé par cette quantité. L'aperçu des repas et
+    le capteur du prochain repas sont recalculés aussitôt.
+  fields:
+    ingredient_id: &line_id
+      name: Ligne d'ingrédient
+      description: >-
+        L'identifiant de la ligne, donné par l'action « Lister les ingrédients
+        d'une recette » (ingredient_id). À défaut : la recette et le produit.
+      required: false
+      example: 1234
+      selector:
+        number:
+          min: 1
+          mode: box
+    recipe_id: &line_recipe
+      name: Recette
+      description: >-
+        Obligatoire avec « Produit ». Avec l'identifiant de ligne, facultatif :
+        la ligne doit alors appartenir à cette recette, sinon rien ne change.
+      required: false
+      example: 193
+      selector:
+        number:
+          min: 1
+          mode: box
+    product: &line_product
+      name: Produit
+      description: >-
+        À la place de l'identifiant : le nom du produit de la ligne dans cette
+        recette, sans tenir compte des majuscules (ou le texte importé d'une
+        ligne sans produit, comme « eau »). Refusé si aucune ligne ou plusieurs
+        lignes portent ce nom.
+      required: false
+      example: Krisprolls
+      selector:
+        text:
+    quantity:
+      name: Quantité
+      description: >-
+        La nouvelle quantité, dans l'unité de base du produit (g, ml ou
+        pièce). Strictement positive ; pour enlever la ligne, utiliser
+        « Retirer un ingrédient de recette ».
+      required: true
+      example: 50
+      selector:
+        number:
+          min: 0.001
+          step: 0.001
+          mode: box
+
+remove_recipe_ingredient:
+  name: Retirer un ingrédient de recette
+  description: >-
+    Retire une seule ligne d'ingrédient d'une recette existante, sans recréer
+    la recette : les autres lignes, les étapes et la recette elle-même ne
+    bougent pas. La ligne se désigne par son identifiant, ou par la recette et
+    le nom de son produit. L'aperçu des repas et le capteur du prochain repas
+    sont recalculés aussitôt.
+  fields:
+    ingredient_id: *line_id
+    recipe_id: *line_recipe
+    product: *line_product
+
+add_recipe_ingredient:
+  name: Remettre un ingrédient dans une recette
+  description: >-
+    Ajoute une ligne d'ingrédient à une recette existante, sans toucher aux
+    autres lignes, aux étapes ni à la recette elle-même : c'est le retour en
+    arrière de « Retirer un ingrédient de recette », dont la réponse donne la
+    position et le texte de la ligne retirée. La ligne remise n'est pas tout à
+    fait celle retirée : elle reçoit un nouvel identifiant ; sa quantité est
+    en unité de base, si bien qu'un conditionnement ou une mesure (comme
+    « 1 gousse ») ne revient pas ; elle n'a plus de groupe, n'est plus marquée
+    facultative, et perd sa référence d'import et son score de rapprochement
+    (elle est confirmée avec un produit, ignorée sans). L'aperçu des repas et
+    le capteur du prochain repas sont recalculés aussitôt.
+  fields:
+    recipe_id:
+      name: Recette
+      description: La recette qui reçoit la ligne.
+      required: true
+      example: 193
+      selector:
+        number:
+          min: 1
+          mode: box
+    product:
+      name: Produit
+      description: >-
+        Le nom d'un produit existant, sans tenir compte des majuscules. Sans
+        produit, la ligne n'est qu'un texte (comme « eau »), ignoré par
+        l'aperçu.
+      required: false
+      example: Ail
+      selector:
+        text:
+    quantity:
+      name: Quantité
+      description: >-
+        La quantité dans l'unité de base du produit (g, ml ou pièce),
+        strictement positive. Seulement avec un produit.
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 0.001
+          step: 0.001
+          mode: box
+    raw_text:
+      name: Texte de la ligne
+      description: >-
+        Le texte affiché de la ligne, comme à l'import (« 1 gousse d'ail »,
+        « eau »). Par défaut, le nom du produit.
+      required: false
+      example: 1 gousse d'ail
+      selector:
+        text:
+    position:
+      name: Position
+      description: >-
+        La place de la ligne dans la recette, à partir de 1 : celle que la
+        ligne retirée avait, si elle est libre. Par défaut, en dernier.
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 1
+          mode: box
+
+get_recipe_ingredients:
+  name: Lister les ingrédients d'une recette
+  description: >-
+    Renvoie les lignes d'ingrédient d'une recette, dans l'ordre, avec
+    l'identifiant de chaque ligne (ingredient_id) que demandent « Changer la
+    quantité d'un ingrédient de recette » et « Retirer un ingrédient de
+    recette », le produit, la quantité et son unité. Ne modifie rien.
+  fields:
+    recipe_id:
+      name: Recette
+      description: L'identifiant de la recette à lire.
+      required: true
+      example: 193
+      selector:
+        number:
+          min: 1
+          mode: box
