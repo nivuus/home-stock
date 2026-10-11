@@ -906,3 +906,89 @@ get_recipe_ingredients:
         number:
           min: 1
           mode: box
+
+update_product:
+  name: Corriger un produit
+  description: >-
+    Corrige un produit existant : ses kcal de référence, son unité de base
+    (d'un produit suivi à la pièce vers g ou ml), ou les deux, dans une seule
+    transaction. Les kcal sont vérifiés comme dans la modification d'un
+    produit du panneau, l'unité est convertie par la conversion du panneau.
+    En simulation, rien n'est écrit et la réponse montre, lot par lot, ce qui
+    changerait.
+  fields:
+    product_id:
+      name: Produit
+      description: >-
+        L'identifiant du produit à corriger, celui que donne
+        home_stock.query_stock.
+      required: true
+      example: 97
+      selector:
+        number:
+          min: 1
+          mode: box
+    reference_kcal:
+      name: Kcal de référence
+      description: >-
+        Les kcal d'une unité de base du produit : d'un gramme (ou d'un
+        millilitre) quand une nouvelle unité est donnée dans le même appel,
+        sinon de l'unité actuelle du produit. Lus sur l'emballage : la valeur
+        pour 100 g divisée par 100. Un article qui a ses propres kcal passe
+        avant cette valeur ; la réponse dit, lot par lot, quel taux compte.
+      required: false
+      example: 2.65
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    target_unit:
+      name: Nouvelle unité
+      description: >-
+        L'unité vers laquelle convertir un produit suivi à la pièce. Les lots
+        ouverts, les prix et la nutrition des articles sont convertis comme le
+        fait le panneau. Demande le poids d'une pièce.
+      required: false
+      example: g
+      selector:
+        select:
+          options:
+            - g
+            - ml
+    reference_quantity:
+      name: Poids d'une pièce
+      description: >-
+        Combien de grammes (ou de millilitres) fait une pièce de ce produit
+        aujourd'hui, par exemple le poids net du paquet, entre 0,5 et 50 000.
+        Les lots ouverts sont multipliés par cette valeur, sauf ceux nommés
+        dans les lots déjà dans la nouvelle unité.
+      required: false
+      example: 200
+      selector:
+        number:
+          min: 0.5
+          max: 50000
+          step: any
+          mode: box
+    unchanged_batches:
+      name: Lots déjà dans la nouvelle unité
+      description: >-
+        Les identifiants des lots ouverts dont la quantité est déjà comptée
+        dans la nouvelle unité, comme un lot saisi « 80 » pour 80 g : ils
+        gardent leur quantité et leur prix. Un identifiant seul, ou une liste
+        YAML avec une ligne par lot.
+      required: false
+      example: 194
+      selector:
+        object:
+    dry_run:
+      name: Simuler seulement
+      description: >-
+        Coché, rien n'est écrit : la réponse montre l'unité et les kcal avant
+        et après, et pour chaque lot ouvert sa quantité et les kcal qu'il
+        compte, avant et après.
+      required: false
+      default: false
+      selector:
+        boolean:

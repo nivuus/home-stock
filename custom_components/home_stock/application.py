@@ -48,7 +48,6 @@ from .const import (
     NUTRITION_COLUMNS,
     QUANTITY_EPSILON,
     REASON_CONSUMPTION,
-    REASON_CONVERSION,
     REASON_COOKED,
     REASON_INVENTORY,
     REASON_PURCHASE,
@@ -56,7 +55,7 @@ from .const import (
     REASONS,
     RECIPE_SOURCES,
 )
-from .domain.conversion import ConversionError, plan_conversion
+from .conversion_execution import conversion_report, execute_conversion, prepare_conversion
 from .domain.route import learn_route
 from .domain.shoppinglist import (
     Claim,
@@ -614,127 +613,21 @@ class StockManager:
 
         Everything happens in one transaction: a product half-converted would
         report a stock that is partly packets and partly grams, and no reading
-        of the journal could tell them apart afterwards.
+        of the journal could tell them apart afterwards. The plan and its
+        writes live in conversion_execution, which the home_stock.update_product
+        service runs too.
         """
         with self.db.write() as conn:
             product = repo.get_product(conn, product_id)
             if product is None:
                 raise LookupError(f"no product {product_id}")
-            articles = repo.list_articles_for_product(conn, product_id)
-            # Closed batches are deliberately left out and stay in their
-            # pre-conversion unit: their `remaining`, `initial` AND
-            # `price_per_base_unit` all stay expressed in the old unit. Safe
-            # only because every read today filters on open batches and none
-            # of those three columns is ever read back off a closed batch —
-            # this stops being safe the day something does (e.g. a future
-            # "how much of each pack did we finish" or "what did this pack
-            # cost us" report), which would then silently average pieces
-            # with grams, or euros per piece with euros per gram.
-            batches = repo.list_open_batches_for_product(conn, product_id)
-
-            plan = plan_conversion(product=product, articles=articles, batches=batches,
-                                   to_unit=to_unit, reference_quantity=reference_quantity)
-
-            # A pending shopping_line stores its quantity in the product's
-            # base unit as a promise, not yet a batch. Converting under it
-            # would silently reinterpret that number in the new unit — two
-            # queued packets becoming "2 g" instead of 1000 g the moment they
-            # are put away — with no trace in the journal. Refuse instead,
-            # even for a dry run: a plan that cannot actually be applied is
-            # not a plan worth showing.
-            pending = repo.count_pending_lines_for_product(conn, product_id)
-            if pending:
-                raise ConversionError(
-                    f"{pending} ligne(s) de courses en attente de rangement pour ce "
-                    "produit : rangez d'abord les courses avant de convertir son unité"
-                )
-
-            report = {
-                "product_id": plan.product_id,
-                "product_name": product["name"],
-                "from_unit": plan.from_unit,
-                "to_unit": plan.to_unit,
-                "reference_quantity": plan.reference_quantity,
-                "articles": len(plan.articles),
-                "batches": len(plan.batches),
-                "movements": plan.movements,
-                "articles_using_reference": list(plan.articles_using_reference),
-                "applied": False,
-            }
+            prepared = prepare_conversion(conn, product, to_unit=to_unit,
+                                          reference_quantity=reference_quantity)
+            report = conversion_report(prepared)
             if dry_run:
                 return report
-
-            occurred_at = _now()
-            articles_by_id = {a["id"]: a for a in articles}
-            batches_by_id = {b["id"]: b for b in batches}
-            factors = {a.article_id: a.factor for a in plan.articles}
-
-            for article in plan.articles:
-                # Nutrition is stored per base unit: per packet becomes per gram.
-                # net_quantity is a mass or a volume already, so it does not move.
-                current = articles_by_id[article.article_id]
-                rescaled = {
-                    column: current[column] / article.factor
-                    for column in NUTRITION_COLUMNS
-                    if current[column] is not None
-                }
-                repo.update_article_fields(conn, article.article_id, rescaled)
-                repo.insert_packaging(conn, scope="article", target_id=article.article_id,
-                                      name=packaging_name, base_quantity=article.factor,
-                                      is_purchase_default=True)
-                # A price is euros PER unit, so a change of denomination moves
-                # it opposite to the quantities: 1.20 €/packet and 0.0024 €/g
-                # are the same fact said twice, not history being rewritten.
-                repo.rescale_prices_for_article(conn, article.article_id, article.factor)
-
-            for batch in plan.batches:
-                # The plan already carries the pre-conversion quantity
-                # (batch.old_remaining), so the journal stays correct no
-                # matter which of these two writes runs first. Only reading
-                # `remaining` back from the batch row instead of from the
-                # plan would make this order load-bearing.
-                repo.insert_movement(
-                    conn, occurred_at=occurred_at, product_id=product_id,
-                    article_id=batch.article_id, batch_id=batch.batch_id,
-                    quantity=-batch.old_remaining, reason=REASON_CONVERSION,
-                    base_unit=plan.from_unit, kcal=None, cost=None,
-                    ref_type=None, ref_id=None,
-                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:out",
-                )
-                repo.insert_movement(
-                    conn, occurred_at=occurred_at, product_id=product_id,
-                    article_id=batch.article_id, batch_id=batch.batch_id,
-                    quantity=batch.new_remaining, reason=REASON_CONVERSION,
-                    base_unit=plan.to_unit, kcal=None, cost=None,
-                    ref_type=None, ref_id=None,
-                    idempotency_key=f"conversion:{product_id}:{batch.batch_id}:{to_unit}:in",
-                )
-                # Same denomination change as the article's own price above,
-                # applied to the batch's own recorded price — divided by the
-                # same factor that multiplies its quantity, so the batch's
-                # value in euros (remaining * price_per_base_unit) is
-                # unchanged by the conversion. A NULL price stays NULL: there
-                # is nothing to convert.
-                old_price = batches_by_id[batch.batch_id]["price_per_base_unit"]
-                new_price = (None if old_price is None
-                            else old_price / factors[batch.article_id])
-                repo.set_batch_remaining(conn, batch.batch_id, batch.new_remaining)
-                conn.execute(
-                    "UPDATE batch SET initial = ?, price_per_base_unit = ? WHERE id = ?",
-                    (batch.new_initial, new_price, batch.batch_id),
-                )
-
-            product_fields: dict[str, Any] = {"base_unit": plan.to_unit}
-            if product["min_quantity"] is not None:
-                product_fields["min_quantity"] = (
-                    product["min_quantity"] * plan.reference_quantity
-                )
-            if product["reference_kcal"] is not None:
-                product_fields["reference_kcal"] = (
-                    product["reference_kcal"] / plan.reference_quantity
-                )
-            repo.update_product_fields(conn, product_id, product_fields)
-
+            execute_conversion(conn, prepared, packaging_name=packaging_name,
+                               occurred_at=_now())
             report["applied"] = True
             return report
 

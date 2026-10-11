@@ -7,6 +7,47 @@ est celui de la release que le workflow de publication calcule à partir des
 sujets de commit ; les versions antérieures à 1.7.0 sont décrites dans les notes
 des releases GitHub.
 
+## [1.8.0] - 2026-10-11
+
+### Ajouté
+
+- Corriger un produit existant depuis Outils de développement → Actions, un
+  script ou une automatisation : service `home_stock.update_product`
+  (`product_id`, puis `reference_kcal`, `target_unit` avec
+  `reference_quantity`, ou les deux). Jusqu'ici ces deux corrections
+  n'existaient que dans le panneau.
+  - `reference_kcal` est vérifié par le même validateur que la commande
+    websocket `home_stock/product/update` et écrit de la même façon ; `null`
+    l'efface, comme dans le panneau.
+  - `target_unit` (`g` ou `ml`) convertit un produit suivi à la pièce par la
+    conversion même de `home_stock/product/convert_unit` : mêmes refus, mêmes
+    écritures, même rapport.
+  - Donnés ensemble, la conversion et les kcal s'écrivent dans une seule
+    transaction ; les kcal donnés s'entendent dans la nouvelle unité (par
+    gramme) et l'emportent sur ceux que la conversion recalcule.
+  - `unchanged_batches` nomme les lots ouverts dont la quantité est déjà
+    comptée dans la nouvelle unité (un lot saisi « 80 » pour 80 g) : ils
+    gardent leur quantité et leur prix, et reçoivent quand même leurs deux
+    mouvements de conversion.
+  - `dry_run: true` n'écrit rien et répond le plan : l'unité et les kcal avant
+    et après, puis pour chaque lot ouvert sa quantité et le taux de kcal qu'il
+    compte vraiment (celui du lot, sinon de l'article, sinon du produit).
+
+### Modifié
+
+- Le corps de la conversion d'unité (`StockManager.convert_product_unit`)
+  vit dans le module `conversion_execution`, que le panneau et le nouveau
+  service appellent tous deux ; son comportement ne change pas.
+
+### Limites connues
+
+- Les kcal d'un article l'emportent sur `reference_kcal` du produit : corriger
+  seulement `reference_kcal` ne change pas ce que compte un lot dont l'article
+  porte ses propres kcal. La réponse du service le montre lot par lot ; la
+  conversion d'unité, elle, remet les kcal des articles à l'échelle.
+- Comme dans le panneau, un lot cuisiné qui porte ses propres kcal n'est pas
+  remis à l'échelle par une conversion d'unité.
+
 ## [1.7.0] - 2026-10-10
 
 ### Ajouté
