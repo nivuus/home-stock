@@ -31,6 +31,7 @@ from ..const import (
 )
 from ..domain.matching import normalise
 from ..domain.route import is_reliable
+from .product_search import product_filter
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -163,11 +164,10 @@ def find_product_by_name(conn, name: str) -> dict[str, Any] | None:
     return _row(conn.execute("SELECT * FROM product WHERE name = ?", (name,)).fetchone())
 
 
-def list_products(conn, active_only: bool = True) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM product"
-    if active_only:
-        sql += " WHERE active = 1"
-    return _rows(conn.execute(sql + " ORDER BY name"))
+def list_products(conn, active_only: bool = True,
+                  search: str | None = None) -> list[dict[str, Any]]:
+    where, params = product_filter(conn, active_only=active_only, search=search)
+    return _rows(conn.execute(f"SELECT * FROM product{where} ORDER BY name", params))
 
 
 # --- articles and barcodes --------------------------------------------------

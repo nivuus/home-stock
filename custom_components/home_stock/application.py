@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
@@ -71,6 +70,8 @@ from .domain.correction import (
     reversal,
 )
 from .domain.matching import Candidate, candidates, normalise, preselect
+from .domain.search import escape_like as _escape_like
+from .domain.search import fold_for_search as _fold_for_search
 from .domain.recipes import (
     IngredientLine,
     IngredientNeed,
@@ -142,34 +143,6 @@ def _accumulate(totals: dict[str, float], row: dict[str, Any]) -> None:
 
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0, tzinfo=None).isoformat()
-
-
-def _escape_like(value: str) -> str:
-    """Escape SQL LIKE wildcards so a key is matched literally, not as a pattern.
-
-    A HA service call or a voice-generated idempotency key can legally contain
-    '%' or '_', both of which are LIKE wildcards. Without escaping, a key like
-    "dinner_1" would also match rows keyed "dinnerX1#1" and a replay would
-    return movement ids belonging to a different consumption.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-# NFD decomposition splits an accented letter into the base letter plus a
-# combining mark, but it does NOT split the œ/æ ligatures — those are single
-# code points, not a letter plus an accent. Expand them by hand first, or
-# "œufs" never matches a product named "Œufs" (services.yaml promises
-# case- and accent-insensitive matching for query_stock, the voice path).
-_LIGATURES = {"œ": "oe", "æ": "ae", "Œ": "OE", "Æ": "AE"}
-
-
-def _fold_for_search(text: str) -> str:
-    """Case- and accent-insensitive form of `text`, for query_stock matching."""
-    for ligature, expanded in _LIGATURES.items():
-        text = text.replace(ligature, expanded)
-    decomposed = unicodedata.normalize("NFD", text)
-    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return without_accents.casefold()
 
 
 def _namespaced_key(operation: str, key: str | None) -> str | None:

@@ -7,6 +7,31 @@ est celui de la release que le workflow de publication calcule à partir des
 sujets de commit ; les versions antérieures à 1.7.0 sont décrites dans les notes
 des releases GitHub.
 
+## [1.9.0] - 2026-10-14
+
+### Ajouté
+
+- Chercher un produit du catalogue par son nom : la commande websocket
+  `home_stock/products/list` accepte un champ facultatif `search` (texte) et
+  ne renvoie plus que les produits dont le nom contient ce mot, sans tenir
+  compte des majuscules ni des accents (« carotte » trouve « CAROTTES
+  râpées » et « Purée de carottes », « pate » trouve « Pâtes », « oeuf »
+  trouve « Œufs »). Jusqu'ici la commande refusait `search` et la seule
+  lecture possible était le catalogue entier.
+  - Le filtre se fait dans SQLite : le nom est replié par la fonction de
+    repli de l'intégration (celle de `query_stock`), enregistrée sur la
+    connexion, et comparé par `LIKE` au mot replié de la même façon. `%` et
+    `_` tapés dans le mot sont cherchés tels quels.
+  - Sans `search`, ou avec un mot vide, la réponse est celle d'avant : tout
+    le catalogue trié par nom. `include_hidden` garde son sens et se combine
+    avec `search`.
+  - Un `search` qui n'est pas du texte est refusé (`invalid_format`).
+
+### Limites connues
+
+- La recherche porte sur le nom du produit seulement : ni la marque ou le
+  libellé de ses articles, ni ses codes-barres.
+
 ## [1.8.0] - 2026-10-11
 
 ### Ajouté

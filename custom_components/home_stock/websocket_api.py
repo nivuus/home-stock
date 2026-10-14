@@ -315,8 +315,8 @@ def _send_integrity_error(connection: websocket_api.ActiveConnection, msg_id: in
 
 @websocket_api.websocket_command({
     vol.Required("type"): "home_stock/products/list",
-    # Hidden (deleted with history) products stay out unless asked for.
-    vol.Optional("include_hidden", default=False): bool,
+    vol.Optional("include_hidden", default=False): bool,  # deleted with history: out by default
+    vol.Optional("search"): str,  # a word in the name, case and accents ignored
 })
 @websocket_api.async_response
 async def products_list(hass, connection, msg) -> None:
@@ -326,7 +326,7 @@ async def products_list(hass, connection, msg) -> None:
         return
     products = await _read(hass, partial(
         repo.list_products, runtime.manager.db.read(),
-        active_only=not msg["include_hidden"]))
+        active_only=not msg["include_hidden"], search=msg.get("search")))
     connection.send_result(msg["id"], {"products": products})
 
 
