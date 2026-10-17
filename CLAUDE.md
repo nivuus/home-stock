@@ -17,7 +17,7 @@ suites en parallèle.
 make test                    # package : manifeste + hooks install/activate. python3 + PyYAML, rapide
 make test NIVUUS_INSTALLER_DIR=/home/mallanic/Projects/Nivuus/packages/installer
                              # idem, avec le VRAI parseur du moteur (chemin ABSOLU : $HOME vaut /root ici)
-./scripts/test.sh -q tests/domain      # pytest dans Docker (image HA 2026.8.2), 259 tests, ~15 s
+./scripts/test.sh -q tests/domain      # pytest dans Docker (image HA 2026.10.2), 259 tests, ~15 s
 ./scripts/test.sh -q                   # suite complète : 2223 passés, 1 ignoré, 14 min, ~450 Mo de RAM (mesuré sur `master`)
 ./scripts/test.sh -m network           # tests réseau réel, exclus par défaut (pytest.ini)
 cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc / rendu
@@ -95,7 +95,7 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
   triggers du journal viennent de m001), jamais d'une copie de base de développement.
   Import Grocy : lire une copie, jamais la base Grocy de production.
 - `requirements.txt` : la liste d'appoint (ffmpeg, hassil, frontend…) est la clôture
-  transitive des manifestes pour HA 2026.8.2 ; à recalculer quand on bouge la version de
+  transitive des manifestes pour HA 2026.10.2 ; à recalculer quand on bouge la version de
   `pytest-homeassistant-custom-component`, pas à éditer ligne à ligne.
 
 ## Conventions

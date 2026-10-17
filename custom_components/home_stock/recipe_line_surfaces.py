@@ -5,8 +5,8 @@ the lines with the ids those gestures take.
 Both surfaces are thin: the rules live in `recipe_lines.py`, and both read
 the same field validators, so they refuse and accept exactly the same inputs.
 The fields are checked inside the handlers, not by the schema Home Assistant
-runs before them: its refusal is voluptuous' English ("... for dictionary
-value @ data['quantity']"), while a refusal raised here goes through
+runs before them: its refusal is the validation engine's English ("... for
+dictionary value @ data['quantity']"), while a refusal raised here goes through
 `messages.french_error` and reaches Maxime in French on both surfaces.
 After a write the coordinator is refreshed at once: the next-meal sensor
 counts what the recipe asks for, and must not show the old quantity until
@@ -48,7 +48,8 @@ WS_UPDATE: Final = "home_stock/recipe/ingredient/update"
 WS_DELETE: Final = "home_stock/recipe/ingredient/delete"
 WS_ADD: Final = "home_stock/recipe/ingredient/add"
 
-_ID: Final = vol.All(bounded_int, vol.Range(min=1))
+# The message is ours, not the engine's default: messages.py matches it.
+_ID: Final = vol.All(bounded_int, vol.Range(min=1, msg="id must be at least 1"))
 # A line is named by `ingredient_id`, or by `recipe_id` + `product` (the
 # readable name of its product): `recipe_lines.designated_line` decides.
 # With an id, `recipe_id` is a guard: a line of another recipe is refused.
@@ -91,14 +92,21 @@ def _loose(fields: dict[Any, Any]) -> dict[Any, Any]:
 def _checked(fields: dict[Any, Any], data: dict[str, Any]) -> dict[str, Any]:
     """The fields validated, or a ValueError `french_error` translates."""
     given = {key: value for key, value in data.items() if key not in _ENVELOPE}
+    # Unknown and missing keys are recognised by structure, never by the
+    # engine's wording: Home Assistant swapped voluptuous for probatio in
+    # 2026.9, and the same extra key reads "extra keys not allowed" in one and
+    # "not a valid option" in the other. The declared keys are known here, and
+    # both engines raise RequiredFieldInvalid for a missing one.
+    declared = {str(key) for key in fields}
+    unknown = sorted(str(key) for key in given if str(key) not in declared)
+    if unknown:
+        raise ValueError(f"unknown field {unknown[0]}")
     try:
         return dict(vol.Schema(fields)(given))
     except vol.MultipleInvalid as err:
         first = err.errors[0]
-        if first.error_message == "required key not provided":
+        if isinstance(first, vol.RequiredFieldInvalid):
             raise ValueError(f"missing field {first.path[-1]}") from err
-        if first.error_message == "extra keys not allowed":
-            raise ValueError(f"unknown field {first.path[-1]}") from err
         raise ValueError(first.error_message) from err
 
 

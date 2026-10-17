@@ -185,6 +185,8 @@ async def test_an_unknown_line_is_refused_in_french_on_both_surfaces(
     ({}, "invalid_format", "Champ obligatoire manquant : quantity."),
     ({"quantity": 50, "ingredient_id": "abc"}, "invalid_format",
      "Un nombre entier est attendu (reçu : 'abc')."),
+    ({"quantity": 50, "ingredient_id": 0}, "invalid_format",
+     "Un identifiant commence à 1."),
     ({"quantity": True}, "invalid_format", "Un nombre est attendu (reçu : vrai)."),
     ({"quantity": 50, "foo": 1}, "invalid_format", "Champ inconnu : foo."),
 ])

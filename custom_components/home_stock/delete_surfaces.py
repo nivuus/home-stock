@@ -33,7 +33,8 @@ SERVICE_DELETE_PRODUCT: Final = "delete_product"
 SERVICE_DELETE_ARTICLE: Final = "delete_article"
 DELETE_BLOCKED: Final = "delete_blocked"
 
-_ID: Final = vol.All(bounded_int, vol.Range(min=1))
+# The message is ours, not the engine's default: messages.py matches it.
+_ID: Final = vol.All(bounded_int, vol.Range(min=1, msg="id must be at least 1"))
 DELETE_PRODUCT_FIELDS: Final = {vol.Required("product_id"): _ID}
 DELETE_ARTICLE_FIELDS: Final = {vol.Required("article_id"): _ID}
 
