@@ -23,3 +23,9 @@ jobs:
       python-version: "3.14"
   package:
     uses: nivuus/.github/.github/workflows/ci-package.yml@main
+
+  dependabot-auto-merge:
+    uses: nivuus/.github/.github/workflows/dependabot-auto-merge.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
