@@ -205,7 +205,7 @@ DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Matc
      lambda m: f"La position {m.group(1)} est déjà prise dans la recette {m.group(2)}."),
     (re.compile(r"^position must be at least 1$"), "invalid_format",
      lambda m: "Une position commence à 1."),
-    (re.compile(r"^value must be at least 1$"), "invalid_format",
+    (re.compile(r"^id must be at least 1$"), "invalid_format",
      lambda m: "Un identifiant commence à 1."),
     (re.compile(r"^missing field (\w+)$"), "invalid_format",
      lambda m: f"Champ obligatoire manquant : {m.group(1)}."),

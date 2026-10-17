@@ -1,6 +1,6 @@
-pytest-homeassistant-custom-component==0.13.356
+pytest-homeassistant-custom-component==0.13.373
 
-# THE EIGHT BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
+# THE NINE BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
 # repository chose. pytest-homeassistant-custom-component installs Home
 # Assistant WITHOUT any per-integration requirement (those normally arrive at
 # setup time, per component, in a real install), so every component this suite
@@ -33,13 +33,25 @@ pytest-homeassistant-custom-component==0.13.356
 #      of them.
 #
 # The list is the transitive closure of the manifests of those three roots in
-# Home Assistant 2026.8.2 - the release the pin above resolves to. Bumping
+# Home Assistant 2026.10.2 - the release the pin above resolves to. Bumping
 # pytest-homeassistant-custom-component moves that release, and these with it:
 # recompute the closure against the new one rather than editing a line.
+#
+# How it is computed: walk module-level imports (outside functions and
+# TYPE_CHECKING) from the three roots, plus the manifest "dependencies" of
+# every component that is SET UP, and collect the manifest "requirements" of
+# every component reached that the pin does not already install. One entry of
+# that walk is deliberately absent: av, required by stream. camera imports
+# stream at module level, but stream is never set up here and imports av only
+# inside functions, so nothing ever executes `import av`. Run against 2026.8.2,
+# the same walk gives back exactly the previous list; against 2026.10.2 it adds
+# gazetteer-matcher, which conversation now requires and imports at module
+# level in default_agent.py.
+gazetteer-matcher==1.1.0
 ha-ffmpeg==3.2.2
-hassil==3.11.0
-home-assistant-frontend==20260729.7
-home-assistant-intents==2026.7.30
+hassil==3.12.1
+home-assistant-frontend==20260930.4
+home-assistant-intents==2026.10.6
 mutagen==1.48.1
 pymicro-vad==1.0.1
 pyspeex-noise==1.0.2

@@ -1,4 +1,4 @@
-FROM ghcr.io/home-assistant/home-assistant:2026.8.2
+FROM ghcr.io/home-assistant/home-assistant:2026.10.2
 WORKDIR /src
 COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt \

@@ -368,20 +368,21 @@ async def test_a_source_key_too_long_is_refused_in_the_form(hass):
 async def test_le_formulaire_d_options_est_serialisable_pour_l_interface(hass):
     """Ouvrir les réglages depuis l'interface ne lit pas `data_schema.schema` :
     Home Assistant SÉRIALISE le schéma (`helpers/data_entry_flow._prepare_result_json`
-    → `voluptuous_serialize.convert`) avant de l'envoyer au navigateur.
+    → `probatio.to_field_list` depuis 2026.9, `voluptuous_serialize.convert`
+    jusque-là) avant de l'envoyer au navigateur.
 
     Un validateur qui est une fonction Python nue n'y est pas convertible :
-    `convert` lève `ValueError: Unable to convert schema`, aiohttp le rend en
+    la sérialisation lève `ValueError` (« unable to serialize schema »), aiohttp le rend en
     « 500 Internal Server Error » et l'écran dit seulement « Le flux de
     configuration n'a pas pu être chargé ». Tous les autres tests de ce fichier
     inspectent l'objet Python et ne touchent jamais ce chemin — d'où un
     formulaire vert en test et injoignable en production.
     """
-    import voluptuous_serialize
+    import probatio
     from homeassistant.helpers import config_validation as cv
 
     _, result = await _open_options(hass)
-    champs = voluptuous_serialize.convert(
+    champs = probatio.to_field_list(
         result["data_schema"], custom_serializer=cv.custom_serializer)
 
     noms = {champ["name"] for champ in champs}
