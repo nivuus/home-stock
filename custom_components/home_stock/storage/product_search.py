@@ -13,6 +13,8 @@ the reader connection is shared bare between executor threads, and a Python
 callback from inside a SQLite step deadlocks the GIL against the SQLite
 mutex — that froze Home Assistant whole on 2026-10-22.
 """
+# policy: allow-fr-file -- the docstring quotes French product names ("pâte",
+# "PÂTES") as examples of what accent-insensitive search must match.
 from __future__ import annotations
 
 from typing import Any
