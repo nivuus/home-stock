@@ -64,4 +64,4 @@ PyTurboJPEG==1.8.3
 # the version the control runs with. Unpinned, the rule set moves under the
 # repository between releases - see ruff.toml for the measurement and for the
 # selection this code is written against.
-ruff==0.16.6
+ruff==0.17.1
