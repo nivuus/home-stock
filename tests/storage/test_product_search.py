@@ -1,14 +1,24 @@
 """`repositories.list_products(search=...)`: the catalogue filtered by name.
 
-The filter runs in SQL, on a real migrated SQLite file: the name is folded by
-the integration's own folding function (registered on the connection), the
-searched word is folded the same way, and LIKE compares the two. So case,
-accents and the œ/æ ligatures never decide whether a product is found, and a
-`%` or `_` typed by the user is a character, not a wildcard.
+The filter runs in SQL, on a real migrated SQLite file: `product.name_fold`
+holds the name folded once at write time (m010), the searched word is folded
+the same way, and LIKE compares the two. So case, accents and the œ/æ
+ligatures never decide whether a product is found, and a `%` or `_` typed by
+the user is a character, not a wildcard.
+
+No Python function is registered on the connection, on purpose: the reader
+connection is shared bare between executor threads, and a Python function
+called back from inside a SQLite step is the one thing that deadlocks such a
+connection (thread A holds the SQLite mutex and waits for the GIL, thread B
+holds the GIL and waits for the mutex). That froze Home Assistant whole on
+2026-10-22. The last test replays that scenario in a subprocess.
 """
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -23,7 +33,6 @@ from custom_components.home_stock.domain.search import (
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
-from custom_components.home_stock.storage.product_search import FOLD_FUNCTION
 
 VISIBLE = (
     "Carotte", "CAROTTES râpées", "Purée de carottes", "Carrot cake",
@@ -151,13 +160,76 @@ def test_search_works_on_the_writer_connection_too(db: Database) -> None:
 
 
 def test_search_works_on_a_bare_connection(tmp_path: Path, db: Database) -> None:
-    """A connection nobody prepared gets the folding function on first use."""
+    """A connection nobody prepared searches too: nothing to register on it."""
     conn = sqlite3.connect(str(tmp_path / "t.db"))
     conn.row_factory = sqlite3.Row
     try:
         assert _names(repo.list_products(conn, search="CAROTTE")) == CARROTS
         assert _names(repo.list_products(conn, search="pâte")) == ["Pâtes", "pates complètes"]
-        folded = conn.execute(f"SELECT {FOLD_FUNCTION}('Œufs Brûlés')").fetchone()[0]
-        assert folded == "oeufs brules"
     finally:
         conn.close()
+
+
+# --- the folded name is a column, not a function ---------------------------
+
+def test_insert_product_stores_the_folded_name(db: Database) -> None:
+    rows = db.read().execute(
+        "SELECT name, name_fold FROM product ORDER BY name").fetchall()
+    assert len(rows) == len(VISIBLE) + 1
+    for row in rows:
+        assert row["name_fold"] == fold_for_search(row["name"])
+
+
+def test_update_product_fields_with_a_name_refolds_it(db: Database) -> None:
+    with db.write() as conn:
+        row_id = conn.execute(
+            "SELECT id FROM product WHERE name = 'Carotte'").fetchone()["id"]
+        repo.update_product_fields(conn, row_id, {"name": "Épinards HACHÉS"})
+    row = db.read().execute(
+        "SELECT name, name_fold FROM product WHERE id = ?", (row_id,)).fetchone()
+    assert (row["name"], row["name_fold"]) == ("Épinards HACHÉS", "epinards haches")
+    assert _search(db, "epinard") == ["Épinards HACHÉS"]
+
+
+def test_search_registers_no_python_function_on_the_connection(db: Database) -> None:
+    conn = db.read()
+    _names(repo.list_products(conn, search="carotte"))
+    with pytest.raises(sqlite3.OperationalError, match="no such function"):
+        conn.execute("SELECT home_stock_fold('x')")
+
+
+def test_concurrent_searches_on_the_shared_reader_finish(tmp_path: Path, db: Database) -> None:
+    """Several executor threads searching through the one reader connection.
+
+    This is the production shape (`Database.read()` hands the same connection
+    to every thread). Run in a subprocess: a deadlock here takes the GIL with
+    it, so an in-process version could never time out, it would hang pytest.
+    """
+    script = textwrap.dedent(f"""
+        import threading
+        from custom_components.home_stock.storage import repositories as repo
+        from custom_components.home_stock.storage.database import Database
+
+        db = Database({str(tmp_path / "t.db")!r})
+        db.connect()
+        conn = db.read()
+
+        def search():
+            for word in ("carotte", "pâte", "oeuf", "thé") * 50:
+                repo.list_products(conn, search=word)
+
+        threads = [threading.Thread(target=search) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        print("searches finished")
+    """)
+    root = Path(__file__).resolve().parents[2]
+    try:
+        done = subprocess.run([sys.executable, "-c", script], cwd=root, timeout=60,
+                              capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        pytest.fail("concurrent searches never finished: the reader connection deadlocked")
+    assert done.returncode == 0, done.stderr
+    assert "searches finished" in done.stdout

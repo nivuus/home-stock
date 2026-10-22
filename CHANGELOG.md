@@ -7,6 +7,25 @@ est celui de la release que le workflow de publication calcule à partir des
 sujets de commit ; les versions antérieures à 1.7.0 sont décrites dans les notes
 des releases GitHub.
 
+## [1.9.1] - 2026-10-22
+
+### Corrigé
+
+- Home Assistant pouvait se figer entièrement (conteneur « en marche », mais
+  plus aucune réponse, aucun journal, et aucun redémarrage automatique)
+  pendant une recherche dans le catalogue, quand deux recherches
+  s'exécutaient en même temps : la fonction de repli du nom enregistrée sur
+  la connexion SQLite de lecture, partagée entre les threads, provoquait un
+  interblocage entre le verrou de l'interpréteur Python et celui de SQLite.
+  Constaté le 2026-10-22 sur l'instance de référence.
+  - Le nom replié est désormais une colonne de la table `product`
+    (`name_fold`), remplie par la migration m010 pour les produits existants
+    et tenue à jour à chaque écriture du nom ; la recherche compare cette
+    colonne par `LIKE`. Plus aucune fonction Python n'est enregistrée sur une
+    connexion.
+  - Le comportement de la recherche est inchangé (majuscules, accents,
+    ligatures et caractères `%` / `_` traités comme avant).
+
 ## [1.9.0] - 2026-10-14
 
 ### Ajouté

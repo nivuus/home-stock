@@ -1,7 +1,6 @@
 """m009: an article can be hidden, like a product already could."""
 import sqlite3
 
-from custom_components.home_stock.storage import migrations
 from custom_components.home_stock.storage.migrations import (
     CURRENT_VERSION,
     MIGRATIONS,
@@ -35,7 +34,7 @@ def test_m009_leaves_every_existing_article_active(tmp_path):
     conn.execute("INSERT INTO article (product_id) VALUES (2)")
     conn.commit()
 
-    assert apply_migrations(conn) == 9
+    assert apply_migrations(conn) == CURRENT_VERSION
 
     rows = conn.execute("SELECT id, active FROM article ORDER BY id").fetchall()
     assert [(r["id"], r["active"]) for r in rows] == [(1, 1), (2, 1)]
@@ -48,8 +47,8 @@ def test_m009_a_new_article_defaults_to_active(tmp_path):
     assert conn.execute("SELECT active FROM article").fetchone()["active"] == 1
 
 
-def test_m009_is_the_current_version_and_replayable(tmp_path):
-    assert migrations.CURRENT_VERSION == 9
+def test_m009_is_replayable(tmp_path):
+    # m010 came after: a base stopped at 9 goes on to the current version.
     conn = _stopped_at(tmp_path, 9)
-    assert apply_migrations(conn) == 9
-    assert apply_migrations(conn) == 9
+    assert apply_migrations(conn) == CURRENT_VERSION
+    assert apply_migrations(conn) == CURRENT_VERSION
