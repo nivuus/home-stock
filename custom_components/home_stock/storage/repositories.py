@@ -31,7 +31,7 @@ from ..const import (
 )
 from ..domain.matching import normalise
 from ..domain.route import is_reliable
-from .product_search import product_filter
+from .product_search import folded_name, product_filter
 
 PRODUCT_FIELDS = (
     "category_id", "aisle_id", "edible", "default_location_id", "min_quantity",
@@ -150,7 +150,7 @@ def insert_aisle(conn, *, name: str, position: int = 0) -> int:
 def insert_product(conn, *, name: str, base_unit: str, **fields: Any) -> int:
     values: dict[str, Any] = {"name": name, "base_unit": base_unit}
     values.update({k: v for k, v in fields.items() if k in PRODUCT_FIELDS})
-    return _insert(conn, "product", values)
+    return _insert(conn, "product", folded_name(values))
 
 
 def get_product(conn, product_id: int) -> dict[str, Any] | None:
@@ -166,7 +166,7 @@ def find_product_by_name(conn, name: str) -> dict[str, Any] | None:
 
 def list_products(conn, active_only: bool = True,
                   search: str | None = None) -> list[dict[str, Any]]:
-    where, params = product_filter(conn, active_only=active_only, search=search)
+    where, params = product_filter(active_only=active_only, search=search)
     return _rows(conn.execute(f"SELECT * FROM product{where} ORDER BY name", params))
 
 
@@ -462,7 +462,7 @@ def update_article_fields(conn, article_id: int, fields: dict[str, Any]) -> None
 
 
 def update_product_fields(conn, product_id: int, fields: dict[str, Any]) -> None:
-    _update_fields(conn, "product", product_id, fields)
+    _update_fields(conn, "product", product_id, folded_name(fields))
 
 
 # --- movements --------------------------------------------------------------

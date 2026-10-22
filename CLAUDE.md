@@ -43,8 +43,11 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
 - `domain/` : règles pures sans HA (`stock`, `units`, `conversion`, `nutrition`, `pricing`,
   `matching`, `shoppinglist`, `foodday`, `goals`, `route`, `maintenance`…).
 - `storage/` : SQLite (`database.py` : un écrivain sérialisé + un lecteur WAL),
-  `repositories.py`, `migrations/m001…m008` (schéma, catalogue, lots, journal ; le journal
-  `movement` est protégé par des triggers posés par m001).
+  `repositories.py`, `migrations/m001…m010` (schéma, catalogue, lots, journal ; le journal
+  `movement` est protégé par des triggers posés par m001). **Jamais de fonction Python
+  enregistrée sur une connexion** (`create_function`) : le lecteur est partagé entre threads
+  et un rappel Python depuis SQLite interbloque le GIL (gel complet de HA le 2026-10-22) ;
+  replier à l'écriture dans une colonne (`product.name_fold`, m010).
 - `coordinator.py` (`DataUpdateCoordinator`) alimente les plateformes `sensor`,
   `binary_sensor`, `event`, `todo`, `calendar`. `__init__.py` ouvre la base dans
   l'executor et lève `ConfigEntryNotReady` si elle échoue.
