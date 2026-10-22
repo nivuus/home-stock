@@ -47,7 +47,7 @@ pytest-homeassistant-custom-component==0.13.373
 # the same walk gives back exactly the previous list; against 2026.10.2 it adds
 # gazetteer-matcher, which conversation now requires and imports at module
 # level in default_agent.py.
-gazetteer-matcher==1.1.0
+gazetteer-matcher==1.2.0
 ha-ffmpeg==3.2.2
 hassil==3.12.1
 home-assistant-frontend==20260930.4
