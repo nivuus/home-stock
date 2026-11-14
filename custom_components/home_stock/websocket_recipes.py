@@ -23,6 +23,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
+from .admin_only import register_command
 from .const import MATCH_STATES, MEAL_SLOT_KEYS
 from .domain.stock import InsufficientStock
 from .validators import (
@@ -429,4 +430,5 @@ def async_register_recipe_commands(hass: HomeAssistant) -> None:
                     recipe_search_external, recipe_import_external,
                     meals_list, meal_plan, meal_move, meal_cancel,
                     meal_preview, meal_validate):
-        websocket_api.async_register_command(hass, command)
+        # recipe/delete is admin-only through the table in admin_only.py.
+        register_command(hass, command)

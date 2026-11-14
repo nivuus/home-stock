@@ -22,6 +22,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
+from .admin_only import register_service
 from .grocy_copy import resolve_grocy_copy
 from .application import PartsError
 from .const import (
@@ -742,26 +743,27 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "export_journal", export_journal,
                                  schema=vol.Schema({}),
                                  supports_response=SupportsResponse.ONLY)
-    hass.services.async_register(
-        DOMAIN, "import_grocy_catalog", import_grocy_catalog,
+    # Admin-only (admin_only.py): bulk writes the wall tablet must not start.
+    register_service(
+        hass, "import_grocy_catalog", import_grocy_catalog,
         schema=vol.Schema({
             vol.Optional("path", default="grocy_import.db"): grocy_database_path,
             vol.Optional("apply", default=False): cv.boolean,
         }),
         supports_response=SupportsResponse.ONLY,
     )
-    hass.services.async_register(
-        DOMAIN, "import_grocy_stock", import_grocy_stock_service,
+    register_service(
+        hass, "import_grocy_stock", import_grocy_stock_service,
         schema=MIGRATION_IMPORT_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
-    hass.services.async_register(
-        DOMAIN, "import_grocy_recipes", import_grocy_recipes_service,
+    register_service(
+        hass, "import_grocy_recipes", import_grocy_recipes_service,
         schema=MIGRATION_RECIPES_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
-    hass.services.async_register(
-        DOMAIN, "check_grocy_migration", check_grocy_migration_service,
+    register_service(
+        hass, "check_grocy_migration", check_grocy_migration_service,
         schema=MIGRATION_CHECK_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
@@ -854,7 +856,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             meals = [m for m in meals if m["slot_key"] == slot]
         return {"meals": meals}
 
-    hass.services.async_register(DOMAIN, "resync_off", resync_off, schema=RESYNC_SCHEMA)
+    register_service(hass, "resync_off", resync_off, schema=RESYNC_SCHEMA)
     hass.services.async_register(DOMAIN, "plan_meal", plan_meal,
                                  schema=PLAN_MEAL_SCHEMA)
     hass.services.async_register(DOMAIN, "validate_meal", validate_meal,
@@ -873,10 +875,9 @@ def async_register_services(hass: HomeAssistant) -> None:
                                  supports_response=SupportsResponse.ONLY)
     hass.services.async_register(DOMAIN, "record_battery_event", record_battery_event,
                                  schema=BATTERY_EVENT_SCHEMA)
-    hass.services.async_register(DOMAIN, "import_grocy_equipment",
-                                 import_grocy_equipment_service,
-                                 schema=IMPORT_EQUIPMENT_SCHEMA,
-                                 supports_response=SupportsResponse.ONLY)
+    register_service(hass, "import_grocy_equipment", import_grocy_equipment_service,
+                     schema=IMPORT_EQUIPMENT_SCHEMA,
+                     supports_response=SupportsResponse.ONLY)
 
     # --- lot 4 -------------------------------------------------------------
     # Enregistrés EN FIN, comme les entrées de `services.yaml` : ce fichier
