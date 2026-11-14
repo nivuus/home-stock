@@ -21,6 +21,8 @@ make test NIVUUS_INSTALLER_DIR=/home/mallanic/Projects/Nivuus/packages/installer
 ./scripts/test.sh -q                   # suite complète : 2223 passés, 1 ignoré, 14 min, ~450 Mo de RAM (mesuré sur `master`)
 ./scripts/test.sh -m network           # tests réseau réel, exclus par défaut (pytest.ini)
 cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc / rendu
+cd frontend && npm run check-bundle   # tracked bundle == in-memory build of src (CI job `frontend`)
+cd frontend && npx vitest run --maxWorkers=4 --minWorkers=1   # vitest 2 rejects --maxWorkers alone
 ```
 
 - `make test-integration` exige `homeassistant` installé sur l'hôte : absent ici, passer par
@@ -33,7 +35,7 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
 - `NIVUUS_INSTALLER_DIR` : le dépôt `installer` doit être sur un `main` récent, sinon
   `manifest.source` n'existe pas et `test_manifest_contract.py` échoue (constaté sur une
   branche `spec/…` en retard).
-- Non vérifiés ici (pas de `node_modules`) : les commandes `npm`. Lint CI : `ruff check`,
+- npm commands verified 2026-11-14 from a clean `npm ci` (Node 24). Lint CI : `ruff check`,
   version épinglée dans `requirements.txt`, règles dans `ruff.toml` (E4, E7, E9, F seulement).
 
 ## Architecture (`custom_components/home_stock/`)

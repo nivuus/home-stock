@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "rollup -c",
+    "check-bundle": "node outils/check-bundle.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "verifier": "node outils/verifier-rendu.mjs"

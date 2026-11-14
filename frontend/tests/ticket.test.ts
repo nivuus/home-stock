@@ -43,7 +43,8 @@ function monter(props: {
 } = {}) {
   const element = document.createElement('home-stock-ticket') as HTMLElement & {
     ticket: DonneesTicket | null; agentConfigure: boolean; file?: unknown;
-    televerser?: unknown; enAttente: number; updateComplete: Promise<boolean>;
+    televerser?: unknown; enAttente: number; large: boolean;
+    updateComplete: Promise<boolean>;
   };
   element.ticket = props.ticket ?? null;
   element.agentConfigure = props.agentConfigure ?? true;
