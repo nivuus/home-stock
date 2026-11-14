@@ -335,7 +335,7 @@ def _adapted(**overrides):
             ("Émincer l'oignon", None, None),
             ("Cuire", "Cuisson", 600))),),
         ingredient_names=("sauce soja",),
-        ingredient_amounts=((None, None),))
+        ingredient_amounts=((None, None),), language="fr")
     payload.update(overrides)
     return AdaptedRecipe(**payload)
 

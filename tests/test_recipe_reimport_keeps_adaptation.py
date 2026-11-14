@@ -37,7 +37,8 @@ def _adapted():
         name="Gratin teriyaki", summary="Sucré-salé", total_minutes=35,
         utensils="four", servings=4,
         steps=(AdaptedStep(title="Sauce", bullets=(("Cuire", "Cuisson", 600),)),),
-        ingredient_names=("sauce soja",), ingredient_amounts=((None, None),))
+        ingredient_names=("sauce soja",), ingredient_amounts=((None, None),),
+        language="fr")
 
 
 def test_a_failed_adaptation_keeps_the_adapted_name_and_steps(manager):

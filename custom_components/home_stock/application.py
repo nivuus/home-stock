@@ -987,7 +987,8 @@ class StockManager:
                     "name": adapted.name, "summary": adapted.summary,
                     "total_minutes": adapted.total_minutes,
                     "utensils": adapted.utensils, "servings": adapted.servings,
-                    "language": "fr", "needs_review": 0, "adapted_at": moment,
+                    "language": adapted.language, "needs_review": 0,
+                    "adapted_at": moment,
                 }
             fields |= {"image_url": recipe.image_url,
                        "source_url": recipe.source_url}
