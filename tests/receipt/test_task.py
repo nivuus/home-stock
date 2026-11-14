@@ -67,11 +67,11 @@ def test_the_prompt_carries_the_labels_of_the_session():
         assert label in prompt
 
 
-def test_the_prompt_is_in_french_and_names_what_to_ignore():
+def test_the_prompt_names_what_to_ignore():
     """Promotions de fidélité, points, mode de paiement."""
     prompt = build_instructions(session_labels=LABELS).lower()
-    assert "ticket de caisse" in prompt
-    for ignored in ("fidélité", "promotion", "paiement"):
+    assert "receipt" in prompt
+    for ignored in ("loyalty", "promotion", "payment"):
         assert ignored in prompt
 
 

@@ -56,29 +56,40 @@ class ReceiptReadResult:
 
 
 def build_instructions(*, session_labels: Sequence[str]) -> str:
-    """L'invite, en français, avec les libellés de la session en cours.
+    """The instructions, with the labels of the current session.
 
-    Un modèle qui sait qu'il cherche « LT DEMI ECR 1L » parmi vingt candidats
-    connus se trompe beaucoup moins qu'un modèle qui lit dans le vide.
+    Neutral on purpose: no country, no currency and no answer language is
+    assumed. The model reports the currency printed on the receipt, and
+    read_receipt compares it with the one Home Assistant is configured with.
+    A model that knows it is looking for a handful of known labels makes far
+    fewer mistakes than one reading blind.
     """
     lines = [
-        "Tu lis la photo d'un ticket de caisse français.",
-        "Extrais l'enseigne, la date d'achat (AAAA-MM-JJ), le total payé, la "
-        "devise, et une entrée par article acheté : le libellé de caisse tel "
-        "qu'il est imprimé, la quantité, le prix unitaire et le prix total.",
-        "N'invente aucune ligne : si une ligne est illisible, omets-la.",
-        "Ignore les remises et promotions de fidélité, les points de "
-        "fidélité, les totaux intermédiaires, la TVA, le mode de paiement et "
-        "le rendu de monnaie : ce ne sont pas des articles achetés.",
-        "Les prix sont en euros, avec un point décimal.",
+        "You read the photo of a shopping receipt.",
+        "Extract the store name as printed, the purchase date (YYYY-MM-DD), "
+        "the total paid, the currency as an ISO 4217 code (the one the "
+        "receipt shows), and one entry per item bought: the label exactly as "
+        "printed, the quantity, the unit price and the total price.",
+        "Do not invent any line: if a line is unreadable, leave it out.",
+        "Ignore discounts and loyalty promotions, loyalty points, subtotals, "
+        "taxes, the payment method and the change given: they are not items "
+        "bought.",
+        "Give every price as a plain number with a dot as decimal separator.",
     ]
     labels = [label for label in session_labels if label]
     if labels:
         lines.append(
-            "Les articles suivants ont été scannés pendant ces courses ; "
-            "les libellés de caisse en sont souvent des abréviations : "
-            + " ; ".join(labels[:60]) + ".")
+            "These items were scanned during this shopping trip; receipt "
+            "labels are often abbreviations of them: "
+            + "; ".join(labels[:60]) + ".")
     return "\n".join(lines)
+
+
+def _same_currency(printed: str | None, configured: str | None) -> bool:
+    """ISO 4217 codes compare case-insensitively; an absent one never matches."""
+    if not printed or not configured:
+        return False
+    return printed.strip().upper() == configured.strip().upper()
 
 
 def _structure_schema() -> vol.Schema:
@@ -183,6 +194,15 @@ async def read_receipt(hass: HomeAssistant, *, agent_entity_id: str | None,
             raw = json.dumps(payload, ensure_ascii=False)
         except (TypeError, ValueError):
             raw = str(payload)
+    configured = hass.config.currency
+    if parsed.lines and not _same_currency(parsed.currency, configured):
+        # Prices in another currency, or in one the model did not report,
+        # cannot be compared with what was paid: refused, never converted.
+        return ReceiptReadResult(
+            raw=raw, agent_entity_id=agent_entity_id,
+            error=f"Devise du ticket : {parsed.currency or 'inconnue'} ; "
+                  f"Home Assistant compte en {configured}. Prix refusés. "
+                  "La photo est conservée, vous pouvez réessayer.")
     if not parsed.lines:
         return ReceiptReadResult(
             raw=raw, agent_entity_id=agent_entity_id,
