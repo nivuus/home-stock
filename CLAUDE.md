@@ -22,7 +22,7 @@ make test NIVUUS_INSTALLER_DIR=/home/mallanic/Projects/Nivuus/packages/installer
 ./scripts/test.sh -m network           # tests réseau réel, exclus par défaut (pytest.ini)
 cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc / rendu
 cd frontend && npm run check-bundle   # tracked bundle == in-memory build of src (CI job `frontend`)
-cd frontend && npx vitest run --maxWorkers=4 --minWorkers=1   # vitest 2 rejects --maxWorkers alone
+cd frontend && npx vitest run --maxWorkers=4   # never watch mode; bound the workers on this host
 ```
 
 - `make test-integration` exige `homeassistant` installé sur l'hôte : absent ici, passer par

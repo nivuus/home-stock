@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { Connexion, type Hass } from '../src/connexion';
 
 function hassFactice(): Hass & {
   connection: { sendMessagePromise: ReturnType<typeof vi.fn>; subscribeMessage: ReturnType<typeof vi.fn> };
   callService: ReturnType<typeof vi.fn>;
-  fetchWithAuth: ReturnType<typeof vi.fn>;
+  fetchWithAuth: Mock<Hass['fetchWithAuth']>;
 } {
   return {
     connection: {
@@ -13,7 +13,7 @@ function hassFactice(): Hass & {
     },
     language: 'fr',
     callService: vi.fn().mockResolvedValue(undefined),
-    fetchWithAuth: vi.fn(),
+    fetchWithAuth: vi.fn<Hass['fetchWithAuth']>(),
   };
 }
 

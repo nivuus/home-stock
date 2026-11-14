@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '../src/ecrans/consommation';
 
 const PRODUIT_G = {
@@ -32,7 +32,7 @@ function monter(reponse: unknown) {
 
 /** Une `FileAttente` factice qui journalise chaque charge envoyée à
  *  `envoi`, et répond toujours « envoyée ». */
-function fileEspionne(envoi: ReturnType<typeof vi.fn>) {
+function fileEspionne(envoi: Mock<(type: string, charge: unknown) => unknown>) {
   return {
     ajouter: (type: string, charge: any) => {
       envoi(type, charge);
