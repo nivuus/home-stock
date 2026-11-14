@@ -12,3 +12,21 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore"
+    # These ten are not chosen: they are the closure of the component
+    # requirements of the Home Assistant release that pytest-homeassistant
+    # pins, derived as documented in requirements.txt. Bumping one alone
+    # pairs libraries no Home Assistant release ships together, so only the
+    # harness pin is proposed; its bump is where the closure is recomputed.
+    ignore:
+      - dependency-name: "gazetteer-matcher"
+      - dependency-name: "ha-ffmpeg"
+      - dependency-name: "hassil"
+      - dependency-name: "home-assistant-frontend"
+      - dependency-name: "home-assistant-intents"
+      - dependency-name: "mutagen"
+      - dependency-name: "numpy"
+      - dependency-name: "pymicro-vad"
+      - dependency-name: "pyspeex-noise"
+      # Dependabot names pip packages by their normalised (lowercase) name,
+      # as its own PR #29 does for this one.
+      - dependency-name: "pyturbojpeg"

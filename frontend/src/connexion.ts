@@ -16,12 +16,14 @@ export type Hass = {
    *  service n'a pas d'équivalent websocket, un appel de service est le seul
    *  moyen de le déclencher depuis le panneau. */
   callService(domain: string, service: string, serviceData?: Record<string, unknown>): Promise<unknown>;
-  /** Le jeton de la session en cours, tel que Home Assistant le pose sur
-   *  `hass`. Le seul usage est le téléversement d'une photo de ticket, qui
-   *  passe par une vue HTTP (`/api/media_source/local_source/upload`) et pas
-   *  par le websocket : on ne lit aucun jeton stocké ailleurs, on n'ouvre
-   *  aucune seconde session. */
-  auth?: { data?: { access_token?: string } };
+  /** Home Assistant's authenticated fetch (frontend `src/types.ts`,
+   *  `fetchWithAuth(path, init)`): it refreshes an expired access token
+   *  before sending, then adds the authorization header. Its only use is the
+   *  receipt photo upload, an HTTP view (`/api/media_source/local_source/upload`)
+   *  rather than a websocket command. Reading `hass.auth.data.access_token`
+   *  directly is what this replaces: that token is never refreshed, so a
+   *  panel left open past its lifetime got a 401. */
+  fetchWithAuth(path: string, init?: RequestInit): Promise<Response>;
   /** Ce que Home Assistant ne remplace QUE quand le thème bouge. L'objet
    *  `hass`, lui, est remplacé à chaque changement d'état de la maison —
    *  plusieurs fois par seconde sur la tablette de la cuisine. Le panneau
@@ -62,11 +64,9 @@ export class Connexion {
     const corps = new FormData();
     corps.append('media_content_id', dossier);
     corps.append('file', fichier);
-    const jeton = this.hass.auth?.data?.access_token;
-    const reponse = await fetch('/api/media_source/local_source/upload', {
+    const reponse = await this.hass.fetchWithAuth('/api/media_source/local_source/upload', {
       method: 'POST',
       body: corps,
-      headers: jeton ? { authorization: `Bearer ${jeton}` } : {},
     });
     if (!reponse.ok) throw new Error(String(reponse.status));
     const rendu = (await reponse.json()) as { media_content_id: string };

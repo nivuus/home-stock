@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the test suite in an image aligned on HA 2026.10.2.
+# Runs the test suite in an image aligned on HA 2026.11.1, the release pytest-homeassistant pins.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 docker build -q -f Dockerfile.test -t home-stock-test . > /dev/null
