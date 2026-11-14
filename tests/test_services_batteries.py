@@ -4,12 +4,16 @@
 naissent à la tâche 13, et un service ne se teste pas deux tâches avant son
 implémentation. Il est enregistré et testé là-bas.
 """
+from datetime import date
+
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.home_stock.const import DOMAIN
+
+_DAY = date(2026, 8, 21)  # list_equipment takes the household's civil date
 
 
 def _declare(integration, **kwargs):
@@ -193,4 +197,4 @@ async def test_import_grocy_equipment_writes_when_asked(hass, setup_entry, tmp_p
         {"database_path": "grocy.db", "apply": True},
         blocking=True, return_response=True)
     assert reponse["applied"] is True
-    assert len(integration.runtime_data.manager.list_equipment()) == 34
+    assert len(integration.runtime_data.manager.list_equipment(today=_DAY)) == 34

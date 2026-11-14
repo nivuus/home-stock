@@ -631,9 +631,11 @@ class StockManager:
 
         `today` and `now` serve two different clocks: `today` is a civil date
         and only bounds the expiration window, while `now` is an instant and
-        only bounds the food day. Neither substitutes for the other.
+        only bounds the food day. Neither substitutes for the other. Without
+        `today`, the civil date is the one in `tz` — the household's — never
+        the UTC date, which is already tomorrow every evening west of UTC.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today) if today else datetime.now(tz).date()
         limit = reference + timedelta(days=expiration_alert_days)
         conn = self.db.read()
         rows = repo.stock_rows(conn)
@@ -756,7 +758,7 @@ class StockManager:
         }
 
     def claim_expiry_announcements(
-        self, *, expiration_alert_days: int, today: str | None = None,
+        self, *, expiration_alert_days: int, today: str,
     ) -> list[tuple[str, list[dict[str, Any]]]]:
         """What has just crossed a threshold, marked as announced on the way out.
 
@@ -767,8 +769,12 @@ class StockManager:
         A stage never goes backwards. A batch already announced as `expired`
         stays there even if the clock moves back — a corrected timezone or a
         restored backup must not re-announce the whole fridge.
+
+        `today` is the household's civil date, given by the caller: there is
+        no default, because a UTC date announces a batch expired on its last
+        good day, and an announced stage never goes back.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today)
         limit = (reference + timedelta(days=expiration_alert_days)).isoformat()
         claimed: dict[str, list[dict[str, Any]]] = {stage: [] for stage in EXPIRY_STAGES}
         with self.db.write() as conn:
@@ -1676,15 +1682,16 @@ class StockManager:
                 raise ValueError(f"unknown equipment {equipment_id}")
             repo.update_equipment_fields(conn, equipment_id, checked)
 
-    def list_equipment(self, *, today: date | None = None) -> list[dict[str, Any]]:
+    def list_equipment(self, *, today: date) -> list[dict[str, Any]]:
         """Every sheet, with the warranty end and the days left — signed.
 
         An EXPIRED warranty keeps its date here, with a negative `days_left`:
         the panel owes three distinct sentences (ahead, over, never recorded)
         and cannot write the second one from a row that hides the date. Only
-        `warranties()` narrows to what is still ahead.
+        `warranties()` narrows to what is still ahead. `today` is the
+        household's civil date, given by the caller.
         """
-        day = today or date.today()
+        day = today
         conn = self.db.read()
         ends = {row["id"]: row["warranty_ends_on"] for row in repo.warranty_rows(conn)}
         rows = []

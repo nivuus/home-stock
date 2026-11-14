@@ -7,6 +7,7 @@ off") is what a person wants.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from functools import partial
 
 from homeassistant.components.event import ENTITY_ID_FORMAT, EventEntity
@@ -16,7 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import HomeStockConfigEntry
 from .application import EXPIRY_STAGES
 from .const import CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS
-from .coordinator import HomeStockCoordinator
+from .coordinator import HomeStockCoordinator, async_resolve_time_zone
 from .entity import HomeStockEntity
 
 
@@ -40,9 +41,11 @@ class ExpirationEventEntity(HomeStockEntity, EventEntity):
     async def _announce(self) -> None:
         days = self.coordinator.config_entry.options.get(
             CONF_EXPIRATION_ALERT_DAYS, DEFAULT_EXPIRATION_ALERT_DAYS)
+        # The household's civil date, in Home Assistant's configured zone.
+        tz = await async_resolve_time_zone(self.hass)
         claimed = await self.hass.async_add_executor_job(partial(
             self.coordinator.manager.claim_expiry_announcements,
-            expiration_alert_days=days))
+            expiration_alert_days=days, today=datetime.now(tz).date().isoformat()))
         for stage, batches in claimed:
             self._trigger_event(stage, {"count": len(batches), "batches": batches})
             self.async_write_ha_state()
