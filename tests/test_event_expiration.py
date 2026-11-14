@@ -109,7 +109,7 @@ async def test_the_entity_fires_one_event_for_several_batches(hass, setup_entry)
     and never goes through ExpirationEventEntity. Firing once per batch
     instead of once per stage would put three state writes on the bus for
     what a listener (or a voice assistant) should read as a single event."""
-    from pytest_homeassistant_custom_component.common import async_capture_events
+    from pytest_homeassistant.common import async_capture_events
 
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager
@@ -149,7 +149,7 @@ async def test_two_stages_in_one_refresh_fire_two_distinct_events(hass, setup_en
     identical states — one silently overwriting the other before anything
     ever observed it.
     """
-    from pytest_homeassistant_custom_component.common import async_capture_events
+    from pytest_homeassistant.common import async_capture_events
 
     entry = await setup_entry(with_article=True)
     manager = entry.runtime_data.manager
