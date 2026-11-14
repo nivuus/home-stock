@@ -18,6 +18,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
+import aiohttp
+
 BASES: Final = (
     ("food", "world.openfoodfacts.org"),
     ("products", "world.openproductsfacts.org"),
@@ -66,6 +68,15 @@ class OffLookup:
     record: OffRecord | None = None
     throttled: bool = False
     timed_out: bool = False
+    # No base gave an answer about this barcode (every call failed on the
+    # network or with a server error): the product may well exist.
+    unreachable: bool = False
+
+
+# What a transport raises when a base cannot be reached or answers with a
+# body that is not JSON. Anything else is a bug and is not hidden as an
+# absence.
+TRANSPORT_ERRORS: Final = (aiohttp.ClientError, TimeoutError, OSError, ValueError)
 
 
 class OffClient:
@@ -89,6 +100,9 @@ class OffClient:
         """
         started = self._clock()
         headers = {"User-Agent": self._user_agent}
+        # A base "answered" when it said something about the barcode: a 404,
+        # or a 200 JSON object. Errors and other statuses say nothing.
+        answered = False
 
         for off_source, host in BASES:
             remaining = CASCADE_BUDGET - (self._clock() - started)
@@ -103,15 +117,17 @@ class OffClient:
             url = f"https://{host}/api/v2/product/{code}.json?fields={FIELDS}"
             try:
                 status, payload = await self._transport.get_json(url, headers, timeout)
-            except Exception:  # noqa: BLE001 - deliberately swallows everything the
-                # transport can raise (timeout, connection error, ...): a scan
-                # that fails must return nothing, never throw at the user.
+            except TRANSPORT_ERRORS:
+                # This base could not be reached: try the next one. Whether
+                # ANY base answered is reported as `unreachable` below.
                 continue
 
             if status == 429:
                 # Walking on to the next base would only deepen the throttle:
                 # the limit is per client, not per host.
                 return OffLookup(throttled=True)
+            if status == 404:
+                answered = True
             if status != 200 or not isinstance(payload, dict):
                 # A 404, any other non-200 status, or a 200 body that did not
                 # deserialise into a dict (OFF has been seen to answer with a
@@ -119,6 +135,7 @@ class OffClient:
                 # usable. Checked explicitly so a malformed body reads as an
                 # expected condition, not an accident that raises on us.
                 continue
+            answered = True
             product = payload.get("product")
             # Same defensive shape as the payload check above: OFF has been
             # seen to answer status 1 with a "product" that is not a dict
@@ -129,7 +146,7 @@ class OffClient:
             if payload.get("status") == 1 and isinstance(product, dict) and product:
                 return OffLookup(record=OffRecord(code, off_source, product))
 
-        return OffLookup()
+        return OffLookup(unreachable=not answered)
 
     async def lookup_with_retry(self, code: str, *, attempts: int = 5,
                                 backoff: float = THROTTLE_BACKOFF) -> OffLookup:
