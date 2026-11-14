@@ -492,11 +492,11 @@ import_grocy_equipment:
     database_path:
       name: Chemin de la base Grocy
       description: >-
-        Chemin d'une COPIE de grocy.db, lisible par Home Assistant. Jamais la
-        base de production : l'import ne l'ouvre qu'en lecture seule, mais la
-        copie reste la règle.
+        Chemin d'une COPIE de grocy.db, relatif au dossier de configuration
+        (jamais absolu, jamais `..`). Jamais la base de production : l'import
+        ne l'ouvre qu'en lecture seule, mais la copie reste la règle.
       required: true
-      example: /config/grocy-copie.db
+      example: grocy-copie.db
       selector:
         text:
     apply:

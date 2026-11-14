@@ -271,7 +271,7 @@ async def test_the_full_chain_on_the_real_snapshot_is_neutral(hass, setup_entry)
     await hass.async_add_executor_job(_semer)
     rapport = await hass.services.async_call(
         "home_stock", "import_grocy_equipment",
-        {"database_path": str(copie), "apply": True},
+        {"database_path": "grocy-copie.db", "apply": True},
         blocking=True, return_response=True)
     assert rapport["summary_diff"] == [], rapport["summary_diff"]
     await integration.runtime_data.coordinator.async_refresh()

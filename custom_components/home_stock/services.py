@@ -22,6 +22,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
+from .grocy_copy import resolve_grocy_copy
 from .application import PartsError
 from .const import (
     BATTERY_EVENT_KINDS,
@@ -93,7 +94,7 @@ def _check_migration_for(hass: HomeAssistant, data: dict[str, Any]):
     entry = _entry(hass)
     return check_migration(
         entry.runtime_data.manager.db,
-        hass.config.path(data["database_path"]),
+        resolve_grocy_copy(hass.config.config_dir, data["database_path"]),
         acknowledged=data["acknowledged"],
         archive=data["archive"],
         picture_dir=hass.config.path("media/home_stock"),
@@ -279,7 +280,7 @@ MAINTENANCE_PLAN_SCHEMA = vol.Schema({
 })
 
 IMPORT_EQUIPMENT_SCHEMA = vol.Schema({
-    vol.Required("database_path"): cv.string,
+    vol.Required("database_path"): grocy_database_path,
     vol.Optional("apply", default=False): cv.boolean,
 })
 
@@ -331,6 +332,12 @@ def _entry(hass: HomeAssistant):
     if not entries:
         raise HomeAssistantError("Le garde-manger n'est pas configuré.")
     return entries[0]
+
+
+async def _grocy_copy(hass: HomeAssistant, relative: str) -> str:
+    """The absolute path of a Grocy copy, refused outside config/."""
+    return await _run(hass, partial(
+        resolve_grocy_copy, hass.config.config_dir, relative))
 
 
 async def _run(hass: HomeAssistant, work) -> Any:
@@ -543,7 +550,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def import_grocy_catalog(call: ServiceCall) -> ServiceResponse:
         entry = _entry(hass)
-        path = hass.config.path(call.data["path"])
+        path = await _grocy_copy(hass, call.data["path"])
         apply = call.data["apply"]
         report = await _run(hass, partial(
             import_catalog, entry.runtime_data.manager.db, path, apply=apply,
@@ -564,7 +571,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def import_grocy_stock_service(call: ServiceCall) -> ServiceResponse:
         entry = _entry(hass)
-        path = hass.config.path(call.data["database_path"])
+        path = await _grocy_copy(hass, call.data["database_path"])
         apply = call.data["apply"]
         report = await _run(hass, partial(
             import_stock, entry.runtime_data.manager.db, path, apply=apply))
@@ -574,7 +581,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def import_grocy_recipes_service(call: ServiceCall) -> ServiceResponse:
         entry = _entry(hass)
-        path = hass.config.path(call.data["database_path"])
+        path = await _grocy_copy(hass, call.data["database_path"])
         dossier = hass.config.path(call.data["picture_dir"])
         apply = call.data["apply"]
         report = await _run(hass, partial(
@@ -705,7 +712,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             for state in hass.states.async_all("sensor")
         ]
         report = await _run(hass, partial(
-            import_grocy_equipment, runtime.manager.db, call.data["database_path"],
+            import_grocy_equipment, runtime.manager.db,
+            await _grocy_copy(hass, call.data["database_path"]),
             hass_states=states, registry_rows=registry_rows,
             apply=call.data["apply"]))
         if call.data["apply"]:
@@ -737,7 +745,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "import_grocy_catalog", import_grocy_catalog,
         schema=vol.Schema({
-            vol.Optional("path", default="grocy_import.db"): cv.string,
+            vol.Optional("path", default="grocy_import.db"): grocy_database_path,
             vol.Optional("apply", default=False): cv.boolean,
         }),
         supports_response=SupportsResponse.ONLY,

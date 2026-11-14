@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping, NamedTuple
 
+from .grocy_copy import open_grocy_copy
 from .const import (
     GROCY_MAX_BATCH_VALUE,
     GROCY_NEVER_EXPIRES,
@@ -251,9 +252,7 @@ class StockReport:
 
 
 def _open_grocy(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return open_grocy_copy(path)
 
 
 def _catalogue_within(conn) -> dict[int, CatalogueEntry]:

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .grocy_copy import open_grocy_copy
 from .grocy.refs import grocy_product_id
 from .grocy.units import (  # noqa: F401  (see the re-export note below)
     CONTAINER_UNITS,
@@ -76,9 +77,7 @@ _base_unit = base_unit
 
 
 def _open_grocy(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return open_grocy_copy(path)
 
 
 def _today() -> str:
