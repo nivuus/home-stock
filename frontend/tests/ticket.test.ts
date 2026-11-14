@@ -332,3 +332,14 @@ describe('<home-stock-ticket> : la vue dense (lot 6)', () => {
     expect(e.shadowRoot!.querySelector('.volet-ticket')!.textContent!.trim()).not.toBe('');
   });
 });
+
+describe('upload refusal messages', () => {
+  it('says the session expired on a 401, not that the account lacks rights', async () => {
+    const { messageTeleversement } = await import('../src/ecrans/ticket');
+    const expiree = messageTeleversement(new Error('401'));
+    const interdite = messageTeleversement(new Error('403'));
+    expect(expiree).not.toBe(interdite);
+    expect(expiree).not.toContain('administrateur');
+    expect(interdite).toContain('administrateur');
+  });
+});

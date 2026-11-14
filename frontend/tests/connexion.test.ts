@@ -4,6 +4,7 @@ import { Connexion, type Hass } from '../src/connexion';
 function hassFactice(): Hass & {
   connection: { sendMessagePromise: ReturnType<typeof vi.fn>; subscribeMessage: ReturnType<typeof vi.fn> };
   callService: ReturnType<typeof vi.fn>;
+  fetchWithAuth: ReturnType<typeof vi.fn>;
 } {
   return {
     connection: {
@@ -12,6 +13,7 @@ function hassFactice(): Hass & {
     },
     language: 'fr',
     callService: vi.fn().mockResolvedValue(undefined),
+    fetchWithAuth: vi.fn(),
   };
 }
 
@@ -81,5 +83,49 @@ describe('connexion', () => {
 
     expect(acces).not.toHaveBeenCalled();
     acces.mockRestore();
+  });
+});
+
+describe('receipt photo upload', () => {
+  // Home Assistant's frontend exposes `hass.fetchWithAuth`, which refreshes an
+  // expired access token before the request. A raw `access_token` read from
+  // `hass.auth.data` is never refreshed: on a panel left open for more than
+  // the token's lifetime the upload got a 401.
+  function hassAvecFetch(reponse: Response) {
+    const fetchWithAuth = vi.fn().mockResolvedValue(reponse);
+    const fetchBrut = vi.fn();
+    vi.stubGlobal('fetch', fetchBrut);
+    const hass: Hass & { auth: unknown } = {
+      ...hassFactice(),
+      auth: { data: { access_token: 'expired-token' } },
+      fetchWithAuth,
+    };
+    return { hass, fetchWithAuth, fetchBrut };
+  }
+
+  it('goes through the authenticated fetch helper of hass, never a raw token', async () => {
+    const { hass, fetchWithAuth, fetchBrut } = hassAvecFetch(new Response(
+      JSON.stringify({ media_content_id: 'media-source://media_source/local/x.jpg' }),
+      { status: 200 }));
+    const fichier = new File(['x'], 'ticket.jpg', { type: 'image/jpeg' });
+
+    const id = await new Connexion(hass).televerserMedia(fichier, 'media-source://media_source/local/r');
+
+    expect(id).toBe('media-source://media_source/local/x.jpg');
+    expect(fetchBrut).not.toHaveBeenCalled();
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+    const [chemin, init] = fetchWithAuth.mock.calls[0];
+    expect(chemin).toBe('/api/media_source/local_source/upload');
+    expect(init.method).toBe('POST');
+    expect((init.body as FormData).get('media_content_id')).toBe('media-source://media_source/local/r');
+    expect(JSON.stringify(init.headers ?? {})).not.toContain('expired-token');
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects with the HTTP status when the upload is refused', async () => {
+    const { hass } = hassAvecFetch(new Response('', { status: 403 }));
+    await expect(new Connexion(hass).televerserMedia(new File(['x'], 'a.jpg'), 'd'))
+      .rejects.toThrow('403');
+    vi.unstubAllGlobals();
   });
 });
