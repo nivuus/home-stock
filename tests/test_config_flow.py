@@ -1,7 +1,7 @@
 import pytest
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.home_stock.const import (
@@ -147,11 +147,13 @@ async def test_the_horizon_is_bounded(hass):
     await hass.async_block_till_done()
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidData) as refused:
         await hass.config_entries.options.async_configure(
             result["flow_id"],
             user_input={CONF_EXPIRATION_ALERT_DAYS: DEFAULT_EXPIRATION_ALERT_DAYS,
                         CONF_SHOPPING_LIST_HORIZON_DAYS: 0})
+    assert str(refused.value)
+    assert CONF_SHOPPING_LIST_HORIZON_DAYS in refused.value.schema_errors
 
 
 async def test_the_options_flow_refuses_an_entity_without_attachments(hass):

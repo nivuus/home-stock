@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -923,5 +924,8 @@ def test_the_public_wrappers_still_validate_before_taking_the_lock(manager):
     L'INTÉRIEUR de la transaction : un enregistrement incohérent ne prend pas
     le verrou d'écriture juste pour être refusé dedans."""
     _seed_article(manager)
-    with pytest.raises(Exception):
+    with patch.object(manager.db, "write", wraps=manager.db.write) as write, \
+            pytest.raises(PartsError) as refused:
         manager.consume(product_id=1, quantity=1.0, parts_total=99, parts_mine=1)
+    assert str(refused.value)
+    write.assert_not_called()
