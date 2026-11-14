@@ -972,7 +972,14 @@ class StockManager:
             # Adapted or not, in one shot. There is no half-adapted recipe:
             # `adapt` returns a whole AdaptedRecipe or None, so the fields
             # below either all come from the agent or all come from the source.
-            if adapted is None:
+            # A failed adaptation (None) of a recipe that WAS adapted keeps
+            # every adapted field and every step: only provenance and
+            # ingredients refresh below.
+            keep_adaptation = (adapted is None and not created
+                               and existing["adapted_at"] is not None)
+            if keep_adaptation:
+                fields = {}
+            elif adapted is None:
                 fields = {"name": recipe.name, "language": "en",
                           "needs_review": 1, "adapted_at": None}
             else:
@@ -992,6 +999,9 @@ class StockManager:
             else:
                 recipe_id = existing["id"]
                 repo.update_recipe_fields(conn, recipe_id, fields)
+            if not created and adapted is not None:
+                # Only a new adaptation replaces the pages: without one there
+                # is nothing to put in their place.
                 conn.execute(
                     "DELETE FROM recipe_instruction WHERE step_id IN"
                     " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
