@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
@@ -32,7 +32,7 @@ from .services import async_register_services
 from .shopping import ShoppingService
 from .skip_meal import async_register_skip_meal_service
 from .storage.database import Database
-from .storage.migrations import apply_migrations
+from .storage.migrations import SchemaTooNewError, apply_migrations
 from .websocket_api import async_register_websocket
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR,
@@ -90,6 +90,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
 
     try:
         await hass.async_add_executor_job(_open)
+    except SchemaTooNewError as err:
+        # Permanent: retrying cannot make this release understand the schema.
+        await hass.async_add_executor_job(database.close)
+        raise ConfigEntryError(str(err)) from err
     except Exception as err:
         # Close whatever got opened so the retry does not inherit a dangling
         # connection and a stale lock on the file.
