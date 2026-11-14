@@ -255,6 +255,31 @@ with tempfile.TemporaryDirectory() as root:
     check("les phrases ne partent pas quand la declaration vise ailleurs",
           (config / "custom_sentences/fr/home_stock.yaml").exists(), False)
 
+# A trailing YAML comment after the declaration still declares the directory.
+with tempfile.TemporaryDirectory() as root:
+    config = socle(root,
+                   "homeassistant:\n"
+                   "  packages: !include_dir_named packages  # home-stock\n")
+    proc = run(root)
+    check("a declaration followed by a comment is recognised",
+          "!include_dir_named" in proc.stdout, False)
+    check("the sentences are laid under a commented declaration",
+          (config / "custom_sentences/fr/home_stock.yaml").is_file(), True)
+
+# Both or neither: once the declaration is gone, the sentences laid by an
+# earlier run must go too, or they are recognised with no handler.
+with tempfile.TemporaryDirectory() as root:
+    config = socle(root, DECLARED)
+    run(root)
+    laid = config / "custom_sentences/fr/home_stock.yaml"
+    check("the sentences are laid while declared", laid.is_file(), True)
+    (config / "configuration.yaml").write_text("homeassistant:\n")
+    proc = run(root)
+    check("a run without the declaration succeeds", proc.returncode, 0)
+    check("the sentences laid earlier are removed", laid.exists(), False)
+    check("the removal is reported",
+          "custom_sentences/fr/home_stock.yaml" in proc.stdout, True)
+
 # --- configuration.yaml mal encode ----------------------------------------
 # declares_packages() ouvrait le fichier en texte et ne rattrapait qu'OSError.
 # Ce controle tourne APRES les depots : une UnicodeDecodeError ici faisait

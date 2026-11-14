@@ -89,8 +89,10 @@ PACKAGES_DECLARATION = "packages: !include_dir_named packages"
 # mais pas le repertoire `packages/` ou ce hook depose son fragment. Sans la
 # capture, le hook se tairait sur une configuration qui n'a aucune chance de
 # charger ce qu'il vient d'ecrire.
+# A YAML comment may follow the directory, after whitespace.
 PACKAGES_RE = re.compile(
-    r"^\s*packages:\s*!include_dir_(?:merge_)?named\s+(\S+)\s*$", re.MULTILINE)
+    r"^\s*packages:\s*!include_dir_(?:merge_)?named\s+([^\s#]\S*)\s*(?:#.*)?$",
+    re.MULTILINE)
 
 
 def emit(event):
@@ -264,6 +266,14 @@ def main():
                 copy_file(os.path.join(HERE, rel_source),
                           os.path.join(config_dir, rel_dest))
         else:
+            # Both or neither: sentences laid by an earlier run, when the
+            # declaration was there, would now be recognised with no handler.
+            for _rel_source, rel_dest in CONDITIONAL_FILES:
+                laid = os.path.join(config_dir, rel_dest)
+                if os.path.lexists(laid):
+                    os.remove(laid)
+                    emit({"event": "progress", "pct": 85,
+                          "msg": f"Phrases vocales retirees : {rel_dest}"})
             emit({"event": "progress", "pct": 90,
                   "msg": "Les phrases vocales du garde-manger ne sont PAS "
                          "deposees : elles sont en attente d'une ligne dans "
