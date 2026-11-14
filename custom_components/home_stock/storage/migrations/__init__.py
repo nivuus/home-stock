@@ -14,6 +14,7 @@ from . import (
     m008_migration,
     m009_article_active,
     m010_product_name_fold,
+    m011_script_neutral_keys,
 )
 
 MIGRATIONS = (
@@ -27,6 +28,7 @@ MIGRATIONS = (
     m008_migration,
     m009_article_active,
     m010_product_name_fold,
+    m011_script_neutral_keys,
 )
 CURRENT_VERSION = MIGRATIONS[-1].VERSION
 

@@ -2522,8 +2522,10 @@ def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None
     # Only an explicit human confirmation teaches an alias. An `auto` match
     # never does: a wrong guess made permanent would contaminate every later
     # recipe (Grocy, April 2026 — 35 duplicates from re-matching by name).
-    if create_alias and state == "confirmed" and product_id is not None:
-        repo.upsert_alias(conn, normalised=normalise(line["raw_text"]),
+    # A text with no letter or digit has no key to teach (repo refuses it).
+    key = normalise(line["raw_text"])
+    if create_alias and state == "confirmed" and product_id is not None and key:
+        repo.upsert_alias(conn, normalised=key,
                           product_id=product_id, created_at=moment)
     return dict(conn.execute(
         "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone())
