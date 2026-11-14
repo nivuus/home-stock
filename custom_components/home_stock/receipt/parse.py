@@ -34,17 +34,18 @@ from ..const import (
 # même fichier qui la demande et qui la vérifie, donc les deux ne peuvent
 # pas diverger sans qu'un test le voie.
 RECEIPT_STRUCTURE: dict[str, Any] = {
-    "store": {"description": "Le nom de l'enseigne, tel qu'il est imprimé",
+    "store": {"description": "The store name, as printed",
               "required": False, "selector": {"text": None}},
-    "purchased_on": {"description": "La date d'achat, au format AAAA-MM-JJ",
+    "purchased_on": {"description": "The purchase date, as YYYY-MM-DD",
                      "required": False, "selector": {"text": None}},
-    "total": {"description": "Le total payé, en euros",
+    "total": {"description": "The total paid, in the receipt's currency",
               "required": False, "selector": {"number": None}},
-    "currency": {"description": "Le code de la devise, par exemple EUR",
-                 "required": False, "selector": {"text": None}},
+    # Required: prices are refused unless it matches the configured currency.
+    "currency": {"description": "The ISO 4217 code of the receipt's currency",
+                 "required": True, "selector": {"text": None}},
     "lines": {
-        "description": "Une entrée par article acheté : libellé de caisse, "
-                       "quantité, prix unitaire et prix total",
+        "description": "One entry per item bought: label as printed, "
+                       "quantity, unit price and total price",
         "required": False,
         "selector": {"object": None},
     },

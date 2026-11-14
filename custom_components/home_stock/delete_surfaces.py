@@ -22,8 +22,8 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.service import async_register_admin_service
 
+from .admin_only import register_command, register_service
 from . import deletion
 from .const import DOMAIN
 from .messages import french_error
@@ -65,7 +65,6 @@ def _websocket_command(command: str, key: str, rule):
         vol.Required("type"): command,
         **(DELETE_PRODUCT_FIELDS if key == "product_id" else DELETE_ARTICLE_FIELDS),
     })
-    @websocket_api.require_admin
     @websocket_api.async_response
     async def handler(hass, connection, msg) -> None:
         runtime = _runtime(hass)
@@ -105,11 +104,11 @@ def async_register_delete_surfaces(hass: HomeAssistant) -> None:
     for command, service, key, rule in _TARGETS:
         if hass.services.has_service(DOMAIN, service):
             continue
-        websocket_api.async_register_command(
-            hass, _websocket_command(command, key, rule))
+        # Admin-only through the table in admin_only.py.
+        register_command(hass, _websocket_command(command, key, rule))
         schema = DELETE_PRODUCT_FIELDS if key == "product_id" else DELETE_ARTICLE_FIELDS
-        async_register_admin_service(
-            hass, DOMAIN, service, partial(_service, hass, key, rule),
+        register_service(
+            hass, service, partial(_service, hass, key, rule),
             schema=vol.Schema(schema),
             # It acts AND answers what it did: OPTIONAL, per the developer
             # docs (ONLY is for services that perform no action).

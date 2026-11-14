@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from .grocy_copy import open_grocy_copy
 from .const import GROCY_MEAL_UID_TEMPLATE, GROCY_RECIPE_REF_PREFIX
 from .grocy import html as gh
 from .grocy import pictures as gp
@@ -92,9 +93,7 @@ class RecipeReport:
 
 
 def _open_grocy(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return open_grocy_copy(path)
 
 
 def _now() -> str:

@@ -631,9 +631,11 @@ class StockManager:
 
         `today` and `now` serve two different clocks: `today` is a civil date
         and only bounds the expiration window, while `now` is an instant and
-        only bounds the food day. Neither substitutes for the other.
+        only bounds the food day. Neither substitutes for the other. Without
+        `today`, the civil date is the one in `tz` — the household's — never
+        the UTC date, which is already tomorrow every evening west of UTC.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today) if today else datetime.now(tz).date()
         limit = reference + timedelta(days=expiration_alert_days)
         conn = self.db.read()
         rows = repo.stock_rows(conn)
@@ -756,7 +758,7 @@ class StockManager:
         }
 
     def claim_expiry_announcements(
-        self, *, expiration_alert_days: int, today: str | None = None,
+        self, *, expiration_alert_days: int, today: str,
     ) -> list[tuple[str, list[dict[str, Any]]]]:
         """What has just crossed a threshold, marked as announced on the way out.
 
@@ -767,8 +769,12 @@ class StockManager:
         A stage never goes backwards. A batch already announced as `expired`
         stays there even if the clock moves back — a corrected timezone or a
         restored backup must not re-announce the whole fridge.
+
+        `today` is the household's civil date, given by the caller: there is
+        no default, because a UTC date announces a batch expired on its last
+        good day, and an announced stage never goes back.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today)
         limit = (reference + timedelta(days=expiration_alert_days)).isoformat()
         claimed: dict[str, list[dict[str, Any]]] = {stage: [] for stage in EXPIRY_STAGES}
         with self.db.write() as conn:
@@ -966,7 +972,14 @@ class StockManager:
             # Adapted or not, in one shot. There is no half-adapted recipe:
             # `adapt` returns a whole AdaptedRecipe or None, so the fields
             # below either all come from the agent or all come from the source.
-            if adapted is None:
+            # A failed adaptation (None) of a recipe that WAS adapted keeps
+            # every adapted field and every step: only provenance and
+            # ingredients refresh below.
+            keep_adaptation = (adapted is None and not created
+                               and existing["adapted_at"] is not None)
+            if keep_adaptation:
+                fields = {}
+            elif adapted is None:
                 fields = {"name": recipe.name, "language": "en",
                           "needs_review": 1, "adapted_at": None}
             else:
@@ -974,7 +987,8 @@ class StockManager:
                     "name": adapted.name, "summary": adapted.summary,
                     "total_minutes": adapted.total_minutes,
                     "utensils": adapted.utensils, "servings": adapted.servings,
-                    "language": "fr", "needs_review": 0, "adapted_at": moment,
+                    "language": adapted.language, "needs_review": 0,
+                    "adapted_at": moment,
                 }
             fields |= {"image_url": recipe.image_url,
                        "source_url": recipe.source_url}
@@ -986,6 +1000,9 @@ class StockManager:
             else:
                 recipe_id = existing["id"]
                 repo.update_recipe_fields(conn, recipe_id, fields)
+            if not created and adapted is not None:
+                # Only a new adaptation replaces the pages: without one there
+                # is nothing to put in their place.
                 conn.execute(
                     "DELETE FROM recipe_instruction WHERE step_id IN"
                     " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
@@ -1676,15 +1693,16 @@ class StockManager:
                 raise ValueError(f"unknown equipment {equipment_id}")
             repo.update_equipment_fields(conn, equipment_id, checked)
 
-    def list_equipment(self, *, today: date | None = None) -> list[dict[str, Any]]:
+    def list_equipment(self, *, today: date) -> list[dict[str, Any]]:
         """Every sheet, with the warranty end and the days left — signed.
 
         An EXPIRED warranty keeps its date here, with a negative `days_left`:
         the panel owes three distinct sentences (ahead, over, never recorded)
         and cannot write the second one from a row that hides the date. Only
-        `warranties()` narrows to what is still ahead.
+        `warranties()` narrows to what is still ahead. `today` is the
+        household's civil date, given by the caller.
         """
-        day = today or date.today()
+        day = today
         conn = self.db.read()
         ends = {row["id"]: row["warranty_ends_on"] for row in repo.warranty_rows(conn)}
         rows = []
@@ -2522,8 +2540,10 @@ def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None
     # Only an explicit human confirmation teaches an alias. An `auto` match
     # never does: a wrong guess made permanent would contaminate every later
     # recipe (Grocy, April 2026 — 35 duplicates from re-matching by name).
-    if create_alias and state == "confirmed" and product_id is not None:
-        repo.upsert_alias(conn, normalised=normalise(line["raw_text"]),
+    # A text with no letter or digit has no key to teach (repo refuses it).
+    key = normalise(line["raw_text"])
+    if create_alias and state == "confirmed" and product_id is not None and key:
+        repo.upsert_alias(conn, normalised=key,
                           product_id=product_id, created_at=moment)
     return dict(conn.execute(
         "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone())

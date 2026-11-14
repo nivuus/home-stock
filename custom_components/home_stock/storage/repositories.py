@@ -1297,8 +1297,10 @@ def list_recipes(conn, *, search: str | None = None,
     ))
     if only_reviewable:
         rows = [row for row in rows if row["needs_review"]]
-    if search:
-        needle = normalise(search)
+    # A term with no letter or digit in any script folds to "": that is "no
+    # filter", said here, rather than an empty needle matching every name.
+    needle = normalise(search) if search else ""
+    if needle:
         rows = [row for row in rows if needle in normalise(row["name"])]
     return rows
 
@@ -1435,7 +1437,12 @@ def list_measures(conn) -> list[dict[str, Any]]:
 
 def find_alias(conn, normalised: str) -> dict[str, Any] | None:
     """The alias a human taught, unless its product has since been hidden:
-    a hidden product is out of the matching, taught or not."""
+    a hidden product is out of the matching, taught or not.
+
+    An empty key is never an alias: a text with no letter in it would
+    otherwise match every other such text."""
+    if not normalised:
+        return None
     return _row(conn.execute(
         "SELECT ia.* FROM ingredient_alias ia"
         " JOIN product p ON p.id = ia.product_id"
@@ -1450,6 +1457,8 @@ def upsert_alias(conn, *, normalised: str, product_id: int, created_at: str) -> 
     towards a DIFFERENT product must move it: the last human decision is the
     one that counts, otherwise a correction would be silently ignored.
     """
+    if not normalised:
+        raise ValueError("an alias needs a non-empty normalised key")
     conn.execute(
         "INSERT INTO ingredient_alias (normalised, product_id, created_at)"
         " VALUES (?, ?, ?)"

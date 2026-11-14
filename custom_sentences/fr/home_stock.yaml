@@ -53,7 +53,7 @@ intents:
           - "(ajoute|note) (du|de la|des|de l'|d'|un|une) {product} (à|sur) la liste"
       - sentences:
           - "note (du|de la|des|de l'|d'|un|une) {product}"
-          - "il (me )?faut (du|de la|des|de l'|d'|un|une) {product}"
+          - "il [me ]faut (du|de la|des|de l'|d'|un|une) {product}"
 
   # 5 — « Qu'est-ce qui périme ? »
   HomeStockQueryExpirations:

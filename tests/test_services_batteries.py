@@ -4,12 +4,16 @@
 naissent à la tâche 13, et un service ne se teste pas deux tâches avant son
 implémentation. Il est enregistré et testé là-bas.
 """
+from datetime import date
+
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.home_stock.const import DOMAIN
+
+_DAY = date(2026, 8, 21)  # list_equipment takes the household's civil date
 
 
 def _declare(integration, **kwargs):
@@ -161,7 +165,7 @@ async def test_import_grocy_equipment_is_a_dry_run_by_default(hass, setup_entry,
     from pathlib import Path
 
     fixture = Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql"
-    copie = tmp_path / "grocy.db"
+    copie = Path(hass.config.path("grocy.db"))  # under config/, as the validator requires
     conn = sqlite3.connect(str(copie))
     conn.executescript(fixture.read_text(encoding="utf-8"))
     conn.commit()
@@ -169,7 +173,7 @@ async def test_import_grocy_equipment_is_a_dry_run_by_default(hass, setup_entry,
 
     integration = await setup_entry()
     reponse = await hass.services.async_call(
-        DOMAIN, "import_grocy_equipment", {"database_path": str(copie)},
+        DOMAIN, "import_grocy_equipment", {"database_path": "grocy.db"},
         blocking=True, return_response=True)
     assert reponse["applied"] is False
     assert reponse["equipment"] == 34
@@ -181,7 +185,7 @@ async def test_import_grocy_equipment_writes_when_asked(hass, setup_entry, tmp_p
     from pathlib import Path
 
     fixture = Path(__file__).parent / "fixtures" / "grocy" / "equipment.sql"
-    copie = tmp_path / "grocy.db"
+    copie = Path(hass.config.path("grocy.db"))  # under config/, as the validator requires
     conn = sqlite3.connect(str(copie))
     conn.executescript(fixture.read_text(encoding="utf-8"))
     conn.commit()
@@ -190,7 +194,7 @@ async def test_import_grocy_equipment_writes_when_asked(hass, setup_entry, tmp_p
     integration = await setup_entry()
     reponse = await hass.services.async_call(
         DOMAIN, "import_grocy_equipment",
-        {"database_path": str(copie), "apply": True},
+        {"database_path": "grocy.db", "apply": True},
         blocking=True, return_response=True)
     assert reponse["applied"] is True
-    assert len(integration.runtime_data.manager.list_equipment()) == 34
+    assert len(integration.runtime_data.manager.list_equipment(today=_DAY)) == 34

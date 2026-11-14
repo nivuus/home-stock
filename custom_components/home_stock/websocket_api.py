@@ -528,7 +528,7 @@ async def lookup(hass, connection, msg) -> None:
             "off": None, "off_raw": None, "off_source": None,
             "candidates": [], "preselected_product_id": None,
             "price": price, "conversion_offer": _conversion_offer(product, known),
-            "throttled": False, "timed_out": False,
+            "throttled": False, "timed_out": False, "unreachable": False,
         })
         return
 
@@ -540,6 +540,7 @@ async def lookup(hass, connection, msg) -> None:
             "candidates": [], "preselected_product_id": None,
             "price": None, "conversion_offer": None,
             "throttled": result.throttled, "timed_out": result.timed_out,
+            "unreachable": result.unreachable,
         })
         return
 
@@ -558,6 +559,7 @@ async def lookup(hass, connection, msg) -> None:
         "preselected_product_id": chosen.product_id if chosen else None,
         "price": await _open_prices_only(hass, runtime, code, mapped),
         "conversion_offer": None, "throttled": False, "timed_out": False,
+        "unreachable": False,
     })
 
 

@@ -55,24 +55,25 @@ def _answer(**overrides):
 
 # --- l'invite ---------------------------------------------------------------
 
-def test_the_prompt_is_french_and_asks_for_json_and_nothing_else():
-    prompt = build_prompt(SOURCE)
-    assert "Réponds UNIQUEMENT par un objet JSON" in prompt
-    assert "sans bloc de code" in prompt
-    assert "Traduis en français" in prompt
+def test_the_prompt_asks_for_json_in_the_target_language_and_nothing_else():
+    prompt = build_prompt(SOURCE, language="fr")
+    assert "Answer ONLY with a JSON object" in prompt
+    assert "no code block" in prompt
+    assert "BCP 47 tag: fr" in prompt
 
 
 def test_the_prompt_carries_every_ingredient_position():
-    prompt = build_prompt(_source(ingredients=5))
+    prompt = build_prompt(_source(ingredients=5), language="fr")
     for position in range(1, 6):
         assert f"{position}. {position} cup ingrédient {position}" in prompt
-    assert "Rends exactement 5 ingrédients" in prompt
+    assert "Return exactly 5 ingredients" in prompt
 
 
 def test_a_very_long_instruction_block_is_truncated_in_the_prompt():
     """On tronque la SOURCE, jamais la réponse : tronquer ce qu'on envoie se
     rattrape, tronquer ce qui revient perdrait des étapes en silence."""
-    prompt = build_prompt(_source(instructions="x" * (MAX_PROMPT_INSTRUCTIONS + 500)))
+    prompt = build_prompt(_source(instructions="x" * (MAX_PROMPT_INSTRUCTIONS + 500)),
+                          language="fr")
     assert "x" * MAX_PROMPT_INSTRUCTIONS in prompt
     assert "x" * (MAX_PROMPT_INSTRUCTIONS + 1) not in prompt
 
@@ -121,7 +122,7 @@ def test_an_unreadable_answer_gives_nothing(text):
 # --- la validation ----------------------------------------------------------
 
 def test_a_valid_answer_maps_cleanly():
-    adapted = validate_adaptation(_answer(), source=SOURCE)
+    adapted = validate_adaptation(_answer(), source=SOURCE, language="fr")
     assert isinstance(adapted, AdaptedRecipe)
     assert adapted.name == "Gratin de poulet teriyaki"
     assert adapted.servings == 4
@@ -159,18 +160,19 @@ def test_any_anomaly_fails_the_whole_adaptation(overrides, why):
     """Il n'y a pas d'adaptation partielle. Un titre qui passe au-dessus de
     puces qui ne passent pas laisserait un intitulé français sur des étapes
     anglaises — indiscernable, pour qui cuisine, d'une vraie traduction."""
-    assert validate_adaptation(_answer(**overrides), source=SOURCE) is None, why
+    assert validate_adaptation(_answer(**overrides), source=SOURCE,
+                               language="fr") is None, why
 
 
 @pytest.mark.parametrize("payload", [None, [], "texte", 42])
 def test_a_payload_that_is_not_an_object_fails(payload):
-    assert validate_adaptation(payload, source=SOURCE) is None
+    assert validate_adaptation(payload, source=SOURCE, language="fr") is None
 
 
 def test_fewer_ingredients_than_the_source_is_tolerated():
     """L'agent peut regrouper « sel et poivre » ; il ne peut pas en inventer."""
     adapted = validate_adaptation(_answer(ingredients=[{"name": "sauce soja"}]),
-                                  source=SOURCE)
+                                  source=SOURCE, language="fr")
     assert adapted is not None
     assert adapted.ingredient_names == ("sauce soja",)
 
@@ -195,6 +197,7 @@ class _Service:
 class _Hass:
     def __init__(self, outcome):
         self.services = _Service(outcome)
+        self.config = type("Config", (), {"language": "fr"})()
 
 
 def _speech(text):
@@ -216,7 +219,7 @@ async def test_a_configured_agent_is_asked_through_the_service():
     [call] = hass.services.calls
     assert (call["domain"], call["service"]) == ("conversation", "process")
     assert call["data"]["agent_id"] == "conversation.bleuenn"
-    assert "Réponds UNIQUEMENT" in call["data"]["text"]
+    assert "Answer ONLY" in call["data"]["text"]
 
 
 @pytest.mark.parametrize("outcome, why", [

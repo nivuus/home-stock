@@ -22,6 +22,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
+from .grocy_copy import open_grocy_copy
 from .const import DEFAULT_KEEP_PERCENT, DEFAULT_LOW_PERCENT, MUTE_SUMMARY_PREFIX
 from .storage import repositories as repo
 from .storage.database import Database
@@ -213,9 +214,7 @@ _REMOVED_RE = re.compile(r"appareil retir", re.IGNORECASE)
 
 def _open_grocy(path: str) -> sqlite3.Connection:
     """Read-only, always. Grocy is never written to, not once."""
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return open_grocy_copy(path)
 
 
 def _spare_family(name: str) -> str | None:
