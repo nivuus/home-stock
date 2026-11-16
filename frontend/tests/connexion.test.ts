@@ -12,6 +12,7 @@ function hassFactice(): Hass & {
       subscribeMessage: vi.fn().mockResolvedValue(() => {}),
     },
     language: 'fr',
+    config: { currency: 'EUR' },
     callService: vi.fn().mockResolvedValue(undefined),
     fetchWithAuth: vi.fn<Hass['fetchWithAuth']>(),
   };

@@ -56,6 +56,7 @@ function hassFactice(surAbonnement: () => Promise<() => void>): Hass {
       subscribeMessage: vi.fn().mockImplementation(surAbonnement),
     },
     language: 'fr',
+    config: { currency: 'EUR' },
   } as unknown as Hass;
 }
 
@@ -71,6 +72,7 @@ function hassAvecReponses(reponses: (msg: any) => Promise<unknown>): Hass & {
       subscribeMessage: vi.fn().mockResolvedValue(() => {}),
     },
     language: 'fr',
+    config: { currency: 'EUR' },
   } as unknown as Hass & { connection: { sendMessagePromise: ReturnType<typeof vi.fn> } };
 }
 
@@ -431,6 +433,7 @@ describe('panneau : parcours complet, du scan au lot rangé', () => {
         }),
       },
       language: 'fr',
+      config: { currency: 'EUR' },
     } as unknown as Hass & { connection: { sendMessagePromise: ReturnType<typeof vi.fn> } };
 
     const element = document.createElement('home-stock-panel') as HTMLElement & {
@@ -1034,6 +1037,7 @@ describe('panneau : le parcours complet d’une session de courses', () => {
         }),
       },
       language: 'fr',
+      config: { currency: 'EUR' },
     } as unknown as Hass;
 
     const element = document.createElement('home-stock-panel') as HTMLElement & {

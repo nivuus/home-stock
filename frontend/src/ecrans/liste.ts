@@ -17,6 +17,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
 /** Une revendication : pourquoi cette ligne est là. */
 export type Revendication = {
@@ -59,9 +60,6 @@ export type DonneesListe = {
   estimate: Estimation;
 };
 
-function formaterEuros(valeur: number): string {
-  return `${valeur.toFixed(2).replace('.', ',')} €`;
-}
 
 /** Groupe des lignes DÉJÀ triées, par un simple passage linéaire — ne jamais
  *  trier ici, seulement grouper ce qui est déjà contigu. */
@@ -90,6 +88,9 @@ export function quantiteAffichee(ligne: LigneListe): string {
 export class EcranListe extends LitElement {
   @property({ attribute: false }) donnees: DonneesListe | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
    *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
    *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
@@ -209,7 +210,7 @@ export class EcranListe extends LitElement {
       <section class="bandeau">
         <p class="magasin">${donnees.store_name ?? 'Ordre par défaut'}</p>
         <p class="compte">${
-          `${ouvertes.length} ligne${ouvertes.length > 1 ? 's' : ''} — ≈ ${formaterEuros(estimation.amount)}`
+          `${ouvertes.length} ligne${ouvertes.length > 1 ? 's' : ''} — ≈ ${formatMoney(estimation.amount, this.money!)}`
         }</p>
         <p class="confiance">${
           `estimation sur ${estimation.priced} ligne${estimation.priced > 1 ? 's' : ''} sur ${estimation.total}`

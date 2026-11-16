@@ -46,6 +46,7 @@ function monter(props: {
     televerser?: unknown; enAttente: number; large: boolean;
     updateComplete: Promise<boolean>;
   };
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.ticket = props.ticket ?? null;
   element.agentConfigure = props.agentConfigure ?? true;
   if (props.file) element.file = props.file;
@@ -167,7 +168,7 @@ describe('<home-stock-ticket>', () => {
     const element = monter({ ticket: ticket({ total: 20, lines_total: 2.10,
                                               total_gap: 17.9 }) });
     await element.updateComplete;
-    expect(element.shadowRoot!.querySelector('.ecart')!.textContent).toContain('17,90 €');
+    expect(element.shadowRoot!.querySelector('.ecart')!.textContent).toContain('17,90\u00a0€');
   });
 
   it('n’affiche aucun écart quand la somme tombe juste', async () => {

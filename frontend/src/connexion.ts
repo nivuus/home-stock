@@ -4,12 +4,18 @@
  *  l'authentification sont déjà les siennes. On ne lit aucun jeton, on n'ouvre
  *  aucune seconde session.
  */
+import type { MoneyFormat } from './money';
+
 export type Hass = {
   connection: {
     sendMessagePromise<T>(message: object): Promise<T>;
     subscribeMessage<T>(rappel: (event: T) => void, message: object): Promise<() => void>;
   };
   language: string;
+  /** The profile's locale (Home Assistant frontend `hass.locale`). */
+  locale?: { language: string };
+  /** `currency` is the ISO 4217 code from General settings. */
+  config: { currency: string };
   /** L'appel de service de Home Assistant, tel que le composant custom le
    *  reçoit déjà dans `hass` — aucune requête REST, aucun jeton à part. Ne
    *  sert aujourd'hui qu'à `home_stock.resync_off` (écran Réglages) : ce
@@ -35,6 +41,20 @@ export type Hass = {
 
 export class Connexion {
   constructor(private hass: Hass) {}
+
+  private moneyFormat?: MoneyFormat;
+
+  /** How to write an amount for this person: see `money.ts`. The same object
+   *  while locale and currency stay the same, so a screen bound to it is not
+   *  re-rendered on every `hass` update. */
+  money(): MoneyFormat {
+    const locale = this.hass.locale?.language ?? this.hass.language;
+    const currency = this.hass.config.currency;
+    if (this.moneyFormat?.locale !== locale || this.moneyFormat.currency !== currency) {
+      this.moneyFormat = { locale, currency };
+    }
+    return this.moneyFormat;
+  }
 
   appeler<T>(type: string, charge: object = {}): Promise<T> {
     return this.hass.connection.sendMessagePromise<T>({ type, ...charge });

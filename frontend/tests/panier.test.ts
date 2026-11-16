@@ -69,6 +69,7 @@ function monter(props: { donnees?: DonneesSession | null; connexion?: Connexion;
     donnees: DonneesSession | null; connexion?: Connexion; file?: unknown; enAttente: number;
     updateComplete: Promise<boolean>;
   };
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.donnees = props.donnees ?? null;
   if (props.connexion) element.connexion = props.connexion;
   if (props.file) element.file = props.file;
@@ -357,7 +358,7 @@ describe('<home-stock-panier> : ce que le lot 4 ajoute', () => {
     const element = monter({ donnees: donneesLot4([ligne({ id: 1 })]) });
     await element.updateComplete;
     const total = element.shadowRoot!.querySelector('.repartition')!.textContent!;
-    expect(total).toContain('12,30 €');
+    expect(total).toContain('12,30\u00a0€');
     expect(total).toContain('estimé');
   });
 

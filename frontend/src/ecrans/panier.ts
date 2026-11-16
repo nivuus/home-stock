@@ -16,6 +16,7 @@ import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { prixBaseDepuisSaisie, prixPaquetAffiche, type UniteBase } from './fiche';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
 /** Une ligne de panier, exactement comme `home_stock/session/current` la
  *  rend (voir `_LINE_SELECT_SQL` côté serveur) — aucun champ n'est renommé
@@ -87,9 +88,6 @@ export type DonneesSession = {
   stores: Magasin[];
 };
 
-function formaterEuros(valeur: number): string {
-  return `${valeur.toFixed(2).replace('.', ',')} €`;
-}
 
 /** Le pas d'incrément d'une ligne : un paquet. À la pièce, un paquet est une
  *  unité. Au poids, un paquet fait `net_quantity` — quand ce poids n'est pas
@@ -120,6 +118,9 @@ export function grouperParRayon(lignes: LigneSession[]): { rayon: string; lignes
 export class EcranPanier extends LitElement {
   @property({ attribute: false }) donnees: DonneesSession | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   /** La file hors-ligne : la raison d'être de cet écran est le rayon d'un
    *  magasin, l'endroit où le réseau lâche le plus souvent. Chaque écriture
    *  y passe — il n'existe plus de chemin direct par `connexion` : un
@@ -310,7 +311,7 @@ export class EcranPanier extends LitElement {
       : null;
     return html`
       <p class="repartition">${
-        `dont ${formaterEuros(totaux.estimated)} estimé`
+        `dont ${formatMoney(totaux.estimated, this.money!)} estimé`
         + (sansPrix > 0 ? `, ${sansPrix} ligne${sansPrix > 1 ? 's' : ''} sans prix` : '')
       }</p>
       ${progression ? html`<p class="progression">${progression}</p>` : nothing}
@@ -325,7 +326,7 @@ export class EcranPanier extends LitElement {
     return html`
       <section class="entete">
         <p class="magasin">${donnees.session.store ?? 'Sans enseigne'}</p>
-        <p class="total">${formaterEuros(donnees.totals.total)}</p>
+        <p class="total">${formatMoney(donnees.totals.total, this.money!)}</p>
       </section>
 
       ${this.rendreRepartition(donnees.totals)}

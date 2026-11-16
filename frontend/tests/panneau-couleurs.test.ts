@@ -25,6 +25,7 @@ function hassFactice(themes: object, selectedTheme: unknown = null): Hass {
       subscribeMessage: vi.fn().mockResolvedValue(() => {}),
     },
     language: 'fr',
+    config: { currency: 'EUR' },
     themes,
     selectedTheme,
   } as unknown as Hass;

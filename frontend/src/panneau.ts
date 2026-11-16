@@ -723,7 +723,7 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'panier' && this.session) {
       return html`
-        <home-stock-panier .donnees=${this.session} .connexion=${this.connexion}
+        <home-stock-panier .money=${this.connexion?.money()} .donnees=${this.session} .connexion=${this.connexion}
           .file=${this.file} .enAttente=${this.enAttente} @file-changee=${this.surFileChangee}>
         </home-stock-panier>`;
     }
@@ -737,7 +737,7 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'session') {
       return html`
-        <home-stock-session .donnees=${this.session} .connexion=${this.connexion}
+        <home-stock-session .money=${this.connexion?.money()} .donnees=${this.session} .connexion=${this.connexion}
           .file=${this.file} .enAttente=${this.enAttente}
           @session-changee=${this.surSessionChangee} @file-changee=${this.surFileChangee}
           >
@@ -763,7 +763,7 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'journal') {
       return html`
-        <home-stock-journal .connexion=${this.connexion} .file=${this.file}
+        <home-stock-journal .money=${this.connexion?.money()} .connexion=${this.connexion} .file=${this.file}
           .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-journal>`;
     }
@@ -807,20 +807,20 @@ export class PanneauGardeManger extends LitElement {
     }
     if (this.ecran === 'liste') {
       return html`
-        <home-stock-liste .connexion=${this.connexion} .file=${this.file}
+        <home-stock-liste .money=${this.connexion?.money()} .connexion=${this.connexion} .file=${this.file}
           .enAttente=${this.enAttente} .large=${this.large} @file-changee=${this.surFileChangee}>
         </home-stock-liste>`;
     }
     if (this.ecran === 'ticket') {
       return html`
-        <home-stock-ticket .connexion=${this.connexion} .file=${this.file}
+        <home-stock-ticket .money=${this.connexion?.money()} .connexion=${this.connexion} .file=${this.file}
           .enAttente=${this.enAttente} .ticket=${this.ticketOuvert}
           .agentConfigure=${this.agentTicketConfigure} .large=${this.large}
           @file-changee=${this.surFileChangee}>
         </home-stock-ticket>`;
     }
     return html`
-      <home-stock-scanner .session=${this.session?.session ? { store: this.session.session.store } : null}
+      <home-stock-scanner .money=${this.connexion?.money()} .session=${this.session?.session ? { store: this.session.session.store } : null}
         .derniereFiche=${this.derniereFiche} .enAttente=${this.enAttente} @code-lu=${this.surCodeLu}>
       </home-stock-scanner>`;
   }

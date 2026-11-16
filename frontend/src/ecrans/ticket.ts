@@ -17,6 +17,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
 export type CandidatLigne = { line_id: number; label: string; score: number };
 
@@ -77,9 +78,6 @@ const ETATS: Record<DonneesTicket['state'], string> = {
   discarded: 'Ticket abandonné',
 };
 
-function formaterEuros(valeur: number): string {
-  return `${valeur.toFixed(2).replace('.', ',')} €`;
-}
 
 /** Traduit un refus du téléversement de Home Assistant. Les deux cas qui
  *  arrivent réellement : le compte n'est pas administrateur (403), et le
@@ -114,6 +112,9 @@ export const DOSSIER_TICKETS = 'media-source://media_source/local/home_stock/rec
 export class EcranTicket extends LitElement {
   @property({ attribute: false }) ticket: DonneesTicket | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
    *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
    *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
@@ -209,7 +210,7 @@ export class EcranTicket extends LitElement {
       <article class="ligne-ticket">
         <div class="cote-ticket">
           <p class="libelle">${ligne.label}</p>
-          <p class="prix">${ligne.total_price === null ? '—' : formaterEuros(ligne.total_price)}</p>
+          <p class="prix">${ligne.total_price === null ? '—' : formatMoney(ligne.total_price, this.money!)}</p>
         </div>
         <div class="cote-chariot">
           ${chariot ? html`
@@ -267,7 +268,7 @@ export class EcranTicket extends LitElement {
       <section class="entete">
         <p class="etat">${ETATS[ticket.state]}</p>
         ${ticket.total !== null ? html`
-          <p class="total">${formaterEuros(ticket.total)}</p>
+          <p class="total">${formatMoney(ticket.total, this.money!)}</p>
         ` : nothing}
       </section>
 
@@ -275,7 +276,7 @@ export class EcranTicket extends LitElement {
 
       ${ticket.total_gap !== null ? html`
         <p class="ecart">
-          ${`La somme des lignes s’écarte du total de ${formaterEuros(Math.abs(ticket.total_gap))}.`}
+          ${`La somme des lignes s’écarte du total de ${formatMoney(Math.abs(ticket.total_gap), this.money!)}.`}
         </p>
       ` : nothing}
 
