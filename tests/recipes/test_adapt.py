@@ -64,8 +64,9 @@ def test_the_prompt_asks_for_json_in_the_target_language_and_nothing_else():
 
 def test_the_prompt_carries_every_ingredient_position():
     prompt = build_prompt(_source(ingredients=5), language="fr")
-    for position in range(1, 6):
-        assert f"{position}. {position} cup ingrédient {position}" in prompt
+    record = json.loads(prompt.rsplit("\n", 2)[-2])
+    assert [line["position"] for line in record["ingredients"]] == [1, 2, 3, 4, 5]
+    assert record["ingredients"][2]["text"] == "3 cup ingrédient 3"
     assert "Return exactly 5 ingredients" in prompt
 
 
@@ -187,7 +188,7 @@ class _Service:
         self.calls: list[dict] = []
 
     async def async_call(self, domain, service, data, blocking=False,
-                         return_response=False):
+                         return_response=False, context=None):
         self.calls.append({"domain": domain, "service": service, "data": data})
         if isinstance(self.outcome, BaseException):
             raise self.outcome

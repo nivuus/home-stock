@@ -816,7 +816,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                 return {"imported": False,
                         "message": "Aucune recette trouvée à la source."}
             source_ref = hits[0].source_ref
-        result = await async_import_recipe(hass, runtime, source_ref)
+        result = await async_import_recipe(hass, runtime, source_ref, context=call.context)
         if result is None:
             return {"imported": False,
                     "message": "Cette recette est introuvable à la source."}
@@ -836,7 +836,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         if not recipe["source_ref"]:
             raise HomeAssistantError(
                 "Cette recette n'a pas été importée : il n'y a rien à réadapter.")
-        await async_import_recipe(hass, runtime, recipe["source_ref"])
+        await async_import_recipe(hass, runtime, recipe["source_ref"], context=call.context)
         await runtime.coordinator.async_request_refresh()
 
     async def query_meals(call: ServiceCall) -> ServiceResponse:

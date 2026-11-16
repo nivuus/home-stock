@@ -37,7 +37,7 @@ class _Services:
         self.answer, self.calls = answer, []
 
     async def async_call(self, domain, service, data, blocking=False,
-                         return_response=False):
+                         return_response=False, context=None):
         self.calls.append(data)
         return {"response": {"speech": {"plain": {"speech": json.dumps(self.answer)}}}}
 
