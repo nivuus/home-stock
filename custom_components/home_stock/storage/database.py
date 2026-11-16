@@ -97,3 +97,22 @@ class Database:
                 raise
             else:
                 conn.commit()
+
+
+@contextmanager
+def savepoint(conn: sqlite3.Connection, name: str) -> Iterator[None]:
+    """Run a part of an open transaction that can be undone on its own.
+
+    For work that is secondary to the transaction around it: if it fails,
+    everything it wrote is rolled back and the exception propagates, so the
+    caller decides whether the outer transaction goes on. `name` must be a
+    fixed identifier, never a value from outside.
+    """
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except BaseException:
+        conn.execute(f"ROLLBACK TO {name}")
+        conn.execute(f"RELEASE {name}")
+        raise
+    conn.execute(f"RELEASE {name}")
