@@ -10,6 +10,12 @@ blueprint:
     L'entité `event.home_stock_expiration` reste disponible pour qui préfère
     écrire une automation qui réagit à l'instant même.
 
+    Le texte remis à l'agent n'est pas une phrase : c'est le nom d'un
+    événement suivi de ses données en JSON. Aucune langue n'y est imposée ;
+    `language` n'est pas passé, donc Home Assistant transmet à l'agent la
+    langue de l'instance, et c'est l'agent qui formule l'annonce dans cette
+    langue.
+
     À importer une fois ; ce fichier n'est jamais installé par l'intégration.
   domain: automation
   input:
@@ -47,9 +53,14 @@ actions:
   - action: conversation.process
     data:
       agent_id: !input agent
+      # An event name followed by JSON data, never a sentence: the agent
+      # phrases it in the language Home Assistant hands it (the instance's,
+      # since `language` is not set). The leading name also keeps Home
+      # Assistant from parsing the rendered text back into a dict.
       text: >-
-        {% set lots = state_attr(nom_capteur, 'batches') or [] %}
-        Dans le garde-manger, {{ lots | count }}
-        {{ 'article approche de sa date limite' if lots | count == 1
-           else 'articles approchent de leur date limite' }} :
-        {{ lots | map(attribute='product_name') | join(', ') }}.
+        {%- set ns = namespace(items=[]) %}
+        {%- for lot in state_attr(nom_capteur, 'batches') or [] %}
+        {%- set ns.items = ns.items + [{'product': lot.product_name,
+                                        'best_before': lot.best_before}] %}
+        {%- endfor -%}
+        home_stock.expiring_soon {{ {'items': ns.items} | to_json }}

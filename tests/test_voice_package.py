@@ -449,21 +449,6 @@ def test_every_intent_answers_something_when_there_is_nothing():
 
 BLUEPRINT = "blueprints/automation/home_stock/courses_bleuenn.yaml"
 
-# Une liste de courses telle que `sensor.home_stock_shopping_list` la publie :
-# quatre lignes ouvertes sur trois rayons, et une déjà cochée.
-LISTE_FACTICE = [
-    {"id": 1, "name": "Lait", "quantity": 2000.0, "base_unit": "ml",
-     "aisle": "Frais", "checked": False},
-    {"id": 2, "name": "Beurre", "quantity": None, "base_unit": "g",
-     "aisle": "Frais", "checked": False},
-    {"id": 3, "name": "Pain", "quantity": None, "base_unit": None,
-     "aisle": "Boulangerie", "checked": False},
-    {"id": 4, "name": "Piles AA", "quantity": None, "base_unit": None,
-     "aisle": None, "checked": False},
-    {"id": 5, "name": "Café", "quantity": None, "base_unit": "g",
-     "aisle": "Épicerie", "checked": True},
-]
-
 
 def _blueprint_substitue():
     from homeassistant.util import yaml as yaml_util
@@ -508,55 +493,8 @@ def test_the_shopping_blueprint_only_counts_unticked_lines():
     assert "checked" in substitue["actions"][0]["data"]["text"]
 
 
-def test_the_shopping_blueprint_groups_by_aisle_and_ignores_the_ticked_line(hass):
-    """Rendu pour de vrai : un attribut mal nommé passerait sinon pour une
-    annonce muette, exactement comme au lot 2bis."""
-    from homeassistant.helpers.template import Template
-
-    _, defauts, substitue = _blueprint_substitue()
-    hass.states.async_set(defauts["capteur"], "5", {"items": LISTE_FACTICE})
-    texte = substitue["actions"][0]["data"]["text"]
-    rendu = " ".join(Template(texte, hass).async_render(
-        variables=substitue["variables"], parse_result=False).split())
-
-    assert rendu.startswith("4 articles à acheter")
-    assert "2 au rayon frais" in rendu
-    assert "Café" not in rendu           # cochée : déjà dans le panier
-    assert "Lait" in rendu               # quatre lignes, sous `detail_max`
-
-
-def test_the_shopping_blueprint_stays_short_on_a_long_list(hass):
-    """« Sept articles, dont trois au rayon frais » se retient ; la liste
-    entière, non. Au-delà de `detail_max`, le détail tombe."""
-    from homeassistant.helpers.template import Template
-
-    _, defauts, substitue = _blueprint_substitue()
-    longue = [{"id": i, "name": f"Produit {i}", "quantity": None,
-               "base_unit": None, "aisle": "Épicerie", "checked": False}
-              for i in range(1, 13)]
-    hass.states.async_set(defauts["capteur"], "12", {"items": longue})
-    rendu = " ".join(Template(substitue["actions"][0]["data"]["text"], hass)
-                     .async_render(variables=substitue["variables"],
-                                   parse_result=False).split())
-
-    assert rendu.startswith("12 articles à acheter")
-    assert "12 au rayon épicerie" in rendu
-    assert "Produit 7" not in rendu
-
-
-def test_the_shopping_blueprint_says_something_on_an_empty_list(hass):
-    """Soit une condition qui empêche l'annonce, soit une phrase. Jamais une
-    annonce vide — c'est la règle de rédaction du § 9.2, et elle vaut aussi
-    pour le sens sortant. Ici les deux : la condition arrête le cas « aucune
-    ligne », et le template couvre celui où toutes sont cochées."""
-    from homeassistant.helpers.template import Template
-
-    _, defauts, substitue = _blueprint_substitue()
+def test_the_shopping_blueprint_never_announces_an_empty_list():
+    """No line at all: the condition stops the announcement. The rendered
+    payloads are checked in tests/test_blueprints_language.py."""
+    _, _, substitue = _blueprint_substitue()
     assert substitue["conditions"][0]["above"] == 0
-
-    hass.states.async_set(defauts["capteur"], "1", {"items": [LISTE_FACTICE[4]]})
-    rendu = " ".join(Template(substitue["actions"][0]["data"]["text"], hass)
-                     .async_render(variables=substitue["variables"],
-                                   parse_result=False).split())
-    assert rendu, "une annonce vide n'est pas une annonce"
-    assert "rien" in rendu.lower()

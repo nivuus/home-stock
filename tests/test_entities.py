@@ -656,7 +656,6 @@ async def test_the_goals_blueprint_is_a_valid_automation_nobody_installs(hass):
     from pathlib import Path
 
     from homeassistant.helpers import config_validation as cv
-    from homeassistant.helpers.template import Template
     from homeassistant.util import yaml as yaml_util
 
     path = Path(__file__).resolve().parent.parent / "blueprints" / "automation" \
@@ -683,16 +682,7 @@ async def test_the_goals_blueprint_is_a_valid_automation_nobody_installs(hass):
     assert "home_stock_salt_today" not in texte
     assert substituted["variables"]["nom_capteur"] == defaults["capteur"]
 
-    hass.states.async_set(
-        defaults["capteur"], "on",
-        {"exceeded": [{"nutrient": "salt", "scope": "day", "value": 8.4,
-                       "goal": 6.0, "ratio": 1.4},
-                      {"nutrient": "kcal", "scope": "week", "value": 2400.0,
-                       "goal": 2000.0, "ratio": 1.2}]})
-    rendu = Template(texte, hass).async_render(
-        variables=substituted["variables"], parse_result=False)
-    assert "le sel aujourd'hui" in " ".join(rendu.split())
-    assert "l'énergie en moyenne sur la semaine" in " ".join(rendu.split())
+    # Rendered for real in tests/test_blueprints_language.py.
 
 
 # --- lot 6 : la forme dont dépend la ligne de synthèse de la tablette -------

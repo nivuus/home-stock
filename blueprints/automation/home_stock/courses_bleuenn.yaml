@@ -14,6 +14,12 @@ blueprint:
     articles — au-delà, une énumération ne se retient pas et fait ignorer
     l'annonce entière.
 
+    Le texte remis à l'agent n'est pas une phrase : c'est le nom d'un
+    événement suivi de ses données en JSON. Aucune langue n'y est imposée ;
+    `language` n'est pas passé, donc Home Assistant transmet à l'agent la
+    langue de l'instance, et c'est l'agent qui formule l'annonce dans cette
+    langue.
+
     À importer une fois ; ce fichier n'est jamais installé par l'intégration.
   domain: automation
   input:
@@ -68,26 +74,27 @@ actions:
   - action: conversation.process
     data:
       agent_id: !input agent
+      # An event name followed by JSON data, never a sentence: the agent
+      # phrases it in the language Home Assistant hands it (the instance's,
+      # since `language` is not set). The leading name also keeps Home
+      # Assistant from parsing the rendered text back into a dict.
+      #
+      # No `list.append`: Home Assistant's Jinja sandbox refuses it, and the
+      # error only shows when the template RENDERS, i.e. in the evening, at
+      # announcement time. Lists grow by concatenation on a namespace.
       text: >-
-        {% set lignes = (state_attr(nom_capteur, 'items') or [])
-                        | rejectattr('checked') | list %}
-        {%- set total = lignes | count %}
-        {%- if total == 0 %}
-        Il n'y a plus rien à acheter : toute la liste est cochée.
-        {%- else %}
-        {#- Pas d'accumulateur : le bac à sable Jinja de Home Assistant refuse
-            `list.append`, et l'erreur ne sort qu'au RENDU — donc le soir, à
-            l'heure de l'annonce, sans que rien ne l'ait vue avant. #}
-        {%- set etiquettes = lignes | map(attribute='aisle')
-                             | map('default', 'Sans rayon', true) | list %}
-        {{ total }} article{{ 's' if total > 1 else '' }} à acheter
-        {%- for rayon in etiquettes | unique | list %}
-        {{- ', dont ' ~ (etiquettes | select('equalto', rayon) | list | count)
-             ~ ' au rayon ' ~ rayon | lower }}
+        {%- set lignes = (state_attr(nom_capteur, 'items') or [])
+                         | rejectattr('checked') | list %}
+        {%- set rayons = lignes | map(attribute='aisle')
+                         | map('default', '', true) | list %}
+        {%- set ns = namespace(aisles=[]) %}
+        {%- for rayon in rayons | unique | list %}
+        {%- set ns.aisles = ns.aisles + [{
+              'aisle': rayon if rayon else none,
+              'count': rayons | select('equalto', rayon) | list | count}] %}
         {%- endfor %}
-        {%- if total <= detail_max %} :
-        {% for l in lignes %}{{ l.name }}
-        {%- if not loop.last %}{{ ' et ' if loop.revindex == 2 else ', ' }}{% endif %}
-        {%- endfor %}
-        {%- endif %}.
-        {%- endif %}
+        {%- set data = {'open_items': lignes | count, 'by_aisle': ns.aisles} %}
+        {%- if lignes | count <= detail_max %}
+        {%- set data = dict(data, items=lignes | map(attribute='name') | list) %}
+        {%- endif -%}
+        home_stock.shopping_reminder {{ data | to_json }}
