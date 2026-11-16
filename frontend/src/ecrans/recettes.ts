@@ -14,6 +14,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { tokens } from '../shell/ui/tokens';
+import { matchesSearch } from '../fold';
 
 /** Une recette telle que `home_stock/recipes/list` la rend. */
 export type LigneRecette = {
@@ -36,17 +37,6 @@ export type FicheExterne = {
   category: string | null;
   area: string | null;
 };
-
-/** Replie casse, accents et ponctuation, comme le fait le serveur. Sans cela
- *  « boeuf » ne trouverait pas « Bœuf » dans la liste déjà chargée. */
-function replier(texte: string): string {
-  return texte
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/œ/g, 'oe')
-    .replace(/æ/g, 'ae')
-    .toLowerCase();
-}
 
 @customElement('home-stock-recettes')
 export class EcranRecettes extends LitElement {
@@ -75,8 +65,7 @@ export class EcranRecettes extends LitElement {
   /** Le filtre s'applique en mémoire, sans aller-retour serveur. */
   private get recettesFiltrees(): LigneRecette[] {
     if (!this.filtre.trim()) return this.recettes;
-    const aiguille = replier(this.filtre.trim());
-    return this.recettes.filter((r) => replier(r.name).includes(aiguille));
+    return this.recettes.filter((r) => matchesSearch(r.name, this.filtre));
   }
 
   private ouvrir(recette: LigneRecette): void {

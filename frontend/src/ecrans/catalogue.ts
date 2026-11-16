@@ -41,6 +41,7 @@ import type { UniteBase } from './fiche';
 import type { Emplacement } from './rangement';
 import { tokens } from '../shell/ui/tokens';
 import '../shell/ui/hs-button';
+import { matchesSearch } from '../fold';
 
 export type Rayon = { id: number; name: string; position: number };
 
@@ -152,12 +153,11 @@ export function champsModifies(brouillon: Brouillon, produit: Produit): Resultat
   return { ok: true, champs };
 }
 
-/** Filtre par nom de produit ou nom de rayon, insensible à la casse — un
- *  simple passage linéaire, la liste reste de quelques centaines de lignes. */
+/** Filters by product or aisle name with the server's folding (`fold.ts`) —
+ *  one linear pass, the list stays a few hundred rows long. */
 export function filtrerProduits(produits: Produit[], recherche: string, nomRayon: (id: number | null) => string): Produit[] {
-  const q = recherche.trim().toLowerCase();
-  if (!q) return produits;
-  return produits.filter((p) => p.name.toLowerCase().includes(q) || nomRayon(p.aisle_id).toLowerCase().includes(q));
+  if (!recherche.trim()) return produits;
+  return produits.filter((p) => matchesSearch(p.name, recherche) || matchesSearch(nomRayon(p.aisle_id), recherche));
 }
 
 @customElement('home-stock-catalogue')
