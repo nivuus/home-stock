@@ -4,6 +4,8 @@ Même sémantique que la macro `maintenance_plan()` de la maison, mot pour
 mot : un seuil d'APPARITION, un seuil de MAINTIEN plus large, et jamais de
 fermeture sur une donnée absente.
 """
+import dataclasses
+
 import pytest
 
 from custom_components.home_stock.const import SHORTAGE_KEEP_FACTOR
@@ -183,8 +185,9 @@ def test_reconcile_is_deterministic_and_writes_nothing():
     first = reconcile(wanted=wanted, existing=existing, session_open=False)
     second = reconcile(wanted=wanted, existing=existing, session_open=False)
     assert first == second
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError) as refused:
         first.to_create = ()
+    assert str(refused.value)
 
 
 # --- l'hystérésis -----------------------------------------------------------

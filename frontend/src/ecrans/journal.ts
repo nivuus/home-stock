@@ -23,6 +23,7 @@ import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import { formaterNombre } from '../nombres';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
 export type Granularite = 'day' | 'week' | 'month';
 
@@ -113,13 +114,13 @@ const NOMBRE_DE_SEAUX: Record<Granularite, number> = { day: 14, week: 12, month:
 
 const LIBELLE_GRANULARITE: Record<Granularite, string> = { day: 'Jours', week: 'Semaines', month: 'Mois' };
 
-function formaterEuros(valeur: number): string {
-  return `${valeur.toFixed(2).replace('.', ',')} €`;
-}
 
 @customElement('home-stock-journal')
 export class EcranJournal extends LitElement {
   @property({ attribute: false }) connexion?: Connexion;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   /** Au-delà de 1000 px, la place existe pour une mise en page dense. Posé par
    *  le panneau, qui la MESURE (`window.innerWidth`) et laisse un hôte étroit
    *  la refuser. Faux par défaut : l'écran étroit reste la mise en page de
@@ -329,7 +330,7 @@ export class EcranJournal extends LitElement {
       : '';
     const chiffres = [
       apercu.kcal === null ? null : `${Math.round(apercu.kcal)} kcal`,
-      apercu.cost === null ? null : formaterEuros(apercu.cost),
+      apercu.cost === null ? null : formatMoney(apercu.cost, this.money!),
     ].filter(Boolean).join(', ');
     return html`
       <div class="detail">
@@ -376,8 +377,8 @@ export class EcranJournal extends LitElement {
         `}
         <p class="total-kcal">${Math.round(jour.totals.kcal)} kcal</p>
         <p class="total-cout">
-          ${formaterEuros(jour.totals.cost)}
-          ${jour.totals.waste_cost > 0 ? html` — dont ${formaterEuros(jour.totals.waste_cost)} jeté` : nothing}
+          ${formatMoney(jour.totals.cost, this.money!)}
+          ${jour.totals.waste_cost > 0 ? html` — dont ${formatMoney(jour.totals.waste_cost, this.money!)} jeté` : nothing}
         </p>
         ${jour.totals.unvalued > 0 ? html`
           <p class="non-chiffre">${jour.totals.unvalued} sortie(s) sans calories connues.</p>
@@ -434,8 +435,8 @@ export class EcranJournal extends LitElement {
         <h2 class="titre-jour">${seau.label}</h2>
         <p class="total-kcal">${Math.round(seau.kcal)} kcal</p>
         <p class="total-cout">
-          ${formaterEuros(seau.cost)}
-          ${seau.waste_cost > 0 ? html` — dont ${formaterEuros(seau.waste_cost)} jeté` : nothing}
+          ${formatMoney(seau.cost, this.money!)}
+          ${seau.waste_cost > 0 ? html` — dont ${formatMoney(seau.waste_cost, this.money!)} jeté` : nothing}
         </p>
       </section>
     `;

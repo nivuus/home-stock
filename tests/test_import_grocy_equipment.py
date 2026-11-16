@@ -7,7 +7,7 @@ rouvrirait d'autres, et Bleuenn annoncerait la maison entière.
 """
 import json
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,8 @@ from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
 from custom_components.home_stock.application import StockManager
+
+_DAY = date(2026, 8, 21)  # list_equipment takes the household's civil date
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ETATS = json.loads((FIXTURES / "maintenance" / "etats.json").read_text(encoding="utf-8"))
@@ -86,7 +88,7 @@ def _snapshot(manager):
              for b in manager.list_batteries()],
             sorted(p["name"] for p in
                    manager.db.read().execute("SELECT name FROM product")),
-            sorted(e["name"] for e in manager.list_equipment()))
+            sorted(e["name"] for e in manager.list_equipment(today=_DAY)))
 
 
 def test_a_dry_run_writes_nothing_but_reports_everything(manager, grocy):
@@ -286,7 +288,7 @@ def test_the_thirty_four_equipment_are_imported_without_a_device(manager, grocy)
     appariement automatique du nom vers le `device_registry` — trois appareils
     s'appellent « Télévision » dans ce registre."""
     _import(manager, grocy)
-    equipements = manager.list_equipment()
+    equipements = manager.list_equipment(today=_DAY)
     assert len(equipements) == 34
     assert all(e["device_id"] is None for e in equipements)
     assert all(e["purchased_on"] is None and e["warranty_months"] is None

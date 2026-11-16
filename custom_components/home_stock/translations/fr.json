@@ -206,5 +206,37 @@
         }
       }
     }
+  },
+  "exceptions": {
+    "article_not_found": {
+      "message": "Article {article_id} inconnu."
+    },
+    "product_not_found": {
+      "message": "Produit {product_id} inconnu."
+    },
+    "batch_not_found": {
+      "message": "Lot {batch_id} inconnu."
+    },
+    "batch_not_open": {
+      "message": "Lot {batch_id} inconnu ou déjà clôturé."
+    },
+    "batch_not_of_product": {
+      "message": "Le lot {batch_id} n'appartient pas au produit {product_id}."
+    },
+    "quantity_not_positive": {
+      "message": "La quantité doit être positive (reçu : {quantity})."
+    },
+    "quantity_negative": {
+      "message": "La quantité ne peut pas être négative (reçu : {quantity})."
+    },
+    "packaging_not_positive": {
+      "message": "Le conditionnement doit être positif (reçu : {quantity})."
+    },
+    "unit_unknown": {
+      "message": "Unité inconnue : {unit}. Les unités possibles sont g, ml et pièce."
+    },
+    "insufficient_stock": {
+      "message": "Stock insuffisant : {requested} demandé, {available} disponible."
+    }
   }
 }

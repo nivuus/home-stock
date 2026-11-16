@@ -154,11 +154,28 @@ describe('filtrerProduits', () => {
   it('filtre aussi par nom de rayon', () => {
     expect(filtrerProduits(produits, 'frais', nomRayon).map((p) => p.id)).toEqual([2]);
   });
+
+  it('folds like the server: ligatures, ß, accents, other scripts', () => {
+    const autres = [
+      produit({ id: 3, name: 'Œufs', aisle_id: 1 }),
+      produit({ id: 4, name: 'Straße-Brot', aisle_id: 1 }),
+      produit({ id: 5, name: 'Crème', aisle_id: 1 }),
+      produit({ id: 6, name: 'ЁЛКА', aisle_id: 1 }),
+      produit({ id: 7, name: 'ガス', aisle_id: 1 }),
+    ];
+    const ids = (q: string) => filtrerProduits(autres, q, nomRayon).map((p) => p.id);
+    expect(ids('oeufs')).toEqual([3]);
+    expect(ids('strasse')).toEqual([4]);
+    expect(ids('creme')).toEqual([5]);
+    expect(ids('ёлка')).toEqual([6]);
+    expect(ids('カス')).toEqual([]);
+  });
 });
 
 function monter(props: { connexion?: Connexion; file?: unknown; enAttente?: number } = {}) {
   const element = document.createElement('home-stock-catalogue') as HTMLElement & {
-    connexion?: Connexion; file?: unknown; enAttente: number; updateComplete: Promise<boolean>;
+    connexion?: Connexion; file?: unknown; enAttente: number; large: boolean;
+    updateComplete: Promise<boolean>;
   };
   if (props.connexion) element.connexion = props.connexion;
   if (props.file) element.file = props.file;

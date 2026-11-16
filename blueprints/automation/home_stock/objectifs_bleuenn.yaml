@@ -14,6 +14,12 @@ blueprint:
     quotidiens sont créés éteints, et `state()` y rendrait `unavailable`. Tout
     se lit dans l'attribut `exceeded` du capteur d'objectifs.
 
+    Le texte remis à l'agent n'est pas une phrase : c'est le nom d'un
+    événement suivi de ses données en JSON. Aucune langue n'y est imposée ;
+    `language` n'est pas passé, donc Home Assistant transmet à l'agent la
+    langue de l'instance, et c'est l'agent qui formule l'annonce dans cette
+    langue.
+
     À importer une fois ; ce fichier n'est jamais installé par l'intégration.
   domain: automation
   input:
@@ -46,27 +52,21 @@ conditions:
 
 variables:
   nom_capteur: !input capteur
-  libelles:
-    kcal: l'énergie
-    proteins: les protéines
-    carbohydrates: les glucides
-    sugars: les sucres
-    added_sugars: les sucres ajoutés
-    fat: les matières grasses
-    saturated_fat: les graisses saturées
-    fiber: les fibres
-    salt: le sel
 
 actions:
   - action: conversation.process
     data:
       agent_id: !input agent
+      # An event name followed by JSON data, never a sentence: the agent
+      # phrases it in the language Home Assistant hands it (the instance's,
+      # since `language` is not set). Nutrients are sent by their key
+      # (`salt`, `kcal`, ...), scopes as `day` / `week`; the agent names them.
       text: >-
-        {% set depassements = state_attr(nom_capteur, 'exceeded') or [] %}
-        Objectifs dépassés :
-        {%- for d in depassements %}
-        {{ libelles.get(d.nutrient, d.nutrient) }}
-        {{ "aujourd'hui" if d.scope == 'day' else 'en moyenne sur la semaine' }},
-        {{ d.value | round(1) }} pour un objectif de {{ d.goal | round(1) }}
-        {{- ',' if not loop.last else '.' }}
-        {%- endfor %}
+        {%- set ns = namespace(items=[]) %}
+        {%- for d in state_attr(nom_capteur, 'exceeded') or [] %}
+        {%- set ns.items = ns.items + [{'nutrient': d.nutrient,
+                                        'scope': d.scope,
+                                        'value': d.value | round(1),
+                                        'goal': d.goal | round(1)}] %}
+        {%- endfor -%}
+        home_stock.nutrition_goals_exceeded {{ {'items': ns.items} | to_json }}

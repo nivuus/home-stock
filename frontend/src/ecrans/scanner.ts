@@ -10,6 +10,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { choisirScanner, type Scanner } from '../scan';
 import { libellesChamps } from './fiche';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
 export type ResumeDerniereFiche = {
   nom: string;
@@ -33,6 +34,9 @@ export type ResumeDerniereFiche = {
 export class EcranScanner extends LitElement {
   /** Injectable pour les tests ; en production, `window`. */
   @property({ attribute: false }) fenetre: any = window;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   @property({ attribute: false }) derniereFiche: ResumeDerniereFiche | null = null;
   @property({ attribute: false }) session: { store: string | null } | null = null;
   /** Nombre d'écritures en attente dans la file hors-ligne. */
@@ -107,7 +111,7 @@ export class EcranScanner extends LitElement {
           ${this.derniereFiche.quantite !== undefined ? html`
             <p class="derniere-fiche-quantite">
               Quantité : ${this.derniereFiche.quantite}${this.derniereFiche.prixTotal != null
-                ? ` — ${this.derniereFiche.prixTotal.toFixed(2).replace('.', ',')} €` : ''}
+                ? ` — ${formatMoney(this.derniereFiche.prixTotal, this.money!)}` : ''}
             </p>` : nothing}
           ${this.derniereFiche.ignores?.length ? html`
             <p class="derniere-fiche-ignores">

@@ -29,6 +29,7 @@ const SERIE = { granularity: 'day', buckets: [
 // (voir aussi fiche.ts, catalogue.ts, panier.ts…). Corrigé ici.
 function monter() {
   const element = document.createElement('home-stock-journal') as any;
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.connexion = { appeler: vi.fn(async (type: string) =>
     type === 'home_stock/journal/day' ? JOUR : SERIE) };
   document.body.append(element);
@@ -185,6 +186,7 @@ describe('<home-stock-journal> : corriger une ligne (lot 4)', () => {
 
   function monterAvec(entrees: unknown[], apercu: unknown = APERCU) {
     const element = document.createElement('home-stock-journal') as any;
+    (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
     const file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
                    rejouer: vi.fn().mockResolvedValue(undefined) };
     element.connexion = { appeler: vi.fn(async (type: string) => {
@@ -227,7 +229,7 @@ describe('<home-stock-journal> : corriger une ligne (lot 4)', () => {
     const texte = element.shadowRoot.querySelector('.detail').textContent;
     expect(texte).toContain('Annule 200 g de Pâtes');
     expect(texte).toContain('310 kcal');
-    expect(texte).toContain('0,42 €');
+    expect(texte).toContain('0,42\u00a0€');
     expect(texte).toContain('2026-08-14');
   });
 
@@ -388,6 +390,7 @@ const DOUZE_MOIS = { granularity: 'day', buckets: Array.from({ length: 12 }, (_,
 
 function monterJournal(options: { large: boolean; file?: unknown }) {
   const element = document.createElement('home-stock-journal') as any;
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   const appeler = vi.fn(async (type: string, charge?: any) => {
     if (type === 'home_stock/journal/day') {
       return { ...JOUR, food_day: charge?.date ?? JOUR.food_day };
@@ -470,6 +473,7 @@ describe('<home-stock-journal> : la vue dense (lot 6)', () => {
     const file = { ajouter: vi.fn().mockReturnValue({ cle: 'k', sort: Promise.resolve('envoyee') }),
                    rejouer: vi.fn().mockResolvedValue(undefined) };
     const element = document.createElement('home-stock-journal') as any;
+    (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
     element.connexion = { appeler: vi.fn(async (type: string) => {
       if (type === 'home_stock/journal/day') {
         return { ...JOUR, entries: [{ id: 1, occurred_at: '2026-08-14T18:00:00',

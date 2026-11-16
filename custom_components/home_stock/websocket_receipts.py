@@ -19,7 +19,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_RECEIPT_AGENT, MATCH_STATES
+from .const import CONF_RECEIPT_AGENT, MATCH_STATES, RECEIPT_MEDIA_FOLDER
 from .domain.matching import receipt_candidates
 from .receipt.task import read_receipt
 from .storage import repositories as repo
@@ -38,21 +38,30 @@ def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0, tzinfo=None).isoformat()
 
 
-def _media(value: Any) -> str:
-    """Le chemin de la photo, validé comme tout chemin de média.
+# The only media this feature reads: the panel uploads every receipt photo
+# into this folder of Home Assistant's local media source.
+_RECEIPT_MEDIA_PREFIX: Final = f"media-source://media_source/local/{RECEIPT_MEDIA_FOLDER}/"
 
-    `validators.media_path` refuse déjà l'absolu, le `..` et tout ce qui vit
-    sous `www/` — servi sur `/local/` SANS authentification. Un ticket porte
-    un magasin, une heure et des habitudes.
+
+def _media(value: Any) -> str:
+    """A photo in the receipt folder, and nothing else.
+
+    The id is handed to the reading model as an attachment, and a standard
+    account may submit one. Any other media source (`camera/`, `image/`,
+    another folder of the library) would let that account have the model
+    describe a camera snapshot or a private file, so only the folder the
+    panel uploads to is accepted. `validators.media_path` then refuses `..`
+    and the rest inside it.
     """
-    # `media-source://media_source/local/...` est ce que rend le téléversement
-    # de Home Assistant ; c'est le suffixe qui est un chemin.
-    prefix = "media-source://media_source/local/"
     text = bounded_text(value)
     if not text:
         raise vol.Invalid("a receipt needs a photo")
-    tail = text[len(prefix):] if text.startswith(prefix) else text
-    media_path(tail)
+    if not text.startswith(_RECEIPT_MEDIA_PREFIX):
+        raise vol.Invalid("a receipt photo must be in the receipts media folder")
+    name = text[len(_RECEIPT_MEDIA_PREFIX):]
+    if not name or "/" in name:
+        raise vol.Invalid("a receipt photo must be a file of the receipts folder")
+    media_path(f"{RECEIPT_MEDIA_FOLDER}/{name}")
     return text
 
 

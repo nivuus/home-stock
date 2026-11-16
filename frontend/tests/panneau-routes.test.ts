@@ -47,6 +47,7 @@ function hassFactice(): Hass {
       subscribeMessage: vi.fn().mockResolvedValue(() => {}),
     },
     language: 'fr',
+    config: { currency: 'EUR' },
   } as unknown as Hass;
 }
 
@@ -339,6 +340,7 @@ describe('panneau : routes d’URL', () => {
         subscribeMessage: vi.fn().mockResolvedValue(() => {}),
       },
       language: 'fr',
+      config: { currency: 'EUR' },
     } as unknown as Hass;
     el.route = { prefix: '/home-stock', path: '/receipt/999' };
     document.body.appendChild(el);

@@ -1426,6 +1426,7 @@ async function monterEtMesurer({ fixture, actions, cibleMinPx, contrasteMin, sty
     states: fixture.states ?? {},
     entities: fixture.entities ?? {},
     language: 'fr',
+    config: { currency: 'EUR' },
     callService: (domaine, service) => {
       const cle = `${domaine}.${service}`;
       const reponse = fixture.service ? fixture.service[cle] : undefined;

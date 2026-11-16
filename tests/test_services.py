@@ -5,7 +5,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service import async_get_all_descriptions
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.storage import repositories as repo
@@ -238,7 +238,7 @@ async def test_consume_reports_insufficient_stock_as_a_home_assistant_error(hass
         "article_id": ids["article_id"], "quantity": 100,
         "location_id": ids["location_id"],
     }, blocking=True)
-    with pytest.raises(HomeAssistantError, match="Stock insuffisant"):
+    with pytest.raises(HomeAssistantError, match="Not enough stock"):
         await hass.services.async_call(DOMAIN, "consume", {
             "product_id": ids["product_id"], "quantity": 500,
         }, blocking=True)
@@ -259,7 +259,9 @@ async def test_consume_reports_an_unknown_product_as_a_home_assistant_error(hass
         await hass.services.async_call(DOMAIN, "consume", {
             "product_id": 999, "quantity": 1,
         }, blocking=True)
-    assert str(refusal.value) == "Produit 999 inconnu."
+    # A key the frontend shows in the person's language; English in the log.
+    assert refusal.value.translation_key == "product_not_found"
+    assert str(refusal.value) == "Product 999 not found"
 
 
 async def test_consume_rejects_a_reason_not_meant_for_consumption(hass, seeded):
@@ -458,7 +460,7 @@ async def test_services_yaml_parses_for_every_service(hass, seeded):
         assert descriptions[DOMAIN][service]["name"], service
 
 
-async def test_a_domain_refusal_reaches_the_service_caller_in_french(hass, seeded):
+async def test_a_domain_refusal_reaches_the_service_caller_with_its_key(hass, seeded):
     """`services._run` re-raised `str(error)` — the domain's English original
     ("unknown article 999") — into a notification or a voice answer, while
     its own comment claimed it matched the websocket surface's wording. Both
@@ -469,7 +471,8 @@ async def test_a_domain_refusal_reaches_the_service_caller_in_french(hass, seede
             "article_id": 999, "quantity": 100, "location_id": ids["location_id"],
         }, blocking=True)
 
-    assert str(refusal.value) == "Article 999 inconnu."
+    assert refusal.value.translation_key == "article_not_found"
+    assert str(refusal.value) == "Article 999 not found"
 
 
 async def test_add_stock_rejects_a_negative_price(hass, seeded):

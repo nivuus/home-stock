@@ -206,5 +206,37 @@
         }
       }
     }
+  },
+  "exceptions": {
+    "article_not_found": {
+      "message": "Article {article_id} not found."
+    },
+    "product_not_found": {
+      "message": "Product {product_id} not found."
+    },
+    "batch_not_found": {
+      "message": "Batch {batch_id} not found."
+    },
+    "batch_not_open": {
+      "message": "Batch {batch_id} not found or already closed."
+    },
+    "batch_not_of_product": {
+      "message": "Batch {batch_id} does not belong to product {product_id}."
+    },
+    "quantity_not_positive": {
+      "message": "The quantity must be positive (got {quantity})."
+    },
+    "quantity_negative": {
+      "message": "The quantity cannot be negative (got {quantity})."
+    },
+    "packaging_not_positive": {
+      "message": "The packaging quantity must be positive (got {quantity})."
+    },
+    "unit_unknown": {
+      "message": "Unknown unit: {unit}. The possible units are g, ml and piece."
+    },
+    "insufficient_stock": {
+      "message": "Not enough stock: {requested} requested, {available} available."
+    }
   }
 }

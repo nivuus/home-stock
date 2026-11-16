@@ -19,6 +19,7 @@ from typing import Any, Final
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import BATTERY_EVENT_KINDS, BATTERY_KINDS, BATTERY_VERBS, CONSUMABLE_ROLES
 from .coordinator import resolve_battery_anchors, undeclared_battery_sensors
@@ -288,7 +289,9 @@ async def equipment_list(hass, connection, msg) -> None:
     if runtime is None:
         _send_not_loaded(connection, msg)
         return
-    rows = await _read(hass, runtime.manager.list_equipment)
+    # The household's civil date: HA's configured zone, as for warranties.
+    rows = await _read(hass, partial(
+        runtime.manager.list_equipment, today=dt_util.now().date()))
     connection.send_result(msg["id"], {"equipment": rows})
 
 

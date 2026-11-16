@@ -28,9 +28,10 @@ function monter(props: { donnees?: DonneesListe | null;
                                   rejouer?: ReturnType<typeof vi.fn> };
                          enAttente?: number } = {}) {
   const element = document.createElement('home-stock-liste') as HTMLElement & {
-    donnees: DonneesListe | null; file?: unknown; enAttente: number;
+    donnees: DonneesListe | null; file?: unknown; enAttente: number; large: boolean;
     updateComplete: Promise<boolean>;
   };
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.donnees = props.donnees ?? null;
   if (props.file) element.file = props.file;
   element.enAttente = props.enAttente ?? 0;
@@ -160,7 +161,7 @@ describe('<home-stock-liste>', () => {
     const bandeau = element.shadowRoot!.querySelector('.bandeau')!.textContent!;
     expect(bandeau).toContain('2 lignes');
     expect(bandeau).toContain('≈');
-    expect(bandeau).toContain('62,00 €');
+    expect(bandeau).toContain('62,00\u00a0€');
     expect(bandeau).toContain('estimation sur 4 lignes sur 5');
   });
 

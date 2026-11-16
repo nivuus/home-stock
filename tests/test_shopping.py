@@ -1,5 +1,6 @@
 """The shopping session, end to end, without Home Assistant."""
 import sqlite3
+from datetime import date
 
 import pytest
 
@@ -27,7 +28,8 @@ def service(tmp_path) -> ShoppingService:
             "INSERT INTO article (id, product_id, label, net_quantity) "
             "VALUES (10, 1, 'Panzani 500 g', 500)"
         )
-    return ShoppingService(StockManager(database))
+    return ShoppingService(StockManager(database),
+                           civil_today=lambda: date(2026, 8, 21))
 
 
 def test_a_session_starts_and_is_the_current_one(service):
@@ -694,3 +696,59 @@ def test_the_put_away_screen_is_not_sorted_by_aisle():
     assert "grouperParEmplacement" in source
     for forbidden in ("aisle_position", "store_aisle", "trierParRayon"):
         assert forbidden not in source
+
+
+# --- a failed route learning leaves nothing half-written ---------------------
+
+def test_a_learning_failure_mid_loop_rolls_the_route_back_and_closes(
+        service, monkeypatch, caplog):
+    """`save_store_route` writes aisle by aisle. A failure after the first
+    write used to be swallowed inside the close transaction, which then
+    COMMITTED the half-written route. Now the learning runs under a
+    savepoint: the route stays as it was, the close goes through, and the
+    failure is logged where an operator sees it."""
+    from custom_components.home_stock.storage import repositories as repo
+    other = _second_product(service)
+    _walk(service, articles=(other, 10))
+    conn = service.manager.db.read()
+    store_id = repo.find_store_by_name(conn, "Leclerc")["id"]
+    before = [dict(row) for row in repo.store_aisles(conn, store_id)]
+    assert len(before) > 2
+
+    real = repo.set_store_aisle
+    calls = []
+
+    def _fails_on_the_second_aisle(*args, **kwargs):
+        calls.append(kwargs.get("aisle_id"))
+        if len(calls) == 2:
+            raise sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "set_store_aisle", _fails_on_the_second_aisle)
+    with caplog.at_level("WARNING"):
+        _walk(service, articles=(10, other))
+
+    assert len(calls) == 2, "the failure must happen after one aisle was written"
+    after = [dict(row) for row in
+             repo.store_aisles(service.manager.db.read(), store_id)]
+    assert after == before
+    assert service.current() is None
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_a_bug_in_route_learning_is_not_hidden(service, monkeypatch):
+    """Only a database refusal is tolerated at close; a programming error
+    fails the close loudly and rolls everything back."""
+    other = _second_product(service)
+
+    def _bug(*args, **kwargs):
+        raise TypeError("unexpected value from learn_route")
+
+    monkeypatch.setattr(service.manager, "_learn_store_route_within", _bug)
+    service.start(store="Leclerc")
+    service.add_line(article_id=other, quantity=1, unit_price=None,
+                     idempotency_key=None)
+    service.checkout()
+    with pytest.raises(TypeError):
+        service.close()
+    assert service.current()["session"]["state"] == "to_store"

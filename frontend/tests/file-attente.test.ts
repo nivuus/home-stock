@@ -314,3 +314,67 @@ describe('la réponse du serveur, action par action', () => {
     await expect(suivi.reponse).resolves.toBeUndefined();
   });
 });
+
+describe('offline queue: a transient server answer is retried, never dropped', () => {
+  // The config entry is unloaded for a moment on every options save, on a
+  // retry after the database could not be opened, and at start-up: the
+  // server then answers `not_loaded`. Home Assistant answers
+  // `unknown_command` while a command is not registered yet. Neither says
+  // anything about the action itself, so the action must survive the window.
+  for (const code of ['not_loaded', 'unknown_command']) {
+    it(`keeps the action at the head of the queue on ${code}, then sends it`, async () => {
+      const surRefus = vi.fn();
+      const envoyer = vi.fn()
+        .mockRejectedValueOnce({ code, message: 'transient' })
+        .mockResolvedValueOnce({ ok: true });
+      const stockage = new StockageFactice();
+      const file = new FileAttente(stockage, envoyer, surRefus);
+      const suivi = file.ajouter('home_stock/session/add_line', { article_id: 1 });
+
+      await file.rejouer();
+
+      expect(file.taille()).toBe(1);
+      expect(await suivi.sort).toBe('en-attente');
+      // Still in local storage: a reload during the window keeps it too.
+      expect(new FileAttente(stockage, async () => {}).taille()).toBe(1);
+
+      await file.rejouer();
+
+      expect(envoyer).toHaveBeenCalledTimes(2);
+      expect(envoyer.mock.calls[1][1]).toEqual(envoyer.mock.calls[0][1]);
+      expect(file.taille()).toBe(0);
+      expect(surRefus).not.toHaveBeenCalled();
+    });
+  }
+
+  it('keeps every following action behind a transient answer, in order', async () => {
+    const vus: number[] = [];
+    let chargee = false;
+    const file = new FileAttente(new StockageFactice(), async (_t, charge) => {
+      if (!chargee) throw { code: 'not_loaded', message: 'transient' };
+      vus.push((charge as { n: number }).n);
+    });
+    file.ajouter('t', { n: 1 });
+    file.ajouter('t', { n: 2 });
+
+    await file.rejouer();
+    expect(file.taille()).toBe(2);
+
+    chargee = true;
+    await file.rejouer();
+    expect(vus).toEqual([1, 2]);
+  });
+
+  it('retries a code outside the closed set of refusals rather than dropping it', async () => {
+    const surRefus = vi.fn();
+    const file = new FileAttente(new StockageFactice(), async () => {
+      throw { code: 'unknown_error', message: 'Unknown error' };
+    }, surRefus);
+    file.ajouter('t', { n: 1 });
+
+    await file.rejouer();
+
+    expect(file.taille()).toBe(1);
+    expect(surRefus).not.toHaveBeenCalled();
+  });
+});

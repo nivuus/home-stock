@@ -67,11 +67,11 @@ def test_the_prompt_carries_the_labels_of_the_session():
         assert label in prompt
 
 
-def test_the_prompt_is_in_french_and_names_what_to_ignore():
+def test_the_prompt_names_what_to_ignore():
     """Promotions de fidélité, points, mode de paiement."""
     prompt = build_instructions(session_labels=LABELS).lower()
-    assert "ticket de caisse" in prompt
-    for ignored in ("fidélité", "promotion", "paiement"):
+    assert "receipt" in prompt
+    for ignored in ("loyalty", "promotion", "payment"):
         assert ignored in prompt
 
 
@@ -141,6 +141,7 @@ async def test_an_agent_without_attachments_is_named_too(hass, monkeypatch):
 async def test_an_answer_out_of_bounds_drops_the_bad_lines_only(hass, monkeypatch):
     answer = json.loads(
         (FIXTURES / "ligne_a_4000_euros.json").read_text(encoding="utf-8"))
+    answer["total"] = 19.0    # the 4 000 line is dearer than the whole receipt
     _install(hass, monkeypatch, answer=answer)
 
     result = await _read(hass)

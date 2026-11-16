@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.home_stock.application import StockManager
 from custom_components.home_stock.const import DOMAIN
@@ -12,12 +12,6 @@ from custom_components.home_stock.off.client import OffLookup
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Let Home Assistant load custom_components/home_stock during tests."""
-    yield
 
 
 @pytest.fixture

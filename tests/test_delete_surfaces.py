@@ -118,7 +118,10 @@ async def test_an_unknown_id_is_not_found_on_the_websocket(
         hass: HomeAssistant, seeded, hass_ws_client):
     client = await hass_ws_client(hass)
     answer = await _ws(client, type="home_stock/article/delete", article_id=999)
-    assert answer["error"] == {"code": "not_found", "message": "Article 999 inconnu."}
+    assert answer["error"] == {
+        "code": "not_found", "message": "Article 999 not found.",
+        "translation_key": "article_not_found", "translation_domain": "home_stock",
+        "translation_placeholders": {"article_id": "999"}}
 
 
 async def test_the_shortage_sensor_forgets_a_hidden_product_at_once(

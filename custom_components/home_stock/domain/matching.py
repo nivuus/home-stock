@@ -8,20 +8,15 @@ deliberately timid: when the answer is not obvious, the panel asks.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, Final
 
+from .textfold import fold, is_latin, words
+
 PRESELECT_SCORE: Final = 0.75
 PRESELECT_MARGIN: Final = 0.10
-
-# NFD splits an accented letter into letter plus combining mark, but leaves the
-# œ/æ ligatures alone: they are single code points. Expand them by hand or
-# "œufs" never matches a product named "Œufs".
-_LIGATURES: Final = {"œ": "oe", "æ": "ae", "Œ": "OE", "Æ": "AE"}
-_NON_WORD = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -32,12 +27,12 @@ class Candidate:
 
 
 def normalise(text: str) -> str:
-    """Case-, accent- and punctuation-free form, with simple plurals trimmed."""
-    for ligature, expanded in _LIGATURES.items():
-        text = text.replace(ligature, expanded)
-    decomposed = unicodedata.normalize("NFD", text)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    words = _NON_WORD.sub(" ", stripped.casefold()).split()
+    """Case-, Latin-accent- and punctuation-free form, with simple plurals trimmed.
+
+    Script-neutral (see textfold): letters of every script are kept, and the
+    result is empty only when the text holds no letter or digit at all.
+    """
+    tokens = words(fold(text))
     # Trim a trailing plural s, but only on words long enough for it to be one:
     # "os" and "gaz" are not plurals. This is symmetric folding, not a
     # linguistically correct French pluraliser: an invariant singular like
@@ -46,7 +41,14 @@ def normalise(text: str) -> str:
     # singular still folds to itself and still matches itself consistently.
     # A real pluraliser would fix that at the cost of a permanent dependency,
     # for a collision nobody has demonstrated in the real catalogue.
-    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words)
+    # Only on Latin-script words: a final "s" is a plural mark there, and
+    # means nothing in any other script.
+    return " ".join(w[:-1] if _plural_s(w) else w for w in tokens)
+
+
+def _plural_s(word: str) -> bool:
+    return len(word) > 3 and word.endswith("s") and all(
+        is_latin(char) for char in word if char.isalpha())
 
 
 def strip_brand(name: str, brands: str | None) -> str:

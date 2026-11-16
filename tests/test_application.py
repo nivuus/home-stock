@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -154,7 +155,7 @@ def test_opening_a_batch_shortens_its_date(manager, pasta):
                                  location_id=pasta["location_id"],
                                  best_before="2027-01-01",
                                  occurred_at="2026-08-18T10:00:00")
-    manager.open_batch(batch_id, occurred_at="2026-08-18T19:00:00")
+    manager.open_batch(batch_id, tz=ZoneInfo("UTC"), occurred_at="2026-08-18T19:00:00")
     with manager.db.write() as conn:
         batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
         movements = repo.list_movements(conn)
@@ -172,7 +173,7 @@ def test_opening_never_pushes_a_date_further_away(manager, pasta):
                                  location_id=pasta["location_id"],
                                  best_before="2026-08-20",
                                  occurred_at="2026-08-18T10:00:00")
-    manager.open_batch(batch_id, occurred_at="2026-08-18T19:00:00")
+    manager.open_batch(batch_id, tz=ZoneInfo("UTC"), occurred_at="2026-08-18T19:00:00")
     with manager.db.write() as conn:
         batch = conn.execute("SELECT best_before FROM batch WHERE id = ?",
                              (batch_id,)).fetchone()
@@ -923,5 +924,8 @@ def test_the_public_wrappers_still_validate_before_taking_the_lock(manager):
     L'INTÉRIEUR de la transaction : un enregistrement incohérent ne prend pas
     le verrou d'écriture juste pour être refusé dedans."""
     _seed_article(manager)
-    with pytest.raises(Exception):
+    with patch.object(manager.db, "write", wraps=manager.db.write) as write, \
+            pytest.raises(PartsError) as refused:
         manager.consume(product_id=1, quantity=1.0, parts_total=99, parts_mine=1)
+    assert str(refused.value)
+    write.assert_not_called()

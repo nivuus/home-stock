@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from freezegun import freeze_time
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import async_fire_time_changed
+from pytest_homeassistant.common import async_fire_time_changed
 
 
 async def test_the_day_resets_at_four_without_any_activity(hass, setup_entry):

@@ -14,3 +14,8 @@ Puis Paramètres → Appareils et services → Ajouter une intégration → Gard
 
 Lot 0 : fondations (schéma, catalogue, lots, journal, services). Le scan de
 codes-barres et l'interface arrivent au lot 1.
+
+Langues : les phrases vocales n'existent qu'en français (`custom_sentences/fr`) ;
+il manque leurs équivalents dans les autres langues, ainsi que les libellés
+d'unités et le format des nombres (`domain/units.py`) et le choix des noms Open
+Food Facts dans la langue configurée, encore figés en français.

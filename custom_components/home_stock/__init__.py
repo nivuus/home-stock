@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
+from homeassistant.util import dt as dt_util
 
 from .application import StockManager
 from .const import (
@@ -21,6 +22,7 @@ from .const import (
 )
 from .coordinator import HomeStockCoordinator
 from .create_product import async_register_create_product_service
+from .error_surface import async_load_error_translations
 from .delete_surfaces import async_register_delete_surfaces
 from .link_shopping_item import async_register_link_shopping_item_service
 from .off.client import AiohttpTransport, OffClient
@@ -32,7 +34,7 @@ from .services import async_register_services
 from .shopping import ShoppingService
 from .skip_meal import async_register_skip_meal_service
 from .storage.database import Database
-from .storage.migrations import apply_migrations
+from .storage.migrations import SchemaTooNewError, apply_migrations
 from .websocket_api import async_register_websocket
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR,
@@ -90,6 +92,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
 
     try:
         await hass.async_add_executor_job(_open)
+    except SchemaTooNewError as err:
+        # Permanent: retrying cannot make this release understand the schema.
+        await hass.async_add_executor_job(database.close)
+        raise ConfigEntryError(str(err)) from err
     except Exception as err:
         # Close whatever got opened so the retry does not inherit a dangling
         # connection and a stale lock on the file.
@@ -108,7 +114,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     user_agent = f"home_stock/{version} (Home Assistant; maxime@allanic.me)"
     transport = AiohttpTransport(async_get_clientsession(hass))
     off_client = OffClient(transport, user_agent=user_agent)
-    shopping = ShoppingService(manager)
+    # dt_util.now() follows Home Assistant's configured time zone, including
+    # a change made while the integration is loaded.
+    shopping = ShoppingService(manager,
+                               civil_today=lambda: dt_util.now().date())
 
     recipe_source = MealDbClient(
         transport,
@@ -121,6 +130,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
         recipe_source=recipe_source,
     )
 
+    await async_load_error_translations(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     async_register_services(hass)

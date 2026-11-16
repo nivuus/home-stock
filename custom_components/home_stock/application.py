@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from collections.abc import Collection, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from uuid import uuid4
 from typing import Any, Final
 
@@ -63,6 +63,7 @@ from .domain.shoppinglist import (
     reconcile,
     shortage_claim,
 )
+from .domain.errors import InvalidFieldError, InvalidValueError, NotFoundError
 from .domain.correction import (
     CorrectionError,
     check_correctable,
@@ -282,7 +283,7 @@ class StockManager:
         """
         article = repo.get_article(conn, article_id)
         if article is None:
-            raise ValueError(f"unknown article {article_id}")
+            raise NotFoundError(f"unknown article {article_id}", translation_key="article_not_found", article_id=article_id)
         batch_id = repo.insert_batch(
             conn, article_id=article_id, location_id=location_id, quantity=quantity,
             entered_at=moment, best_before=best_before,
@@ -456,13 +457,14 @@ class StockManager:
             (batch_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"unknown or closed batch {batch_id}")
+            raise NotFoundError(f"unknown or closed batch {batch_id}", translation_key="batch_not_open", batch_id=batch_id)
         if product_id is not None and row["product_id"] != product_id:
-            raise ValueError(
-                f"batch {batch_id} does not belong to product {product_id}")
+            raise InvalidFieldError(
+                f"batch {batch_id} does not belong to product {product_id}",
+                translation_key="batch_not_of_product", batch_id=batch_id, product_id=product_id)
         taken = row["remaining"] if quantity is None else float(quantity)
         if taken <= 0:
-            raise ValueError(f"quantity must be positive, got {taken}")
+            raise InvalidValueError(f"quantity must be positive, got {taken}", translation_key="quantity_not_positive", quantity=taken)
         if taken > row["remaining"] + QUANTITY_EPSILON:
             raise InsufficientStock(requested=taken, available=row["remaining"])
         remaining_after = row["remaining"] - taken
@@ -482,8 +484,9 @@ class StockManager:
                                  closed_at=moment if closes else None)
         return movement_id
 
-    def open_batch(self, batch_id: int, *, occurred_at: str | None = None) -> None:
-        """Mark a batch open and, if the product says so, bring its date closer."""
+    def open_batch(self, batch_id: int, *, tz: tzinfo,
+                   occurred_at: str | None = None) -> None:
+        """Mark a batch open; a shortened date counts from the civil day in `tz`."""
         moment = occurred_at or _now()
         with self.db.write() as conn:
             row = conn.execute(
@@ -493,11 +496,12 @@ class StockManager:
                 (batch_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             best_before = row["best_before"]
             if row["days_after_opening"]:
                 shortened = (
-                    datetime.fromisoformat(moment).date()
+                    datetime.fromisoformat(moment).replace(tzinfo=UTC)
+                    .astimezone(tz).date()
                     + timedelta(days=int(row["days_after_opening"]))
                 ).isoformat()
                 if best_before is None or shortened < best_before:
@@ -515,7 +519,7 @@ class StockManager:
                 (batch_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             repo.set_batch_location(conn, batch_id, location_id)
             base_unit = repo.product_base_unit(conn, row["product_id"])
             return repo.insert_movement(
@@ -533,7 +537,7 @@ class StockManager:
         with self.db.write() as conn:
             article = repo.get_article(conn, article_id)
             if article is None:
-                raise ValueError(f"unknown article {article_id}")
+                raise NotFoundError(f"unknown article {article_id}", translation_key="article_not_found", article_id=article_id)
             rows = conn.execute(
                 "SELECT * FROM batch WHERE article_id = ? AND location_id = ?"
                 " AND closed_at IS NULL", (article_id, location_id),
@@ -593,7 +597,7 @@ class StockManager:
         with self.db.write() as conn:
             product = repo.get_product(conn, product_id)
             if product is None:
-                raise LookupError(f"no product {product_id}")
+                raise NotFoundError(f"no product {product_id}", translation_key="product_not_found", product_id=product_id)
             prepared = prepare_conversion(conn, product, to_unit=to_unit,
                                           reference_quantity=reference_quantity)
             report = conversion_report(prepared)
@@ -631,9 +635,11 @@ class StockManager:
 
         `today` and `now` serve two different clocks: `today` is a civil date
         and only bounds the expiration window, while `now` is an instant and
-        only bounds the food day. Neither substitutes for the other.
+        only bounds the food day. Neither substitutes for the other. Without
+        `today`, the civil date is the one in `tz` — the household's — never
+        the UTC date, which is already tomorrow every evening west of UTC.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today) if today else datetime.now(tz).date()
         limit = reference + timedelta(days=expiration_alert_days)
         conn = self.db.read()
         rows = repo.stock_rows(conn)
@@ -756,7 +762,7 @@ class StockManager:
         }
 
     def claim_expiry_announcements(
-        self, *, expiration_alert_days: int, today: str | None = None,
+        self, *, expiration_alert_days: int, today: str,
     ) -> list[tuple[str, list[dict[str, Any]]]]:
         """What has just crossed a threshold, marked as announced on the way out.
 
@@ -767,8 +773,12 @@ class StockManager:
         A stage never goes backwards. A batch already announced as `expired`
         stays there even if the clock moves back — a corrected timezone or a
         restored backup must not re-announce the whole fridge.
+
+        `today` is the household's civil date, given by the caller: there is
+        no default, because a UTC date announces a batch expired on its last
+        good day, and an announced stage never goes back.
         """
-        reference = date.fromisoformat(today) if today else datetime.now(UTC).date()
+        reference = date.fromisoformat(today)
         limit = (reference + timedelta(days=expiration_alert_days)).isoformat()
         claimed: dict[str, list[dict[str, Any]]] = {stage: [] for stage in EXPIRY_STAGES}
         with self.db.write() as conn:
@@ -966,7 +976,14 @@ class StockManager:
             # Adapted or not, in one shot. There is no half-adapted recipe:
             # `adapt` returns a whole AdaptedRecipe or None, so the fields
             # below either all come from the agent or all come from the source.
-            if adapted is None:
+            # A failed adaptation (None) of a recipe that WAS adapted keeps
+            # every adapted field and every step: only provenance and
+            # ingredients refresh below.
+            keep_adaptation = (adapted is None and not created
+                               and existing["adapted_at"] is not None)
+            if keep_adaptation:
+                fields = {}
+            elif adapted is None:
                 fields = {"name": recipe.name, "language": "en",
                           "needs_review": 1, "adapted_at": None}
             else:
@@ -974,7 +991,8 @@ class StockManager:
                     "name": adapted.name, "summary": adapted.summary,
                     "total_minutes": adapted.total_minutes,
                     "utensils": adapted.utensils, "servings": adapted.servings,
-                    "language": "fr", "needs_review": 0, "adapted_at": moment,
+                    "language": adapted.language, "needs_review": 0,
+                    "adapted_at": moment,
                 }
             fields |= {"image_url": recipe.image_url,
                        "source_url": recipe.source_url}
@@ -986,6 +1004,9 @@ class StockManager:
             else:
                 recipe_id = existing["id"]
                 repo.update_recipe_fields(conn, recipe_id, fields)
+            if not created and adapted is not None:
+                # Only a new adaptation replaces the pages: without one there
+                # is nothing to put in their place.
                 conn.execute(
                     "DELETE FROM recipe_instruction WHERE step_id IN"
                     " (SELECT id FROM recipe_step WHERE recipe_id = ?)", (recipe_id,))
@@ -1676,15 +1697,16 @@ class StockManager:
                 raise ValueError(f"unknown equipment {equipment_id}")
             repo.update_equipment_fields(conn, equipment_id, checked)
 
-    def list_equipment(self, *, today: date | None = None) -> list[dict[str, Any]]:
+    def list_equipment(self, *, today: date) -> list[dict[str, Any]]:
         """Every sheet, with the warranty end and the days left — signed.
 
         An EXPIRED warranty keeps its date here, with a negative `days_left`:
         the panel owes three distinct sentences (ahead, over, never recorded)
         and cannot write the second one from a row that hides the date. Only
-        `warranties()` narrows to what is still ahead.
+        `warranties()` narrows to what is still ahead. `today` is the
+        household's civil date, given by the caller.
         """
-        day = today or date.today()
+        day = today
         conn = self.db.read()
         ends = {row["id"]: row["warranty_ends_on"] for row in repo.warranty_rows(conn)}
         rows = []
@@ -2324,7 +2346,7 @@ class StockManager:
         conn = self.db.read()
         batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
         if batch is None:
-            raise LookupError(f"unknown batch {batch_id}")
+            raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
         affected = self._movements_to_reprice(conn, batch_id)
         return {
             "batch_id": batch_id,
@@ -2357,7 +2379,7 @@ class StockManager:
             batch = conn.execute("SELECT * FROM batch WHERE id = ?",
                                  (batch_id,)).fetchone()
             if batch is None:
-                raise LookupError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             affected = self._movements_to_reprice(conn, batch_id)
             price_id = None
             if price_per_base_unit is not None:
@@ -2522,8 +2544,10 @@ def _match_ingredient_within(conn, ingredient_id: int, *, product_id: int | None
     # Only an explicit human confirmation teaches an alias. An `auto` match
     # never does: a wrong guess made permanent would contaminate every later
     # recipe (Grocy, April 2026 — 35 duplicates from re-matching by name).
-    if create_alias and state == "confirmed" and product_id is not None:
-        repo.upsert_alias(conn, normalised=normalise(line["raw_text"]),
+    # A text with no letter or digit has no key to teach (repo refuses it).
+    key = normalise(line["raw_text"])
+    if create_alias and state == "confirmed" and product_id is not None and key:
+        repo.upsert_alias(conn, normalised=key,
                           product_id=product_id, created_at=moment)
     return dict(conn.execute(
         "SELECT * FROM recipe_ingredient WHERE id = ?", (ingredient_id,)).fetchone())

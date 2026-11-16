@@ -8,15 +8,9 @@ containing it.
 """
 from __future__ import annotations
 
-import unicodedata
 from typing import Final
 
-# NFD decomposition splits an accented letter into the base letter plus a
-# combining mark, but it does NOT split the œ/æ ligatures — those are single
-# code points, not a letter plus an accent. Expand them by hand first, or
-# "œufs" never matches a product named "Œufs" (services.yaml promises
-# case- and accent-insensitive matching for query_stock, the voice path).
-_LIGATURES: Final = {"œ": "oe", "æ": "ae", "Œ": "OE", "Æ": "AE"}
+from .textfold import fold
 
 # The character that makes the next %, _ or itself literal in a LIKE pattern;
 # the SQL using `like_pattern` must say ESCAPE with this very character.
@@ -24,12 +18,8 @@ LIKE_ESCAPE: Final = "\\"
 
 
 def fold_for_search(text: str) -> str:
-    """Case- and accent-insensitive form of `text`."""
-    for ligature, expanded in _LIGATURES.items():
-        text = text.replace(ligature, expanded)
-    decomposed = unicodedata.normalize("NFD", text)
-    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return without_accents.casefold()
+    """Case- and Latin-accent-insensitive form of `text`; other scripts kept whole."""
+    return fold(text)
 
 
 def escape_like(value: str) -> str:

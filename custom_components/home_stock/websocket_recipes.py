@@ -21,8 +21,9 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 
+from .admin_only import register_command
 from .const import MATCH_STATES, MEAL_SLOT_KEYS
 from .domain.stock import InsufficientStock
 from .validators import (
@@ -249,7 +250,8 @@ async def recipe_import_external(hass, connection, msg) -> None:
     if runtime is None:
         _send_not_loaded(connection, msg)
         return
-    result = await async_import_recipe(hass, runtime, msg["source_ref"])
+    result = await async_import_recipe(hass, runtime, msg["source_ref"],
+                                       context=connection.context(msg))
     if result is None:
         connection.send_error(msg["id"], "not_found",
                               "Cette recette est introuvable à la source.")
@@ -257,8 +259,8 @@ async def recipe_import_external(hass, connection, msg) -> None:
     connection.send_result(msg["id"], result)
 
 
-async def async_import_recipe(hass: HomeAssistant, runtime,
-                              source_ref: str) -> dict[str, Any] | None:
+async def async_import_recipe(hass: HomeAssistant, runtime, source_ref: str, *,
+                              context: Context | None) -> dict[str, Any] | None:
     """Look up, map, adapt, write — the ONE orchestration both surfaces use.
 
     Shared with `home_stock.import_recipe` rather than written twice: the
@@ -279,7 +281,7 @@ async def async_import_recipe(hass: HomeAssistant, runtime,
 
     entries = hass.config_entries.async_loaded_entries("home_stock")
     agent_id = entries[0].options.get(CONF_RECIPE_AGENT) if entries else None
-    adapted = await adapt(hass, agent_id=agent_id, recipe=recipe)
+    adapted = await adapt(hass, agent_id=agent_id, recipe=recipe, context=context)
 
     recipe_id, _created = await hass.async_add_executor_job(
         partial(runtime.manager.write_source_recipe, recipe, adapted=adapted))
@@ -429,4 +431,5 @@ def async_register_recipe_commands(hass: HomeAssistant) -> None:
                     recipe_search_external, recipe_import_external,
                     meals_list, meal_plan, meal_move, meal_cancel,
                     meal_preview, meal_validate):
-        websocket_api.async_register_command(hass, command)
+        # recipe/delete is admin-only through the table in admin_only.py.
+        register_command(hass, command)

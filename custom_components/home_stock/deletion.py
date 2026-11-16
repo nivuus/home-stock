@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from .domain.errors import NotFoundError
 from .messages import delete_blocked_message, slot_label
 from .storage import deletion as store
 from .storage import repositories as repo
@@ -73,7 +74,8 @@ def delete_product(db: Database, product_id: int) -> str:
     with db.write() as conn:
         product = repo.get_product(conn, product_id)
         if product is None:
-            raise LookupError(f"no product {product_id}")
+            raise NotFoundError(f"no product {product_id}",
+                                translation_key="product_not_found", product_id=product_id)
         if not product["active"]:
             return OUTCOME_HIDDEN
         blockers = product_blockers(conn, product_id)
@@ -91,7 +93,8 @@ def delete_article(db: Database, article_id: int) -> str:
     with db.write() as conn:
         article = repo.get_article(conn, article_id)
         if article is None:
-            raise LookupError(f"no article {article_id}")
+            raise NotFoundError(f"no article {article_id}",
+                                translation_key="article_not_found", article_id=article_id)
         if not article["active"]:
             return OUTCOME_HIDDEN
         blockers = article_blockers(conn, article_id)
@@ -110,7 +113,8 @@ def set_article_active_within(conn, article_id: int, active: bool) -> None:
     can see through its product is not restored."""
     article = repo.get_article(conn, article_id)
     if article is None:
-        raise LookupError(f"no article {article_id}")
+        raise NotFoundError(f"no article {article_id}",
+                            translation_key="article_not_found", article_id=article_id)
     store.set_article_active(conn, article_id, active)
     if active:
         store.set_product_active(conn, article["product_id"], True)

@@ -34,16 +34,15 @@ def test_m010_folds_the_name_of_every_existing_product(tmp_path):
     conn.execute("INSERT INTO product (name, base_unit) VALUES ('lait', 'ml')")
     conn.commit()
 
-    assert apply_migrations(conn) == 10
+    assert apply_migrations(conn) == CURRENT_VERSION
 
     rows = conn.execute("SELECT name, name_fold FROM product ORDER BY id").fetchall()
     assert [(r["name"], r["name_fold"]) for r in rows] == [
         ("Pâtes", "pates"), ("Œufs Frais", "oeufs frais"), ("lait", "lait")]
 
 
-def test_m010_is_the_current_version_and_replayable(tmp_path):
-    assert migrations.CURRENT_VERSION == 10
+def test_m010_is_replayable(tmp_path):
+    assert migrations.CURRENT_VERSION >= 10
     conn = _stopped_at(tmp_path, 10)
-    assert apply_migrations(conn) == 10
-    assert apply_migrations(conn) == 10
-    assert CURRENT_VERSION == 10
+    assert apply_migrations(conn) == CURRENT_VERSION
+    assert apply_migrations(conn) == CURRENT_VERSION

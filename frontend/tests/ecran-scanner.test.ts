@@ -9,6 +9,7 @@ function creer(fenetre: any) {
   const element = document.createElement('home-stock-scanner') as HTMLElement & {
     fenetre: any; updateComplete: Promise<boolean>;
   };
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.fenetre = fenetre;
   document.body.appendChild(element);
   return element;
@@ -83,6 +84,7 @@ describe('écran scanner : choix de la voie de scan au clic', () => {
     const element = document.createElement('home-stock-scanner') as HTMLElement & {
       fenetre: any; session: any; updateComplete: Promise<boolean>;
     };
+    (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
     element.fenetre = {};
     element.session = { store: 'Leclerc' };
     document.body.appendChild(element);
@@ -102,6 +104,7 @@ describe('écran scanner : choix de la voie de scan au clic', () => {
     const element = document.createElement('home-stock-scanner') as HTMLElement & {
       fenetre: any; derniereFiche: any; updateComplete: Promise<boolean>;
     };
+    (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
     element.fenetre = {};
     element.derniereFiche = {
       nom: 'Farine', marque: null, image: null,

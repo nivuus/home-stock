@@ -149,4 +149,4 @@ def apply(conn: sqlite3.Connection) -> None:
         "UPDATE shopping_line SET price_source = 'manual' WHERE price_source IS NULL"
     )
     # 3. Aucune ligne de liste : elle naît de la première réconciliation.
-    conn.commit()
+    # No commit here: the migration runner owns the transaction.

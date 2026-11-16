@@ -1,0 +1,101 @@
+{
+  "_comment": "Inputs and the folded form the server computes (domain/textfold.fold). The panel must fold to the same text: tests/test_text_folding_contract.py checks the server side, frontend/tests/fold.test.ts the panel side.",
+  "cases": [
+    {
+      "text": "Œufs frais",
+      "folded": "oeufs frais"
+    },
+    {
+      "text": "Crème fraîche",
+      "folded": "creme fraiche"
+    },
+    {
+      "text": "Bœuf",
+      "folded": "boeuf"
+    },
+    {
+      "text": "Æble",
+      "folded": "aeble"
+    },
+    {
+      "text": "Straße",
+      "folded": "strasse"
+    },
+    {
+      "text": "ẞ",
+      "folded": "ss"
+    },
+    {
+      "text": "Smørrebrød",
+      "folded": "smørrebrød"
+    },
+    {
+      "text": "ΣΊΣΥΦΟΣ",
+      "folded": "σίσυφοσ"
+    },
+    {
+      "text": "Γιαούρτι",
+      "folded": "γιαούρτι"
+    },
+    {
+      "text": "Йогурт",
+      "folded": "йогурт"
+    },
+    {
+      "text": "ЁЛКА",
+      "folded": "ёлка"
+    },
+    {
+      "text": "ガス",
+      "folded": "ガス"
+    },
+    {
+      "text": "カス",
+      "folded": "カス"
+    },
+    {
+      "text": "ﾊﾟﾝ",
+      "folded": "ﾊﾟﾝ"
+    },
+    {
+      "text": "パン",
+      "folded": "パン"
+    },
+    {
+      "text": "عَسَل",
+      "folded": "عَسَل"
+    },
+    {
+      "text": "عسل",
+      "folded": "عسل"
+    },
+    {
+      "text": "İstanbul",
+      "folded": "istanbul"
+    },
+    {
+      "text": "ﬁlet",
+      "folded": "filet"
+    },
+    {
+      "text": "ǅ",
+      "folded": "ǆ"
+    },
+    {
+      "text": "Ǆemal",
+      "folded": "ǆemal"
+    },
+    {
+      "text": "हिंदी",
+      "folded": "हिंदी"
+    },
+    {
+      "text": "ไข่",
+      "folded": "ไข่"
+    },
+    {
+      "text": "東京",
+      "folded": "東京"
+    }
+  ]
+}

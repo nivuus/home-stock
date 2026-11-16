@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from custom_components.home_stock.application import StockManager
+from custom_components.home_stock.application import PartsError, StockManager
 from custom_components.home_stock.storage import repositories as repo
 from custom_components.home_stock.storage.database import Database
 from custom_components.home_stock.storage.migrations import apply_migrations
@@ -367,16 +367,18 @@ def test_portions_eaten_above_the_parts_produced_is_refused(manager):
 
 def test_parts_mine_above_parts_total_is_refused(manager):
     _, _, meal_id = _simple(manager)
-    with pytest.raises(Exception):
+    with pytest.raises(PartsError) as refused:
         manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
                               parts_total=2, parts_mine=3)
+    assert str(refused.value)
 
 
 def test_parts_total_above_twenty_four_is_refused(manager):
     _, _, meal_id = _simple(manager)
-    with pytest.raises(Exception):
+    with pytest.raises(PartsError) as refused:
         manager.validate_meal(meal_id, portions_eaten=1, dry_run=False,
                               parts_total=25, parts_mine=1)
+    assert str(refused.value)
 
 
 # --- la journée alimentaire -------------------------------------------------

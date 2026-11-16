@@ -22,10 +22,8 @@ import type { Connexion } from '../connexion';
 import type { FileAttente } from '../file-attente';
 import type { DonneesSession, Magasin } from './panier';
 import { tokens } from '../shell/ui/tokens';
+import { formatMoney, type MoneyFormat } from '../money';
 
-function formaterEuros(valeur: number): string {
-  return `${valeur.toFixed(2).replace('.', ',')} €`;
-}
 
 @customElement('home-stock-session')
 export class EcranSession extends LitElement {
@@ -33,6 +31,9 @@ export class EcranSession extends LitElement {
    *  n'existe — c'est ce qui décide de l'écran montré : ouvrir, ou clore. */
   @property({ attribute: false }) donnees: DonneesSession | null = null;
   @property({ attribute: false }) connexion?: Connexion;
+  /** How amounts are written (locale and currency, from Home Assistant). Set
+   *  by the panel from `Connexion.money()`. */
+  @property({ attribute: false }) money?: MoneyFormat;
   /** La file hors-ligne : ouvrir une session est une écriture comme les
    *  autres, et le parking d'un magasin n'a pas plus de réseau que son
    *  rayon. */
@@ -203,7 +204,7 @@ export class EcranSession extends LitElement {
       <p class="magasin-retenu">${donnees.session.store ?? 'Sans enseigne'}</p>
       <p class="resume">
         ${donnees.totals.lines} ligne${donnees.totals.lines > 1 ? 's' : ''} —
-        ${formaterEuros(donnees.totals.total)}
+        ${formatMoney(donnees.totals.total, this.money!)}
       </p>
       ${enCourses && (donnees.totals.list_items ?? 0) > 0 ? html`
         <button class="emporter-liste" @click=${() => this.dispatchEvent(

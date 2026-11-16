@@ -7,12 +7,15 @@ cart. The panel keeps only a replay queue of writes it could not send.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import statistics
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 from typing import Any
 
 from .application import StockManager
 from .storage import repositories as repo
+from .storage.database import savepoint
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,8 +32,13 @@ def _now() -> str:
 class ShoppingService:
     """Every write to a shopping session goes through here."""
 
-    def __init__(self, manager: StockManager) -> None:
+    def __init__(self, manager: StockManager, *,
+                 civil_today: Callable[[], date]) -> None:
+        """`civil_today` gives the household's date (Home Assistant's time
+        zone). Timestamps stay UTC; a price observation is dated by the day
+        the person lived it, not the UTC day."""
         self.manager = manager
+        self._civil_today = civil_today
 
     # --- session ------------------------------------------------------------
 
@@ -142,13 +150,19 @@ class ShoppingService:
             # `Database._lock` n'est pas réentrant, et un second `db.write()`
             # figerait la clôture d'une session en plein magasin.
             if session["store_id"] is not None:
+                # Learning is secondary; closing is not. Under a savepoint, a
+                # database refusal half-way through the aisle-by-aisle write
+                # is rolled back whole and the close goes on. Anything else is
+                # a bug and fails the close.
                 try:
-                    self.manager._learn_store_route_within(
-                        conn, int(session["store_id"]), moment=moment)
-                except Exception:               # noqa: BLE001
-                    # Apprendre est accessoire ; clore ne l'est pas.
-                    _LOGGER.debug("apprentissage du parcours ignoré pour le "
-                                  "magasin %s", session["store_id"], exc_info=True)
+                    with savepoint(conn, "learn_route"):
+                        self.manager._learn_store_route_within(
+                            conn, int(session["store_id"]), moment=moment)
+                except sqlite3.Error:
+                    _LOGGER.warning(
+                        "Store route not learned for store %s; the session is "
+                        "closed and the previous route is kept",
+                        session["store_id"], exc_info=True)
             return repo.get_session(conn, session["id"])
 
     # --- lines --------------------------------------------------------------
@@ -179,7 +193,8 @@ class ShoppingService:
                 # The observation happens in the aisle, so it is recorded in the
                 # aisle — not later, when the pack is put away somewhere else.
                 repo.insert_price(
-                    conn, article_id=article_id, observed_on=_now()[:10],
+                    conn, article_id=article_id,
+                    observed_on=self._civil_today().isoformat(),
                     price_per_base_unit=unit_price, store=session["store"],
                     source=source,
                 )
@@ -205,30 +220,32 @@ class ShoppingService:
         ne bloque jamais ce qui est essentiel.
         """
         try:
-            article = repo.get_article(conn, article_id)
-            if article is None:
-                return
-            item = repo.open_item_for_product(conn, article["product_id"])
-            if item is None:
-                return
-            repo.check_list_item(conn, int(item["id"]), at=_now(),
-                                 session_id=session_id, line_id=line_id)
-        except Exception:                       # noqa: BLE001 — voir ci-dessus
-            _LOGGER.debug("pointage de la liste ignoré pour l'article %s",
-                          article_id, exc_info=True)
+            with savepoint(conn, "check_list_line"):
+                article = repo.get_article(conn, article_id)
+                if article is None:
+                    return
+                item = repo.open_item_for_product(conn, article["product_id"])
+                if item is None:
+                    return
+                repo.check_list_item(conn, int(item["id"]), at=_now(),
+                                     session_id=session_id, line_id=line_id)
+        except sqlite3.Error:
+            _LOGGER.warning("Shopping list not ticked for article %s; the "
+                            "cart line is kept", article_id, exc_info=True)
 
     @staticmethod
     def _uncheck_list_line(conn, line_id: int) -> None:
         """Retirer une ligne du panier, c'est reposer l'article sur l'étagère."""
         try:
-            row = conn.execute(
-                "SELECT id FROM shopping_list_item WHERE line_id = ?",
-                (line_id,)).fetchone()
-            if row is not None:
-                repo.uncheck_list_item(conn, int(row["id"]))
-        except Exception:                       # noqa: BLE001
-            _LOGGER.debug("dépointage de la liste ignoré pour la ligne %s",
-                          line_id, exc_info=True)
+            with savepoint(conn, "uncheck_list_line"):
+                row = conn.execute(
+                    "SELECT id FROM shopping_list_item WHERE line_id = ?",
+                    (line_id,)).fetchone()
+                if row is not None:
+                    repo.uncheck_list_item(conn, int(row["id"]))
+        except sqlite3.Error:
+            _LOGGER.warning("Shopping list not unticked for line %s; the line "
+                            "is removed anyway", line_id, exc_info=True)
 
     def update_line(self, line_id: int, *, quantity: float | None = None,
                     unit_price: float | None = None,
@@ -263,7 +280,8 @@ class ShoppingService:
                 # must not pile up identical rows.
                 session = repo.get_session(conn, line["session_id"])
                 repo.insert_price(
-                    conn, article_id=line["article_id"], observed_on=_now()[:10],
+                    conn, article_id=line["article_id"],
+                    observed_on=self._civil_today().isoformat(),
                     price_per_base_unit=unit_price,
                     store=session["store"] if session else None,
                     source="manual",

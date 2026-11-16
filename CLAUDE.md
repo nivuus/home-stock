@@ -17,10 +17,12 @@ suites en parallèle.
 make test                    # package : manifeste + hooks install/activate. python3 + PyYAML, rapide
 make test NIVUUS_INSTALLER_DIR=/home/mallanic/Projects/Nivuus/packages/installer
                              # idem, avec le VRAI parseur du moteur (chemin ABSOLU : $HOME vaut /root ici)
-./scripts/test.sh -q tests/domain      # pytest dans Docker (image HA 2026.10.2), 259 tests, ~15 s
+./scripts/test.sh -q tests/domain      # pytest dans Docker (image HA 2026.11.1), 259 tests, ~15 s
 ./scripts/test.sh -q                   # suite complète : 2223 passés, 1 ignoré, 14 min, ~450 Mo de RAM (mesuré sur `master`)
 ./scripts/test.sh -m network           # tests réseau réel, exclus par défaut (pytest.ini)
 cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc / rendu
+cd frontend && npm run check-bundle   # tracked bundle == in-memory build of src (CI job `frontend`)
+cd frontend && npx vitest run --maxWorkers=4   # never watch mode; bound the workers on this host
 ```
 
 - `make test-integration` exige `homeassistant` installé sur l'hôte : absent ici, passer par
@@ -33,7 +35,7 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
 - `NIVUUS_INSTALLER_DIR` : le dépôt `installer` doit être sur un `main` récent, sinon
   `manifest.source` n'existe pas et `test_manifest_contract.py` échoue (constaté sur une
   branche `spec/…` en retard).
-- Non vérifiés ici (pas de `node_modules`) : les commandes `npm`. Lint CI : `ruff check`,
+- npm commands verified 2026-11-14 from a clean `npm ci` (Node 24). Lint CI : `ruff check`,
   version épinglée dans `requirements.txt`, règles dans `ruff.toml` (E4, E7, E9, F seulement).
 
 ## Architecture (`custom_components/home_stock/`)
@@ -43,7 +45,7 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
 - `domain/` : règles pures sans HA (`stock`, `units`, `conversion`, `nutrition`, `pricing`,
   `matching`, `shoppinglist`, `foodday`, `goals`, `route`, `maintenance`…).
 - `storage/` : SQLite (`database.py` : un écrivain sérialisé + un lecteur WAL),
-  `repositories.py`, `migrations/m001…m010` (schéma, catalogue, lots, journal ; le journal
+  `repositories.py`, `migrations/m001…m011` (schéma, catalogue, lots, journal ; le journal
   `movement` est protégé par des triggers posés par m001). **Jamais de fonction Python
   enregistrée sur une connexion** (`create_function`) : le lecteur est partagé entre threads
   et un rappel Python depuis SQLite interbloque le GIL (gel complet de HA le 2026-10-22) ;
@@ -98,8 +100,8 @@ cd frontend && npm test | npm run typecheck | npm run verifier   # vitest / tsc 
   triggers du journal viennent de m001), jamais d'une copie de base de développement.
   Import Grocy : lire une copie, jamais la base Grocy de production.
 - `requirements.txt` : la liste d'appoint (ffmpeg, hassil, frontend…) est la clôture
-  transitive des manifestes pour HA 2026.10.2 ; à recalculer quand on bouge la version de
-  `pytest-homeassistant-custom-component`, pas à éditer ligne à ligne.
+  transitive des manifestes pour HA 2026.11.1 ; à recalculer quand on bouge la version de
+  `pytest-homeassistant`, pas à éditer ligne à ligne (Dependabot les ignore).
 
 ## Conventions
 

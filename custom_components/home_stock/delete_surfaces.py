@@ -22,10 +22,12 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.service import async_register_admin_service
 
+from .admin_only import register_command, register_service
 from . import deletion
 from .const import DOMAIN
+from .domain.errors import TranslatedError
+from .error_surface import send_domain_error, service_error
 from .messages import french_error
 from .validators import bounded_int
 
@@ -65,7 +67,6 @@ def _websocket_command(command: str, key: str, rule):
         vol.Required("type"): command,
         **(DELETE_PRODUCT_FIELDS if key == "product_id" else DELETE_ARTICLE_FIELDS),
     })
-    @websocket_api.require_admin
     @websocket_api.async_response
     async def handler(hass, connection, msg) -> None:
         runtime = _runtime(hass)
@@ -79,7 +80,7 @@ def _websocket_command(command: str, key: str, rule):
             connection.send_error(msg["id"], DELETE_BLOCKED, str(err))
             return
         except LookupError as err:
-            connection.send_error(msg["id"], *french_error(err))
+            send_domain_error(connection, msg["id"], err)
             return
         connection.send_result(msg["id"], result)
 
@@ -95,6 +96,8 @@ async def _service(hass: HomeAssistant, key: str, rule,
         return await _delete(hass, runtime, rule, call.data[key])
     except deletion.DeleteBlocked as err:
         raise HomeAssistantError(str(err)) from err
+    except TranslatedError as err:
+        raise service_error(err) from err
     except LookupError as err:
         raise HomeAssistantError(french_error(err)[1]) from err
 
@@ -105,11 +108,11 @@ def async_register_delete_surfaces(hass: HomeAssistant) -> None:
     for command, service, key, rule in _TARGETS:
         if hass.services.has_service(DOMAIN, service):
             continue
-        websocket_api.async_register_command(
-            hass, _websocket_command(command, key, rule))
+        # Admin-only through the table in admin_only.py.
+        register_command(hass, _websocket_command(command, key, rule))
         schema = DELETE_PRODUCT_FIELDS if key == "product_id" else DELETE_ARTICLE_FIELDS
-        async_register_admin_service(
-            hass, DOMAIN, service, partial(_service, hass, key, rule),
+        register_service(
+            hass, service, partial(_service, hass, key, rule),
             schema=vol.Schema(schema),
             # It acts AND answers what it did: OPTIONAL, per the developer
             # docs (ONLY is for services that perform no action).

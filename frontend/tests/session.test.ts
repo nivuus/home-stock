@@ -23,6 +23,7 @@ function monter(props: { donnees?: DonneesSession | null; connexion?: Connexion;
     donnees: DonneesSession | null; connexion?: Connexion; file?: unknown;
     updateComplete: Promise<boolean>;
   };
+  (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
   element.donnees = props.donnees ?? null;
   if (props.connexion) element.connexion = props.connexion;
   if (props.file) element.file = props.file;
@@ -237,6 +238,7 @@ describe('<home-stock-session> : ce que le lot 4 ajoute', () => {
     const element = document.createElement('home-stock-session') as HTMLElement & {
       updateComplete: Promise<boolean>; [k: string]: unknown;
     };
+    (element as unknown as { money: unknown }).money = { locale: 'fr', currency: 'EUR' };
     for (const [cle, valeur] of Object.entries(props)) element[cle] = valeur;
     document.body.appendChild(element);
     return element;

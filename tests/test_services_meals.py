@@ -6,6 +6,7 @@ appel de service part d'une automation ou du vocal, et il est tout aussi
 capable d'écrire quatre parts sur trois dans un journal en ajout seul.
 """
 import pytest
+import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import service as service_helper
 
@@ -206,11 +207,12 @@ async def test_validate_meal_refuses_exactly_what_the_websocket_refuses(
     entry = await setup_entry()
     recipe_id = await _kitchen(hass, entry)
     meal_id = await _plan(hass, entry, recipe_id)
-    with pytest.raises(Exception):
+    with pytest.raises((HomeAssistantError, vol.Invalid)) as refused:
         await hass.services.async_call(
             DOMAIN, "validate_meal",
             {"meal_id": meal_id, "dry_run": False, **payload},
             blocking=True, return_response=True)
+    assert str(refused.value)
     assert await _count(hass, entry, "movement") == 0
 
 
@@ -227,8 +229,9 @@ async def test_validate_meal_refuses_exactly_what_the_websocket_refuses(
 async def test_plan_meal_refuses_exactly_what_the_websocket_refuses(
         hass, setup_entry, payload):
     entry = await setup_entry()
-    with pytest.raises(Exception):
+    with pytest.raises((HomeAssistantError, vol.Invalid)) as refused:
         await hass.services.async_call(DOMAIN, "plan_meal", payload, blocking=True)
+    assert str(refused.value)
     assert await _count(hass, entry, "meal") == 0
 
 
@@ -239,9 +242,10 @@ async def test_plan_meal_refuses_exactly_what_the_websocket_refuses(
 async def test_query_meals_validates_its_bounds_like_the_websocket(hass, setup_entry,
                                                                    bounds):
     await setup_entry()
-    with pytest.raises(Exception):
+    with pytest.raises((HomeAssistantError, vol.Invalid)) as refused:
         await hass.services.async_call(DOMAIN, "query_meals", bounds,
                                        blocking=True, return_response=True)
+    assert str(refused.value)
 
 
 # --- les libellés -----------------------------------------------------------

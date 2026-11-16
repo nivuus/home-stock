@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Final
 
 from ..const import BASE_UNITS
+from .errors import TranslatedError
 
 
 # Everything a source may express a mass or a volume in, and what one unit is
@@ -26,27 +27,29 @@ UNIT_TO_BASE: Final = {
 }
 
 
-class UnitError(ValueError):
+class UnitError(TranslatedError, ValueError):
     """Raised when a unit or a quantity cannot be used."""
 
 
 def validate_base_unit(unit: str) -> str:
     """Return the unit if it is one of the three base units, raise otherwise."""
     if unit not in BASE_UNITS:
-        raise UnitError(f"{unit!r} is not a base unit; expected one of {BASE_UNITS}")
+        raise UnitError(f"{unit!r} is not a base unit; expected one of {BASE_UNITS}",
+                        translation_key="unit_unknown", unit=unit)
     return unit
 
 
 def to_base_quantity(amount: float, packaging_base_quantity: float | None = None) -> float:
     """Convert an amount, optionally expressed in packagings, into base units."""
     if amount < 0:
-        raise UnitError(f"quantity must not be negative, got {amount}")
+        raise UnitError(f"quantity must not be negative, got {amount}",
+                        translation_key="quantity_negative", quantity=amount)
     if packaging_base_quantity is None:
         return float(amount)
     if packaging_base_quantity <= 0:
         raise UnitError(
-            f"packaging quantity must be positive, got {packaging_base_quantity}"
-        )
+            f"packaging quantity must be positive, got {packaging_base_quantity}",
+            translation_key="packaging_not_positive", quantity=packaging_base_quantity)
     return float(amount) * float(packaging_base_quantity)
 
 

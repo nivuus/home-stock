@@ -1,7 +1,14 @@
-pytest-homeassistant-custom-component==0.13.375
+pytest-homeassistant==2026.11.1
 
-# THE NINE BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
-# repository chose. pytest-homeassistant-custom-component installs Home
+# pytest-homeassistant is the harness published from home-assistant/core, one
+# release per Home Assistant release. It replaces
+# pytest-homeassistant-custom-component, whose README declares it broken since
+# that move and whose last release (0.13.375, 2026-10-25) pins Home Assistant
+# 2026.10.4 and through it Pillow 12.3.0, which pip-audit flags. Do not install
+# both: they register overlapping fixtures (pytest-homeassistant README).
+#
+# THE TEN BELOW ARE NOT TEST TOOLS, and none of them is a dependency this
+# repository chose. The harness installs Home
 # Assistant WITHOUT any per-integration requirement (those normally arrive at
 # setup time, per component, in a real install), so every component this suite
 # reaches must have its own requirements listed here by hand or it fails to
@@ -33,9 +40,10 @@ pytest-homeassistant-custom-component==0.13.375
 #      of them.
 #
 # The list is the transitive closure of the manifests of those three roots in
-# Home Assistant 2026.10.2 - the release the pin above resolves to. Bumping
-# pytest-homeassistant-custom-component moves that release, and these with it:
-# recompute the closure against the new one rather than editing a line.
+# Home Assistant 2026.11.1 - the release the pin above resolves to. Bumping
+# pytest-homeassistant moves that release, and these with it: recompute the
+# closure against the new one rather than editing a line. Dependabot is told
+# to leave these ten alone for that reason (.github/dependabot.yml).
 #
 # How it is computed: walk module-level imports (outside functions and
 # TYPE_CHECKING) from the three roots, plus the manifest "dependencies" of
@@ -47,12 +55,19 @@ pytest-homeassistant-custom-component==0.13.375
 # the same walk gives back exactly the previous list; against 2026.10.2 it adds
 # gazetteer-matcher, which conversation now requires and imports at module
 # level in default_agent.py.
-gazetteer-matcher==1.2.0
+#
+# Recomputed for 2026.11.1 with the same walk, which first gave back exactly
+# the 2026.10.4 manifests' versions when run against that release (main had
+# drifted from them through one-line Dependabot bumps). 2026.11.1 adds numpy:
+# stream now imports it at module level, and the old harness used to install
+# it as its own dependency, which pytest-homeassistant does not.
+gazetteer-matcher==1.1.0
 ha-ffmpeg==3.2.2
 hassil==3.12.1
-home-assistant-frontend==20260930.4
+home-assistant-frontend==20261028.5
 home-assistant-intents==2026.10.27
 mutagen==1.48.1
+numpy==2.3.2
 pymicro-vad==1.0.1
 pyspeex-noise==1.0.2
 PyTurboJPEG==1.8.3
