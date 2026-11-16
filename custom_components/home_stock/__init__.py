@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
+from homeassistant.util import dt as dt_util
 
 from .application import StockManager
 from .const import (
@@ -112,7 +113,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
     user_agent = f"home_stock/{version} (Home Assistant; maxime@allanic.me)"
     transport = AiohttpTransport(async_get_clientsession(hass))
     off_client = OffClient(transport, user_agent=user_agent)
-    shopping = ShoppingService(manager)
+    # dt_util.now() follows Home Assistant's configured time zone, including
+    # a change made while the integration is loaded.
+    shopping = ShoppingService(manager,
+                               civil_today=lambda: dt_util.now().date())
 
     recipe_source = MealDbClient(
         transport,

@@ -518,7 +518,8 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def open_batch(call: ServiceCall) -> None:
         entry = _entry(hass)
         await _run(hass, partial(entry.runtime_data.manager.open_batch,
-                                 call.data["batch_id"]))
+                                 call.data["batch_id"],
+                                 tz=dt_util.get_default_time_zone()))
         await entry.runtime_data.coordinator.async_request_refresh()
 
     async def transfer_batch(call: ServiceCall) -> None:

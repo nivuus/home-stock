@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from collections.abc import Collection, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from uuid import uuid4
 from typing import Any, Final
 
@@ -482,8 +482,9 @@ class StockManager:
                                  closed_at=moment if closes else None)
         return movement_id
 
-    def open_batch(self, batch_id: int, *, occurred_at: str | None = None) -> None:
-        """Mark a batch open and, if the product says so, bring its date closer."""
+    def open_batch(self, batch_id: int, *, tz: tzinfo,
+                   occurred_at: str | None = None) -> None:
+        """Mark a batch open; a shortened date counts from the civil day in `tz`."""
         moment = occurred_at or _now()
         with self.db.write() as conn:
             row = conn.execute(
@@ -497,7 +498,8 @@ class StockManager:
             best_before = row["best_before"]
             if row["days_after_opening"]:
                 shortened = (
-                    datetime.fromisoformat(moment).date()
+                    datetime.fromisoformat(moment).replace(tzinfo=UTC)
+                    .astimezone(tz).date()
                     + timedelta(days=int(row["days_after_opening"]))
                 ).isoformat()
                 if best_before is None or shortened < best_before:
