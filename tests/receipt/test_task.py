@@ -141,6 +141,7 @@ async def test_an_agent_without_attachments_is_named_too(hass, monkeypatch):
 async def test_an_answer_out_of_bounds_drops_the_bad_lines_only(hass, monkeypatch):
     answer = json.loads(
         (FIXTURES / "ligne_a_4000_euros.json").read_text(encoding="utf-8"))
+    answer["total"] = 19.0    # the 4 000 line is dearer than the whole receipt
     _install(hass, monkeypatch, answer=answer)
 
     result = await _read(hass)

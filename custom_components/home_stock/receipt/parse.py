@@ -5,8 +5,14 @@ seul appelant est une lecture de ticket, et un ticket illisible est un
 inconvénient, pas une panne.
 
 **La réponse structurée est validée quand même.** Un schéma contraint la
-FORME, pas la VRAISEMBLANCE : rien n'empêche un modèle de rendre 4 000 € ou
-une date en 1970.
+FORME, pas la VRAISEMBLANCE : rien n'empêche un modèle de rendre une ligne
+plus chère que le ticket entier, ou une date en 1970.
+
+No absolute price ceiling: a receipt can be in any currency, and a number
+that is absurd in one is ordinary in another (1 200 is a lunch in yen). The
+checks that hold in every currency are the ones applied: no negative price,
+no line dearer than the total printed under it, and the gap between the
+lines and the total reported, never hidden.
 
 **Une ligne fautive est écartée SEULE**, contrairement à la nutrition OFF du
 lot 1 où un dépassement refuse toute la fiche. La différence est assumée :
@@ -22,10 +28,8 @@ from datetime import date, timedelta
 from typing import Any, Mapping
 
 from ..const import (
-    MAX_RECEIPT_LINE_PRICE,
     MAX_RECEIPT_LINE_QUANTITY,
     MAX_RECEIPT_LINES,
-    MAX_RECEIPT_TOTAL,
     RECEIPT_BACKDATE_DAYS,
     RECEIPT_TOTAL_TOLERANCE,
 )
@@ -101,7 +105,8 @@ def _iso_day(value: Any) -> date | None:
         return None
 
 
-def _parse_line(raw: Any, position: int) -> tuple[ParsedLine | None, str | None]:
+def _parse_line(raw: Any, position: int, *, total: float | None,
+                currency: str) -> tuple[ParsedLine | None, str | None]:
     if not isinstance(raw, Mapping):
         return None, f"ligne {position} : forme illisible"
     label = _text(raw.get("label"))
@@ -115,8 +120,12 @@ def _parse_line(raw: Any, position: int) -> tuple[ParsedLine | None, str | None]
     prices = {}
     for field in ("unit_price", "total_price"):
         price = _number(raw.get(field))
-        if price is not None and not 0 <= price <= MAX_RECEIPT_LINE_PRICE:
-            return None, f"« {label} » : prix invraisemblable ({price} €)"
+        if price is not None and price < 0:
+            return None, f"« {label} » : prix négatif ({price:g} {currency})"
+        if (price is not None and total is not None
+                and price > total * (1 + RECEIPT_TOTAL_TOLERANCE)):
+            return None, (f"« {label} » : {price:g} {currency}, plus que le "
+                          f"total du ticket ({total:g} {currency})")
         prices[field] = price
     if prices["unit_price"] is None and prices["total_price"] is None:
         # Un ticket sert à RELIRE DES PRIX. Une ligne qui n'en porte aucun
@@ -148,18 +157,24 @@ def parse(payload: Any, *, session_started_on: str, today: str) -> ParsedReceipt
             f"Ticket tronqué : plus de {MAX_RECEIPT_LINES} lignes lues.")
         raw_lines = list(raw_lines)[:MAX_RECEIPT_LINES]
 
+    currency = _text(payload.get("currency"), limit=8)
+    # Shown next to amounts in messages; the ISO code as read, never a symbol
+    # assumed from the household's own currency.
+    unit = currency or "?"
+
+    total = _number(payload.get("total"))
+    if total is not None and total < 0:
+        warnings.append(f"Total négatif ({total:g} {unit}), ignoré.")
+        total = None
+
     lines: list[ParsedLine] = []
     for raw in raw_lines:
-        line, refusal = _parse_line(raw, len(lines) + 1)
+        line, refusal = _parse_line(raw, len(lines) + 1, total=total,
+                                    currency=unit)
         if line is None:
             dropped.append(refusal or "ligne illisible")
             continue
         lines.append(line)
-
-    total = _number(payload.get("total"))
-    if total is not None and not 0 <= total <= MAX_RECEIPT_TOTAL:
-        warnings.append(f"Total invraisemblable ({total} €), ignoré.")
-        total = None
 
     purchased_on = _purchase_day(payload.get("purchased_on"),
                                  session_started_on=session_started_on,
@@ -168,13 +183,13 @@ def parse(payload: Any, *, session_started_on: str, today: str) -> ParsedReceipt
     gap = _total_gap(total, lines)
     if gap is not None:
         warnings.append(
-            f"La somme des lignes s'écarte du total de {abs(gap):.2f} €.")
+            f"La somme des lignes s'écarte du total de {abs(gap):g} {unit}.")
 
     return ParsedReceipt(
         store=_text(payload.get("store")),
         purchased_on=purchased_on,
         total=total,
-        currency=_text(payload.get("currency"), limit=8),
+        currency=currency,
         lines=tuple(lines),
         dropped=tuple(dropped),
         total_gap=gap,

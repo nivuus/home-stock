@@ -55,12 +55,63 @@ def test_loyalty_points_and_promotions_are_ignored():
     assert receipt.dropped == ()
 
 
-def test_a_four_thousand_euro_line_is_dropped_alone():
-    """Les dix-neuf autres survivent, et `dropped` la nomme."""
+def test_an_expensive_line_that_the_total_confirms_is_kept():
+    """No absolute price ceiling: 4 000 is absurd in one currency and a
+    snack in another. A line the receipt total accounts for is kept."""
     receipt = _parse("ligne_a_4000_euros.json")
+    assert len(receipt.lines) == 20
+    assert receipt.dropped == ()
+    assert receipt.total_gap is None
+
+
+def test_a_line_dearer_than_the_whole_receipt_is_dropped_alone():
+    """The plausibility check that holds in every currency: one line cannot
+    cost more than the total printed under it. The others survive."""
+    payload = _fixture("ligne_a_4000_euros.json")
+    payload["total"] = 19.0
+    receipt = parse(payload, session_started_on=STARTED, today=TODAY)
     assert len(receipt.lines) == 19
     assert len(receipt.dropped) == 1
     assert "TELEVISEUR OLED" in receipt.dropped[0]
+
+
+@pytest.mark.parametrize("currency, line_price, total", [
+    ("JPY", 1200.0, 3500.0),
+    ("KRW", 12000.0, 35000.0),
+    ("IDR", 150000.0, 450000.0),
+    ("EUR", 1.2, 3.5),
+])
+def test_prices_are_judged_without_assuming_a_currency(currency, line_price, total):
+    payload = {
+        "currency": currency, "total": total,
+        "lines": [{"label": "弁当", "quantity": 1, "unit_price": line_price,
+                   "total_price": line_price},
+                  {"label": "お茶", "quantity": 1,
+                   "unit_price": total - line_price,
+                   "total_price": total - line_price}],
+    }
+    receipt = parse(payload, session_started_on=STARTED, today=TODAY)
+    assert [line.label for line in receipt.lines] == ["弁当", "お茶"]
+    assert receipt.total == pytest.approx(total)
+    assert receipt.dropped == ()
+    assert receipt.warnings == ()
+
+
+def test_a_gap_is_reported_in_the_receipt_currency():
+    payload = {"currency": "JPY", "total": 3500.0,
+               "lines": [{"label": "弁当", "quantity": 1,
+                          "unit_price": 1200.0, "total_price": 1200.0}]}
+    receipt = parse(payload, session_started_on=STARTED, today=TODAY)
+    assert receipt.total_gap == pytest.approx(2300.0)
+    assert any("JPY" in warning for warning in receipt.warnings)
+    assert not any("€" in warning for warning in receipt.warnings)
+
+
+def test_a_negative_total_is_ignored():
+    payload = {**_fixture("propre.json"), "total": -3.0}
+    receipt = parse(payload, session_started_on=STARTED, today=TODAY)
+    assert receipt.total is None
+    assert receipt.warnings
 
 
 def test_a_zero_quantity_line_is_dropped():
