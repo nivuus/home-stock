@@ -5,7 +5,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service import async_get_all_descriptions
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
 from custom_components.home_stock.storage import repositories as repo

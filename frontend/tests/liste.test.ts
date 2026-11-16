@@ -28,7 +28,7 @@ function monter(props: { donnees?: DonneesListe | null;
                                   rejouer?: ReturnType<typeof vi.fn> };
                          enAttente?: number } = {}) {
   const element = document.createElement('home-stock-liste') as HTMLElement & {
-    donnees: DonneesListe | null; file?: unknown; enAttente: number;
+    donnees: DonneesListe | null; file?: unknown; enAttente: number; large: boolean;
     updateComplete: Promise<boolean>;
   };
   element.donnees = props.donnees ?? null;

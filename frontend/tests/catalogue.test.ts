@@ -158,7 +158,8 @@ describe('filtrerProduits', () => {
 
 function monter(props: { connexion?: Connexion; file?: unknown; enAttente?: number } = {}) {
   const element = document.createElement('home-stock-catalogue') as HTMLElement & {
-    connexion?: Connexion; file?: unknown; enAttente: number; updateComplete: Promise<boolean>;
+    connexion?: Connexion; file?: unknown; enAttente: number; large: boolean;
+    updateComplete: Promise<boolean>;
   };
   if (props.connexion) element.connexion = props.connexion;
   if (props.file) element.file = props.file;

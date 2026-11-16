@@ -51,6 +51,32 @@ const CODES_DE_REFUS_EN_FRANCAIS: ReadonlySet<string> = new Set([
   'already_exists', 'conversion_refused', 'shopping_refused', 'insufficient_stock',
 ]);
 
+/** The retry decision, kept apart from the display mapping above: which
+ *  server answers are a FINAL verdict on the action itself. A closed set —
+ *  the business refusals the domain chooses (`websocket_api.py`,
+ *  `messages.py`, `delete_surfaces.py`) and Home Assistant's own schema and
+ *  permission refusals. Replaying any of these would get the same answer.
+ *
+ *  Everything else says nothing about the action and keeps it at the head
+ *  of the queue, like a transport failure: `not_loaded` (the config entry is
+ *  unloaded for a moment on an options save, on a retry after the database
+ *  could not be opened, at start-up), `unknown_command` (the command is not
+ *  registered yet), and any code this list does not know. Dropping a queued
+ *  write is not reversible; retrying one costs a later replay. */
+const FINAL_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  // Domain refusals.
+  'invalid_field', 'invalid_value', 'not_found', 'already_exists',
+  'conversion_refused', 'shopping_refused', 'insufficient_stock', 'delete_blocked',
+  // Home Assistant refusals (homeassistant/components/websocket_api/const.py).
+  'invalid_format', 'not_allowed', 'not_supported', 'unauthorized',
+  'service_validation_error',
+]);
+
+// policy: allow-fr on the next two lines: they name pre-existing identifiers.
+function isFinalRefusal(error: unknown): error is ErreurServeur { // policy: allow-fr
+  return estRefusServeur(error) && FINAL_REFUSAL_CODES.has(error.code); // policy: allow-fr
+}
+
 const MESSAGE_REFUS_GENERIQUE = 'Une action a été refusée et n’a pas pu être envoyée.';
 
 function messageAffichable(erreur: ErreurServeur): string {
@@ -172,7 +198,7 @@ export class FileAttente {
       try {
         reponse = await this.envoyer(action.type, action.charge);
       } catch (erreur) {
-        if (estRefusServeur(erreur)) {
+        if (isFinalRefusal(erreur)) { // policy: allow-fr (pre-existing catch variable)
           this.actions.shift();
           this.ecrire();
           action.resoudre?.('refusee');
@@ -180,6 +206,8 @@ export class FileAttente {
           this.surRefus?.(action, messageAffichable(erreur));
           continue;
         }
+        // A transient server answer (see `FINAL_REFUSAL_CODES`) takes
+        // the same path as a transport failure.
         // Panne de transport : la file reste intacte, elle repartira au
         // prochain rejeu — mais son appelant, lui, ne peut pas attendre
         // indéfiniment un réseau qui reviendra peut-être : chaque entrée

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.home_stock.const import DOMAIN
 

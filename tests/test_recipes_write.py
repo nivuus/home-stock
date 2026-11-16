@@ -1,4 +1,6 @@
 """Écrire une recette importée : rejouable, et sans jamais écraser un humain."""
+import sqlite3
+
 import pytest
 
 from custom_components.home_stock.application import StockManager
@@ -228,7 +230,7 @@ def test_create_recipe_writes_nothing_when_one_ingredient_is_invalid(manager):
     """Transaction unique : jamais une demi-recette. Une recette dont le
     huitième ingrédient est refusé ne doit laisser aucune trace, sinon
     l'import suivant trouverait une coquille indiscernable d'une vraie."""
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         manager.create_recipe(
             name="Moitié", ingredients=[
                 {"raw_text": "correcte"},

@@ -160,10 +160,14 @@ def test_every_sentence_intent_has_a_script_and_the_reverse():
     assert phrases == scripts
 
 
-def test_every_action_validates_through_home_assistant():
+async def test_every_action_validates_through_home_assistant(hass):
     """`cv.SCRIPT_SCHEMA`, pas un simple `isinstance(dict)` : la faute
     classique est d'écrire `service:` là où HA 2026.8 attend `action:`, et
     seul le schéma du produit la voit."""
+    # Template validation needs a running Home Assistant (cv.template answers
+    # "Validates schema outside the event loop" otherwise). This test used to
+    # get one only through the autouse `enable_custom_integrations` wrapper in
+    # conftest.py, which pytest-homeassistant makes unnecessary.
     from homeassistant.helpers import config_validation as cv
 
     for nom, corps in _load(PAQUET)["intent_script"].items():
@@ -470,7 +474,8 @@ def _blueprint_substitue():
     return document, defauts, yaml_util.substitute(document, defauts)
 
 
-def test_the_shopping_blueprint_is_a_valid_automation():
+async def test_the_shopping_blueprint_is_a_valid_automation(hass):
+    # Needs a running Home Assistant for its templates, as above.
     from homeassistant.helpers import config_validation as cv
 
     document, _, substitue = _blueprint_substitue()

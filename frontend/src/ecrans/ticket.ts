@@ -87,7 +87,12 @@ function formaterEuros(valeur: number): string {
  *  dire est pire que les deux. */
 export function messageTeleversement(erreur: unknown): string {
   const texte = String((erreur as Error)?.message ?? erreur);
-  if (texte.includes('403') || texte.includes('401')) {
+  // 401 is an expired or revoked session, not a missing right: telling the
+  // person to log in with the account they already use would be wrong.
+  if (texte.includes('401')) {
+    return 'Votre session a expiré : rechargez la page, puis reprenez la photo.';
+  }
+  if (texte.includes('403')) {
     return 'Le téléversement demande un compte administrateur : '
       + 'connectez-vous avec celui du foyer.';
   }
