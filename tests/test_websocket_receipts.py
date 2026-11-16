@@ -94,6 +94,14 @@ async def test_submitting_the_same_key_twice_returns_the_first_receipt(
     "www/tickets/t.jpg",
     "/etc/passwd",
     "../config/secrets.yaml",
+    # Any other media source: a camera snapshot handed to the reading model
+    # by an account that cannot upload, or another folder of the library.
+    "media-source://camera/camera.front_door",
+    "media-source://image/image.doorbell",
+    "media-source://media_source/local/photos/holiday.jpg",
+    "media-source://media_source/local/home_stock/receipts/../../secrets.yaml",
+    "media-source://media_source/local/home_stock/receipts/",
+    "home_stock/receipts/t.jpg",
 ])
 async def test_a_dangerous_media_id_is_refused(hass: HomeAssistant, setup_entry,
                                                hass_ws_client, lecture, media_id):
