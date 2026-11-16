@@ -11,9 +11,6 @@ discussion reste privée jusqu'à la publication du correctif.
 Décrivez le problème, les étapes pour le reproduire, et l'impact que vous
 estimez. Nous accusons réception sous 72 heures.
 
-> Ce dépôt est privé : le signalement passe directement par les mainteneurs,
-> l'onglet Security de GitHub n'y proposant pas le signalement privé.
-
 ## Versions supportées
 
 Seule la dernière version publiée de chaque projet reçoit des correctifs de
