@@ -9,35 +9,23 @@ lives here once rather than twice.
 """
 from __future__ import annotations
 
+import json
 import re
+from functools import cache
+from pathlib import Path
 from typing import Callable, Final
+
+from .domain.errors import TranslatedError
 
 # Pattern, the websocket error code that fits it, and the French sentence.
 # The code is only meaningful to the websocket surface; the services surface
 # raises HomeAssistantError, which carries a message and nothing else.
 DOMAIN_ERROR_PATTERNS: Final[tuple[tuple[re.Pattern[str], str, Callable[[re.Match], str]], ...]] = (
-    (re.compile(r"^unknown article (\d+)$"), "not_found",
-     lambda m: f"Article {m.group(1)} inconnu."),
-    (re.compile(r"^no article (\d+)$"), "not_found",
-     lambda m: f"Article {m.group(1)} inconnu."),
-    (re.compile(r"^no product (\d+)$"), "not_found",
-     lambda m: f"Produit {m.group(1)} inconnu."),
-    (re.compile(r"^unknown or closed batch (\d+)$"), "not_found",
-     lambda m: f"Lot {m.group(1)} inconnu ou déjà clôturé."),
-    (re.compile(r"^unknown batch (\d+)$"), "not_found",
-     lambda m: f"Lot {m.group(1)} inconnu."),
-    (re.compile(r"^quantity must not be negative, got (.+)$"), "invalid_value",
-     lambda m: f"La quantité ne peut pas être négative (reçu : {m.group(1)})."),
-    (re.compile(r"^packaging quantity must be positive, got (.+)$"), "invalid_value",
-     lambda m: f"Le conditionnement doit être positif (reçu : {m.group(1)})."),
+    # Raised as typed errors with a translation key since the first rows were
+    # converted (domain/errors.py, translations/*.json "exceptions"). This
+    # one stays: the validators still raise it as a plain vol.Invalid.
     (re.compile(r"^quantity must be positive, got (.+)$"), "invalid_value",
      lambda m: f"La quantité doit être positive (reçu : {m.group(1)})."),
-    (re.compile(r"^(.+) is not a base unit; expected one of .+$"), "invalid_value",
-     lambda m: f"Unité inconnue : {m.group(1)}. Les unités possibles sont g, ml et pièce."),
-    (re.compile(r"^requested (.+), only (.+) available$"), "insufficient_stock",
-     lambda m: f"Stock insuffisant : {m.group(1)} demandé, {m.group(2)} disponible."),
-    (re.compile(r"^batch (\d+) does not belong to product (\d+)$"), "invalid_field",
-     lambda m: f"Le lot {m.group(1)} n'appartient pas au produit {m.group(2)}."),
     (re.compile(r"^parts_total and parts_mine go together$"), "invalid_value",
      lambda m: "Les parts sont incohérentes : il faut donner "
                "« parts servies » et « parts mangées » ensemble, ou aucun des deux."),
@@ -228,12 +216,26 @@ def french_error(err: Exception) -> tuple[str, str]:
     being shown raw: an English message with a Python repr in it is not
     something to put in front of someone standing in a shop.
     """
+    if isinstance(err, TranslatedError):
+        template = _french_exceptions().get(err.translation_key)
+        if template is not None:
+            return err.code, template.format(**err.placeholders)
     text = str(err)
     for pattern, code, formatter in DOMAIN_ERROR_PATTERNS:
         match = pattern.match(text)
         if match:
             return code, formatter(match)
     return GENERIC_CODE, GENERIC_MESSAGE
+
+
+@cache
+def _french_exceptions() -> dict[str, str]:
+    """The French sentences of the translated errors, for the callers that
+    have no Home Assistant at hand (previews built in the application layer).
+    Read from the same file the surfaces use, so there is one French text."""
+    path = Path(__file__).parent / "translations" / "fr.json"
+    table = json.loads(path.read_text(encoding="utf-8")).get("exceptions", {})
+    return {key: entry["message"] for key, entry in table.items()}
 
 
 def french_message(err: Exception) -> str:

@@ -41,6 +41,8 @@ from .import_grocy_equipment import import_grocy_equipment
 from .import_grocy_recipes import import_recipes
 from .import_grocy_stock import import_stock
 from .migration_check import check_migration
+from .domain.errors import TranslatedError
+from .error_surface import service_error
 from .messages import french_message
 from .off.client import BULK_INTERVAL, OffRecord
 from .off.ingest import build_article_values
@@ -372,6 +374,8 @@ async def _run(hass: HomeAssistant, work) -> Any:
     """
     try:
         return await hass.async_add_executor_job(work)
+    except TranslatedError as error:
+        raise service_error(error) from error
     except (InsufficientStock, LookupError, PartsError, UnitError, ValueError,
             vol.Invalid) as error:
         raise HomeAssistantError(french_message(error)) from error

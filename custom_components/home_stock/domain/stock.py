@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from ..const import QUANTITY_EPSILON
+from .errors import InvalidValueError, TranslatedError
 
 
 @dataclass(frozen=True)
@@ -43,11 +44,15 @@ class Allocation:
     macros: Mapping[str, float | None] = field(default_factory=dict)
 
 
-class InsufficientStock(Exception):
+class InsufficientStock(TranslatedError):
     """Raised instead of letting the stock go negative."""
 
+    code = "insufficient_stock"
+
     def __init__(self, requested: float, available: float) -> None:
-        super().__init__(f"requested {requested}, only {available} available")
+        super().__init__(f"requested {requested}, only {available} available",
+                         translation_key="insufficient_stock",
+                         requested=requested, available=available)
         self.requested = requested
         self.available = available
 
@@ -73,7 +78,8 @@ def sort_batches(batches: Sequence[BatchView]) -> list[BatchView]:
 def allocate(batches: Sequence[BatchView], quantity: float) -> list[Allocation]:
     """Spread a consumption over the batches, in order. Never partial, never negative."""
     if quantity <= 0:
-        raise ValueError(f"quantity must be positive, got {quantity}")
+        raise InvalidValueError(f"quantity must be positive, got {quantity}",
+                                translation_key="quantity_not_positive", quantity=quantity)
     available = sum(b.remaining for b in batches)
     if quantity > available + QUANTITY_EPSILON:
         raise InsufficientStock(requested=quantity, available=available)

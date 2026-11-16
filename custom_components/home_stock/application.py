@@ -63,6 +63,7 @@ from .domain.shoppinglist import (
     reconcile,
     shortage_claim,
 )
+from .domain.errors import InvalidFieldError, InvalidValueError, NotFoundError
 from .domain.correction import (
     CorrectionError,
     check_correctable,
@@ -282,7 +283,7 @@ class StockManager:
         """
         article = repo.get_article(conn, article_id)
         if article is None:
-            raise ValueError(f"unknown article {article_id}")
+            raise NotFoundError(f"unknown article {article_id}", translation_key="article_not_found", article_id=article_id)
         batch_id = repo.insert_batch(
             conn, article_id=article_id, location_id=location_id, quantity=quantity,
             entered_at=moment, best_before=best_before,
@@ -456,13 +457,14 @@ class StockManager:
             (batch_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"unknown or closed batch {batch_id}")
+            raise NotFoundError(f"unknown or closed batch {batch_id}", translation_key="batch_not_open", batch_id=batch_id)
         if product_id is not None and row["product_id"] != product_id:
-            raise ValueError(
-                f"batch {batch_id} does not belong to product {product_id}")
+            raise InvalidFieldError(
+                f"batch {batch_id} does not belong to product {product_id}",
+                translation_key="batch_not_of_product", batch_id=batch_id, product_id=product_id)
         taken = row["remaining"] if quantity is None else float(quantity)
         if taken <= 0:
-            raise ValueError(f"quantity must be positive, got {taken}")
+            raise InvalidValueError(f"quantity must be positive, got {taken}", translation_key="quantity_not_positive", quantity=taken)
         if taken > row["remaining"] + QUANTITY_EPSILON:
             raise InsufficientStock(requested=taken, available=row["remaining"])
         remaining_after = row["remaining"] - taken
@@ -494,7 +496,7 @@ class StockManager:
                 (batch_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             best_before = row["best_before"]
             if row["days_after_opening"]:
                 shortened = (
@@ -517,7 +519,7 @@ class StockManager:
                 (batch_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             repo.set_batch_location(conn, batch_id, location_id)
             base_unit = repo.product_base_unit(conn, row["product_id"])
             return repo.insert_movement(
@@ -535,7 +537,7 @@ class StockManager:
         with self.db.write() as conn:
             article = repo.get_article(conn, article_id)
             if article is None:
-                raise ValueError(f"unknown article {article_id}")
+                raise NotFoundError(f"unknown article {article_id}", translation_key="article_not_found", article_id=article_id)
             rows = conn.execute(
                 "SELECT * FROM batch WHERE article_id = ? AND location_id = ?"
                 " AND closed_at IS NULL", (article_id, location_id),
@@ -595,7 +597,7 @@ class StockManager:
         with self.db.write() as conn:
             product = repo.get_product(conn, product_id)
             if product is None:
-                raise LookupError(f"no product {product_id}")
+                raise NotFoundError(f"no product {product_id}", translation_key="product_not_found", product_id=product_id)
             prepared = prepare_conversion(conn, product, to_unit=to_unit,
                                           reference_quantity=reference_quantity)
             report = conversion_report(prepared)
@@ -2344,7 +2346,7 @@ class StockManager:
         conn = self.db.read()
         batch = conn.execute("SELECT * FROM batch WHERE id = ?", (batch_id,)).fetchone()
         if batch is None:
-            raise LookupError(f"unknown batch {batch_id}")
+            raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
         affected = self._movements_to_reprice(conn, batch_id)
         return {
             "batch_id": batch_id,
@@ -2377,7 +2379,7 @@ class StockManager:
             batch = conn.execute("SELECT * FROM batch WHERE id = ?",
                                  (batch_id,)).fetchone()
             if batch is None:
-                raise LookupError(f"unknown batch {batch_id}")
+                raise NotFoundError(f"unknown batch {batch_id}", translation_key="batch_not_found", batch_id=batch_id)
             affected = self._movements_to_reprice(conn, batch_id)
             price_id = None
             if price_per_base_unit is not None:

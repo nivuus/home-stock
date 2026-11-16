@@ -22,6 +22,7 @@ from .const import (
 )
 from .coordinator import HomeStockCoordinator
 from .create_product import async_register_create_product_service
+from .error_surface import async_load_error_translations
 from .delete_surfaces import async_register_delete_surfaces
 from .link_shopping_item import async_register_link_shopping_item_service
 from .off.client import AiohttpTransport, OffClient
@@ -129,6 +130,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeStockConfigEntry) ->
         recipe_source=recipe_source,
     )
 
+    await async_load_error_translations(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     async_register_services(hass)

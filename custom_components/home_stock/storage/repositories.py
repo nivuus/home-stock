@@ -29,6 +29,7 @@ from ..const import (
     OBSERVED_PRICE_SOURCES,
     REASON_CONSUMPTION,
 )
+from ..domain.errors import NotFoundError
 from ..domain.matching import normalise
 from ..domain.route import is_reliable
 from .product_search import folded_name, product_filter
@@ -498,7 +499,8 @@ def product_base_unit(conn, product_id: int) -> str:
         "SELECT base_unit FROM product WHERE id = ?", (product_id,)
     ).fetchone()
     if row is None:
-        raise LookupError(f"no product {product_id}")
+        raise NotFoundError(f"no product {product_id}",
+                            translation_key="product_not_found", product_id=product_id)
     return row["base_unit"]
 
 

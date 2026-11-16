@@ -39,13 +39,15 @@ from .const import (
 from .coordinator import async_resolve_time_zone
 from .deletion import set_article_active_within
 from .domain.conversion import ConversionError, MAX_REFERENCE, MIN_REFERENCE
+from .domain.errors import NotFoundError
 from .domain.foodday import GRANULARITIES
 from .domain.matching import candidates, preselect, strip_brand
 from .domain.pricing import suggest_price
 from .domain.route import is_reliable
 from .domain.stock import sort_batches
 from .domain.units import UnitError
-from .messages import french_error, hidden_namesake_message
+from .error_surface import send_domain_error
+from .messages import hidden_namesake_message
 from .storage.deletion import hidden_product_named
 from .off.ingest import ARTICLE_OFF_SCHEMA as ARTICLE_EDITABLE, MAX_OFF_RAW_BYTES, build_article_values
 from .off.mapping import map_article
@@ -282,8 +284,7 @@ def _send_domain_error(connection: websocket_api.ActiveConnection, msg_id: int,
     the same English exception must not become two different French
     sentences depending on whether it was the panel or a script that asked.
     """
-    code, text = french_error(err)
-    connection.send_error(msg_id, code, text)
+    send_domain_error(connection, msg_id, err)
 
 
 def _send_integrity_error(connection: websocket_api.ActiveConnection, msg_id: int,
@@ -632,7 +633,7 @@ async def article_create(hass, connection, msg) -> None:
 
             product = repo.get_product(conn, product_id)
             if product is None:
-                raise LookupError(f"no product {product_id}")
+                raise NotFoundError(f"no product {product_id}", translation_key="product_not_found", product_id=product_id)
             values: dict[str, Any] = {"is_generic": 0}
             dropped_off_fields: list[str] = []
             if raw and source:
@@ -722,7 +723,7 @@ async def article_update(hass, connection, msg) -> None:
         with runtime.manager.db.write() as conn:
             article = repo.get_article(conn, msg["article_id"])
             if article is None:
-                raise LookupError(f"no article {msg['article_id']}")
+                raise NotFoundError(f"no article {msg['article_id']}", translation_key="article_not_found", article_id=msg['article_id'])
             if fields:
                 protected = set(json.loads(article["manual_fields"] or "[]"))
                 protected.update(fields)
@@ -771,7 +772,7 @@ async def product_update(hass, connection, msg) -> None:
         with runtime.manager.db.write() as conn:
             product = repo.get_product(conn, msg["product_id"])
             if product is None:
-                raise LookupError(f"no product {msg['product_id']}")
+                raise NotFoundError(f"no product {msg['product_id']}", translation_key="product_not_found", product_id=msg['product_id'])
             if "manual_portion" in fields:
                 # Dans la transaction déjà ouverte : `Database._lock` n'est
                 # pas réentrant, et une seconde écriture imbriquée figerait

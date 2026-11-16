@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 from custom_components.home_stock import messages
+from custom_components.home_stock.domain.errors import TranslatedError
 
 ROOT = Path(__file__).resolve().parent.parent
 INTEGRATION = ROOT / "custom_components" / "home_stock"
@@ -34,6 +35,22 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
                 and isinstance(node.value.value, str)):
             constants[target.id] = node.value.value
     return constants
+
+
+def _translated_codes() -> set[str]:
+    """`code` of every TranslatedError class (error_surface sends `err.code`)."""
+    # Import every module so each subclass is defined before walking them.
+    import importlib
+    for path in INTEGRATION.rglob("*.py"):
+        if path.name != "__init__.py" or path.parent != INTEGRATION:
+            module = ".".join(path.relative_to(ROOT).with_suffix("").parts)
+            importlib.import_module(module)
+    found, pending = set(), [TranslatedError]
+    while pending:
+        cls = pending.pop()
+        found.add(cls.code)
+        pending.extend(cls.__subclasses__())
+    return found
 
 
 def _sent_codes() -> set[str]:
@@ -59,6 +76,9 @@ def _sent_codes() -> set[str]:
                 codes.add(args[1].value)
             elif len(args) >= 2 and isinstance(args[1], ast.Name) and args[1].id in local:
                 codes.add(local[args[1].id])
+            elif (len(args) >= 2 and isinstance(args[1], ast.Attribute)
+                  and args[1].attr == "code"):
+                codes |= _translated_codes()
             elif (len(args) == 2 and isinstance(args[1], ast.Starred)
                   and isinstance(args[1].value, ast.Call)
                   and getattr(args[1].value.func, "id", None) == "french_error"):

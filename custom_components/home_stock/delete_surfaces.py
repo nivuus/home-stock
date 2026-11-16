@@ -26,6 +26,8 @@ from homeassistant.exceptions import HomeAssistantError
 from .admin_only import register_command, register_service
 from . import deletion
 from .const import DOMAIN
+from .domain.errors import TranslatedError
+from .error_surface import send_domain_error, service_error
 from .messages import french_error
 from .validators import bounded_int
 
@@ -78,7 +80,7 @@ def _websocket_command(command: str, key: str, rule):
             connection.send_error(msg["id"], DELETE_BLOCKED, str(err))
             return
         except LookupError as err:
-            connection.send_error(msg["id"], *french_error(err))
+            send_domain_error(connection, msg["id"], err)
             return
         connection.send_result(msg["id"], result)
 
@@ -94,6 +96,8 @@ async def _service(hass: HomeAssistant, key: str, rule,
         return await _delete(hass, runtime, rule, call.data[key])
     except deletion.DeleteBlocked as err:
         raise HomeAssistantError(str(err)) from err
+    except TranslatedError as err:
+        raise service_error(err) from err
     except LookupError as err:
         raise HomeAssistantError(french_error(err)[1]) from err
 

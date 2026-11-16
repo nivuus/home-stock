@@ -6,6 +6,10 @@ panneau ou un script a demandé.
 """
 import pytest
 
+from custom_components.home_stock.domain.errors import NotFoundError
+from custom_components.home_stock.domain.stock import InsufficientStock
+from custom_components.home_stock.domain.units import UnitError
+
 from custom_components.home_stock.messages import (
     DOMAIN_ERROR_PATTERNS,
     GENERIC_CODE,
@@ -15,18 +19,10 @@ from custom_components.home_stock.messages import (
 
 # Les messages couverts AVANT le lot 3, avec le code qu'ils rendaient déjà.
 # Rejoués tels quels pour prouver qu'aucun motif du lot 3 ne les masque.
+# The stock errors of the first lot are raised as typed errors with a
+# translation key now (tests/test_translated_errors.py); these remain.
 LEGACY = [
-    ("unknown article 5", "not_found"),
-    ("no article 7", "not_found"),
-    ("no product 3", "not_found"),
-    ("unknown or closed batch 9", "not_found"),
-    ("unknown batch 9", "not_found"),
-    ("quantity must not be negative, got -1", "invalid_value"),
-    ("packaging quantity must be positive, got 0", "invalid_value"),
     ("quantity must be positive, got 0", "invalid_value"),
-    ("'kg' is not a base unit; expected one of ('g', 'ml', 'piece')", "invalid_value"),
-    ("requested 500, only 200 available", "insufficient_stock"),
-    ("batch 3 does not belong to product 8", "invalid_field"),
     ("parts_total and parts_mine go together", "invalid_value"),
     ("a waste movement cannot be shared", "invalid_value"),
     ("parts_total must be between 1 and 24", "invalid_value"),
@@ -140,6 +136,23 @@ def test_every_pattern_produces_a_french_sentence_without_raising():
 def test_the_same_exception_reads_the_same_on_both_surfaces():
     """Le websocket et les services passent par la MÊME fonction : c'est ce
     qui garantit qu'ils ne divergent pas."""
-    from custom_components.home_stock import messages, services, websocket_api
-    assert websocket_api.french_error is messages.french_error
+    from custom_components.home_stock import (
+        error_surface, messages, services, websocket_api)
+    assert websocket_api.send_domain_error is error_surface.send_domain_error
+    assert services.service_error is error_surface.service_error
     assert services.french_message.__module__ == messages.__name__
+
+
+@pytest.mark.parametrize("error, code, sentence", [
+    (lambda: NotFoundError("unknown article 5", translation_key="article_not_found",
+                           article_id=5), "not_found", "Article 5 inconnu."),
+    (lambda: InsufficientStock(500, 200), "insufficient_stock",
+     "Stock insuffisant : 500 demandé, 200 disponible."),
+    (lambda: UnitError("'kg' is not a base unit", translation_key="unit_unknown",
+                       unit="kg"), "invalid_value",
+     "Unité inconnue : kg. Les unités possibles sont g, ml et pièce."),
+])
+def test_typed_errors_keep_their_french_sentence_without_hass(error, code, sentence):
+    """The previews built in the application layer have no Home Assistant at
+    hand: they read the French sentence from translations/fr.json."""
+    assert french_error(error()) == (code, sentence)
